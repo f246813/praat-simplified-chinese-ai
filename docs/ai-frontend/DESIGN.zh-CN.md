@@ -81,9 +81,11 @@ Qwen3.5-0.8B 是 `image-text-to-text` 视觉语言模型，不是音频模型。
 
 负责音素区间和轨迹对齐：
 
-- 若已有 TextGrid，直接读取目标音位边界。
-- 后续可接 MFA、WhisperX 或 wav2vec2 强制对齐器。
-- 没有对齐器时，可按给定音位时长和能量/谱变化做基线分段。
+- `MfaAligner`：使用词典和声学模型生成主边界。
+- `Wav2Vec2Aligner`：使用音素级 CTC 模型生成校正边界和置信度。
+- `CompositeAligner`：融合 MFA 与 wav2vec2 边界；不一致时降低置信度。
+- `ProportionalAligner`：没有可用模型时的安全回退。
+- 已有 TextGrid 时可直接读取目标音位边界。
 - 对参考和学习者的每条特征轨迹做时间规整 DTW。
 
 ### `praat_ai.pronunciation`

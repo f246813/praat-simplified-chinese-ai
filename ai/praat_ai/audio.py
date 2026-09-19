@@ -231,6 +231,8 @@ def extract_phone_tracks(
                 start=start,
                 end=end,
                 tracks=tracks,
+                alignment_confidence=phone.alignment_confidence,
+                alignment_source=phone.alignment_source,
             )
         )
     return result

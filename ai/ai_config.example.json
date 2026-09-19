@@ -25,5 +25,25 @@
     "default_error_threshold": 1.25,
     "minimum_error_duration_sec": 0.04,
     "maximum_errors_per_phone": 3
+  },
+  "alignment": {
+    "backend": "auto",
+    "agreement_threshold_sec": 0.04,
+    "minimum_confidence": 0.45,
+    "mfa": {
+      "enabled": false,
+      "executable": "mfa",
+      "dictionary_path": "",
+      "acoustic_model": "",
+      "beam": 10,
+      "retry_beam": 40
+    },
+    "wav2vec2": {
+      "enabled": false,
+      "model": "",
+      "device": "cuda",
+      "blank_token_id": 0,
+      "sample_rate": 16000
+    }
   }
 }

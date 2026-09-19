@@ -46,6 +46,24 @@ $env:PRAAT_AI_QWEN_MODEL = 'Qwen/Qwen3.5-0.8B'
 
 本地 llama.cpp 可执行文件和模型路径写在 `ai/ai_config.example.json` 中。
 
+## 音素强制对齐
+
+对齐器是可插拔的：
+
+- `mfa`：配置 `alignment.mfa.enabled`、MFA 可执行文件、发音词典和声学模型。
+- `wav2vec2`：配置 `alignment.wav2vec2.model`，安装可选依赖：
+
+  ```powershell
+  python -m pip install -r ai/requirements-wav2vec2.txt
+  ```
+
+- `auto`：同时启用可用后端，合并边界；不一致时降低置信度。
+- 没有任何强制对齐后端时，自动回退为比例分段，并在报告中给出警告。
+
+当前实现为每次学习者录音动态创建 MFA 词典条目，因此可以直接使用给定的
+IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需要对应的 MFA 声学
+模型，wav2vec2 模型也需要包含目标音素的 tokenizer。
+
 ## 说明
 
 - Qwen 只负责自然语言前端、工具选择和解释。

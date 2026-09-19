@@ -41,10 +41,41 @@ class AnalysisConfig:
 
 
 @dataclass(slots=True)
+class MfaAlignmentConfig:
+    enabled: bool = False
+    executable: str = "mfa"
+    dictionary_path: str = ""
+    acoustic_model: str = ""
+    beam: int = 10
+    retry_beam: int = 40
+
+
+@dataclass(slots=True)
+class Wav2Vec2AlignmentConfig:
+    enabled: bool = False
+    model: str = ""
+    device: str = "cuda"
+    blank_token_id: int = 0
+    sample_rate: int = 16000
+
+
+@dataclass(slots=True)
+class AlignmentConfig:
+    backend: str = "auto"
+    agreement_threshold_sec: float = 0.04
+    minimum_confidence: float = 0.45
+    mfa: MfaAlignmentConfig = field(default_factory=MfaAlignmentConfig)
+    wav2vec2: Wav2Vec2AlignmentConfig = field(
+        default_factory=Wav2Vec2AlignmentConfig
+    )
+
+
+@dataclass(slots=True)
 class AppConfig:
     qwen: QwenConfig = field(default_factory=QwenConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
+    alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -68,6 +99,15 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         _merge_dataclass(config.qwen, raw.get("qwen", {}))
         _merge_dataclass(config.server, raw.get("server", {}))
         _merge_dataclass(config.analysis, raw.get("analysis", {}))
+        _merge_dataclass(config.alignment, raw.get("alignment", {}))
+        _merge_dataclass(
+            config.alignment.mfa,
+            raw.get("alignment", {}).get("mfa", {}),
+        )
+        _merge_dataclass(
+            config.alignment.wav2vec2,
+            raw.get("alignment", {}).get("wav2vec2", {}),
+        )
 
     config.qwen.base_url = os.getenv("PRAAT_AI_QWEN_BASE_URL", config.qwen.base_url)
     config.qwen.model = os.getenv("PRAAT_AI_QWEN_MODEL", config.qwen.model)
