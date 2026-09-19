@@ -1,0 +1,28 @@
+{
+  "reference_object": 1,
+  "learner_object": 2,
+  "language": "cmn",
+  "phonemes": [
+    {
+      "ipa": "m",
+      "reference_start": 0.0,
+      "reference_end": 0.08
+    },
+    {
+      "ipa": "a",
+      "reference_start": 0.08,
+      "reference_end": 0.26
+    },
+    {
+      "ipa": "n",
+      "reference_start": 0.26,
+      "reference_end": 0.36
+    }
+  ],
+  "error_threshold": 1.25,
+  "minimum_error_duration_sec": 0.04,
+  "maximum_errors_per_phone": 3,
+  "qwen_explain": true,
+  "qwen_vision": false,
+  "output_prefix": "ai"
+}
