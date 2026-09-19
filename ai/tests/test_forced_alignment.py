@@ -25,8 +25,8 @@ class FixedAligner(AlignmentBackend):
     def available(self) -> bool:
         return True
 
-    def align(self, audio_path, phones, language):
-        del audio_path, language
+    def align(self, audio_path, phones, language, transcript=""):
+        del audio_path, language, transcript
         return AlignmentResult(
             [
                 AlignedPhone(

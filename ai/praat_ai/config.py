@@ -44,6 +44,8 @@ class AnalysisConfig:
 class MfaAlignmentConfig:
     enabled: bool = False
     executable: str = "mfa"
+    conda_executable: str = ""
+    conda_environment: str = ""
     dictionary_path: str = ""
     acoustic_model: str = ""
     beam: int = 10
@@ -57,6 +59,8 @@ class Wav2Vec2AlignmentConfig:
     device: str = "cuda"
     blank_token_id: int = 0
     sample_rate: int = 16000
+    do_phonemize: bool = False
+    token_map: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -99,14 +103,22 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         _merge_dataclass(config.qwen, raw.get("qwen", {}))
         _merge_dataclass(config.server, raw.get("server", {}))
         _merge_dataclass(config.analysis, raw.get("analysis", {}))
-        _merge_dataclass(config.alignment, raw.get("alignment", {}))
+        alignment_values = raw.get("alignment", {})
+        _merge_dataclass(
+            config.alignment,
+            {
+                key: value
+                for key, value in alignment_values.items()
+                if key not in {"mfa", "wav2vec2"}
+            },
+        )
         _merge_dataclass(
             config.alignment.mfa,
-            raw.get("alignment", {}).get("mfa", {}),
+            alignment_values.get("mfa", {}),
         )
         _merge_dataclass(
             config.alignment.wav2vec2,
-            raw.get("alignment", {}).get("wav2vec2", {}),
+            alignment_values.get("wav2vec2", {}),
         )
 
     config.qwen.base_url = os.getenv("PRAAT_AI_QWEN_BASE_URL", config.qwen.base_url)

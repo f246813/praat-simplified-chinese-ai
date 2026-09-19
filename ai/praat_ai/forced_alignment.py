@@ -33,6 +33,7 @@ class AlignmentBackend(ABC):
         audio_path: str | Path,
         phones: list[PhoneSpec],
         language: str,
+        transcript: str = "",
     ) -> AlignmentResult:
         raise NotImplementedError
 
@@ -130,11 +131,29 @@ class MfaAligner(AlignmentBackend):
         self.config = config
 
     def available(self) -> bool:
+        if self.config.conda_executable and self.config.conda_environment:
+            launcher_available = (
+                shutil.which(self.config.conda_executable) is not None
+                or Path(self.config.conda_executable).is_file()
+            )
+        else:
+            launcher_available = shutil.which(self.config.executable) is not None
         return (
             self.config.enabled
-            and shutil.which(self.config.executable) is not None
+            and launcher_available
             and bool(self.config.acoustic_model)
         )
+
+    def _launcher(self) -> list[str]:
+        if self.config.conda_executable and self.config.conda_environment:
+            return [
+                self.config.conda_executable,
+                "run",
+                "-n",
+                self.config.conda_environment,
+                "mfa",
+            ]
+        return [self.config.executable]
 
     def build_command(
         self,
@@ -142,8 +161,7 @@ class MfaAligner(AlignmentBackend):
         dictionary_path: Path,
         output_dir: Path,
     ) -> list[str]:
-        return [
-            self.config.executable,
+        return self._launcher() + [
             "align",
             str(corpus_dir),
             str(dictionary_path),
@@ -164,6 +182,7 @@ class MfaAligner(AlignmentBackend):
         audio_path: str | Path,
         phones: list[PhoneSpec],
         language: str,
+        transcript: str = "",
     ) -> AlignmentResult:
         del language
         if not phones:
@@ -179,17 +198,30 @@ class MfaAligner(AlignmentBackend):
             output.mkdir()
             audio = corpus / "learner.wav"
             _copy_as_wav(audio_path, audio)
-            (corpus / "learner.txt").write_text("UTT\n", encoding="utf-8")
-            dictionary = root / "dictionary.txt"
-            dictionary.write_text(
-                "UTT " + " ".join(phone.ipa for phone in phones) + "\n",
-                encoding="utf-8",
-            )
+            if transcript and self.config.dictionary_path:
+                dictionary = Path(self.config.dictionary_path)
+                if not dictionary.is_file():
+                    raise AlignmentError(
+                        f"MFA dictionary not found: {dictionary}"
+                    )
+                (corpus / "learner.txt").write_text(
+                    transcript.strip() + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                (corpus / "learner.txt").write_text("UTT\n", encoding="utf-8")
+                dictionary = root / "dictionary.txt"
+                dictionary.write_text(
+                    "UTT " + " ".join(phone.ipa for phone in phones) + "\n",
+                    encoding="utf-8",
+                )
             command = self.build_command(corpus, dictionary, output)
             completed = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if completed.returncode != 0:
@@ -295,7 +327,10 @@ class Wav2Vec2Aligner(AlignmentBackend):
         import torch
         from transformers import AutoModelForCTC, AutoProcessor
 
-        self._processor = AutoProcessor.from_pretrained(self.config.model)
+        self._processor = AutoProcessor.from_pretrained(
+            self.config.model,
+            do_phonemize=self.config.do_phonemize,
+        )
         self._model = AutoModelForCTC.from_pretrained(self.config.model)
         self._model.eval()
         self._model.to(self.config.device)
@@ -307,14 +342,15 @@ class Wav2Vec2Aligner(AlignmentBackend):
         unknown_id = tokenizer.unk_token_id
         target_ids: list[int] = []
         for phone in phones:
-            candidates = [phone.ipa, phone.ipa.strip("/[]"), phone.label]
+            mapped_token = self.config.token_map.get(phone.ipa, phone.ipa)
+            candidates = [mapped_token, mapped_token.strip("/[]"), phone.label]
             token_id = None
             for candidate in candidates:
                 if candidate and candidate in vocabulary:
                     token_id = vocabulary[candidate]
                     break
             if token_id is None:
-                token_id = tokenizer.convert_tokens_to_ids(phone.ipa)
+                token_id = tokenizer.convert_tokens_to_ids(mapped_token)
             if token_id is None or token_id == unknown_id:
                 raise AlignmentError(
                     f"The wav2vec2 tokenizer has no token for /{phone.ipa}/."
@@ -327,17 +363,39 @@ class Wav2Vec2Aligner(AlignmentBackend):
         audio_path: str | Path,
         phones: list[PhoneSpec],
         language: str,
+        transcript: str = "",
     ) -> AlignmentResult:
-        del language
+        del language, transcript
         if not phones:
             return AlignmentResult([], self.name, 0.0)
         if not self.available():
             raise AlignmentError("wav2vec2 is not configured or not installed.")
         self._load()
         sound = read_wav(audio_path)
+        samples = sound.samples.astype(np.float32)
+        sample_rate = sound.sample_rate
+        if sample_rate != self.config.sample_rate:
+            duration = sound.duration
+            target_count = max(1, int(round(duration * self.config.sample_rate)))
+            source_times = np.linspace(
+                0.0,
+                duration,
+                num=len(samples),
+                endpoint=False,
+            )
+            target_times = np.linspace(
+                0.0,
+                duration,
+                num=target_count,
+                endpoint=False,
+            )
+            samples = np.interp(target_times, source_times, samples).astype(
+                np.float32
+            )
+            sample_rate = self.config.sample_rate
         inputs = self._processor(
-            sound.samples.astype(np.float32),
-            sampling_rate=sound.sample_rate,
+            samples,
+            sampling_rate=sample_rate,
             return_tensors="pt",
         )
         input_values = inputs["input_values"].to(self.config.device)
@@ -389,8 +447,9 @@ class ProportionalAligner(AlignmentBackend):
         audio_path: str | Path,
         phones: list[PhoneSpec],
         language: str,
+        transcript: str = "",
     ) -> AlignmentResult:
-        del language
+        del language, transcript
         if not phones:
             return AlignmentResult([], self.name, 0.25)
         sound = read_wav(audio_path)
@@ -440,6 +499,7 @@ class CompositeAligner:
         audio_path: str | Path,
         phones: list[PhoneSpec],
         language: str,
+        transcript: str = "",
     ) -> AlignmentResult:
         results: list[AlignmentResult] = []
         warnings: list[str] = []
@@ -447,12 +507,19 @@ class CompositeAligner:
             if not backend.available():
                 continue
             try:
-                results.append(backend.align(audio_path, phones, language))
+                results.append(
+                    backend.align(audio_path, phones, language, transcript)
+                )
             except AlignmentError as error:
                 warnings.append(f"{backend.name}: {error}")
 
         if not results:
-            fallback = ProportionalAligner().align(audio_path, phones, language)
+            fallback = ProportionalAligner().align(
+                audio_path,
+                phones,
+                language,
+                transcript,
+            )
             fallback.warnings.extend(warnings)
             return fallback
         if len(results) == 1:
@@ -496,9 +563,8 @@ class CompositeAligner:
                 candidate.end for candidate in candidates
             )
             disagreement /= 2.0
-            agreement = max(
-                0.0,
-                1.0 - disagreement / max(self.agreement_threshold_sec, 1e-9),
+            agreement = math.exp(
+                -disagreement / max(self.agreement_threshold_sec, 1e-9)
             )
             confidence = (
                 sum(

@@ -60,6 +60,13 @@ $env:PRAAT_AI_QWEN_MODEL = 'Qwen/Qwen3.5-0.8B'
 - `auto`：同时启用可用后端，合并边界；不一致时降低置信度。
 - 没有任何强制对齐后端时，自动回退为比例分段，并在报告中给出警告。
 
+本机可以使用以下脚本复现环境：
+
+```powershell
+pwsh -NoProfile -File ai/Install-MFA.ps1
+pwsh -NoProfile -File ai/Download-MFA-Models.ps1
+```
+
 当前实现为每次学习者录音动态创建 MFA 词典条目，因此可以直接使用给定的
 IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需要对应的 MFA 声学
 模型，wav2vec2 模型也需要包含目标音素的 tokenizer。

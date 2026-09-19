@@ -50,6 +50,7 @@ def request_from_dict(payload: dict[str, Any]) -> AnalysisRequest:
         learner_object=payload["learner_object"],
         language=str(payload.get("language", "")),
         phonemes=phonemes,
+        transcript=str(payload.get("transcript", "")),
         error_threshold=float(payload.get("error_threshold", 1.25)),
         minimum_error_duration_sec=float(
             payload.get("minimum_error_duration_sec", 0.04)

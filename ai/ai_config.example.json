@@ -33,6 +33,8 @@
     "mfa": {
       "enabled": false,
       "executable": "mfa",
+      "conda_executable": "C:/Users/CHANGE_ME/miniforge3/condabin/conda.bat",
+      "conda_environment": "aligner",
       "dictionary_path": "",
       "acoustic_model": "",
       "beam": 10,
@@ -43,7 +45,11 @@
       "model": "",
       "device": "cuda",
       "blank_token_id": 0,
-      "sample_rate": 16000
+      "sample_rate": 16000,
+      "do_phonemize": false,
+      "token_map": {
+        "ɝ": "ɜ"
+      }
     }
   }
 }
