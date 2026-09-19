@@ -41,6 +41,8 @@ Praat.app
 
 # Python cache
 __pycache__/
+.pytest_cache/
+ai/logs/
 
 # Local zip packages/releases
 *.zip
