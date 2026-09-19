@@ -5,6 +5,12 @@
 ## 快速开始
 
 1. 安装 Python 3.10 或更高版本，并在 Praat 的 `Python settings...` 中设置解释器路径。
+   本机已经创建好独立环境，可直接填写：
+
+   ```text
+   D:\Praat-work\venv-ai\Scripts\python.exe
+   ```
+
 2. 安装基础依赖：
 
    ```powershell
