@@ -80,6 +80,7 @@ class AnalysisRequest:
     learner_object: int | str
     language: str
     phonemes: list[PhoneSpec]
+    transcript: str = ""
     error_threshold: float = 1.25
     minimum_error_duration_sec: float = 0.04
     maximum_errors_per_phone: int = 3

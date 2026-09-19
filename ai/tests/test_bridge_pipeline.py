@@ -1,4 +1,5 @@
 import math
+import json
 import sys
 import tempfile
 import types
@@ -32,6 +33,20 @@ class BridgePipelineTests(unittest.TestCase):
             learner = root / "learner.wav"
             output = root / "output"
             output.mkdir()
+            config = root / "ai_config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "alignment": {
+                            "backend": "auto",
+                            "mfa": {"enabled": False},
+                            "wav2vec2": {"enabled": False},
+                        },
+                        "server": {"auto_start": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
             write_tone(reference, 220.0)
             write_tone(learner, 900.0)
 
@@ -58,6 +73,7 @@ class BridgePipelineTests(unittest.TestCase):
             )
             with patch.dict(sys.modules, {"praat": helper}):
                 outputs = run_tutor(
+                    config_path=config,
                     request=AnalysisRequest(
                         reference_object=1,
                         learner_object=2,

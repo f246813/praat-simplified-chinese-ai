@@ -146,6 +146,7 @@ def align_learner_phones(
     learner_path: str,
     phones: list[PhoneSpec],
     language: str,
+    transcript: str,
     config: AlignmentConfig | None,
 ) -> tuple[list[PhoneSpec], str, float, list[str]]:
     alignment_config = config or AlignmentConfig()
@@ -153,6 +154,7 @@ def align_learner_phones(
         learner_path,
         phones,
         language,
+        transcript,
     )
     aligned_by_index = {phone.phone_index: phone for phone in result.phones}
     aligned_phones: list[PhoneSpec] = []
@@ -196,6 +198,7 @@ def analyze_pronunciation(
             learner_path,
             request.phonemes,
             request.language,
+            request.transcript,
             alignment_config,
         )
     )
