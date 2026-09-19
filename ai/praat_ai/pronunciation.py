@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from .alignment import dtw_align, mean_and_stddev
 from .audio import extract_phone_tracks
+from .config import AlignmentConfig
+from .forced_alignment import build_aligner
 from .models import (
     AnalysisRequest,
     AnalysisResult,
@@ -82,10 +84,11 @@ def compare_phone(
                     severity=1.0,
                     direction="缺失或无法测量",
                     message=f"{reference.ipa} 的 {feature_name} 无法可靠测量。",
-                    reference_value=0.0,
-                    learner_value=0.0,
-                    unit=reference_track.unit,
-                )
+                reference_value=0.0,
+                learner_value=0.0,
+                unit=reference_track.unit,
+                alignment_confidence=learner.alignment_confidence,
+            )
             )
             continue
 
@@ -106,6 +109,12 @@ def compare_phone(
 
         severity = min(1.5, score / max(request.error_threshold, 1e-9))
         direction = _direction(delta, reference_track.unit)
+        uncertainty = ""
+        if learner.alignment_confidence < 0.70:
+            uncertainty = (
+                f"（对齐置信度 {learner.alignment_confidence:.2f}，"
+                "建议复核该区间）"
+            )
         errors.append(
             PronunciationError(
                 phone_index=reference.phone_index,
@@ -120,10 +129,12 @@ def compare_phone(
                     f"/{reference.ipa}/ 的 {feature_name} {direction}："
                     f"参考 {reference_mean:.3f}{reference_track.unit}，"
                     f"学习者 {learner_mean:.3f}{reference_track.unit}。"
+                    f"{uncertainty}"
                 ),
                 reference_value=round(reference_mean, 6),
                 learner_value=round(learner_mean, 6),
                 unit=reference_track.unit,
+                alignment_confidence=learner.alignment_confidence,
             )
         )
 
@@ -131,7 +142,48 @@ def compare_phone(
     return errors[: request.maximum_errors_per_phone]
 
 
-def analyze_pronunciation(request: AnalysisRequest) -> AnalysisResult:
+def align_learner_phones(
+    learner_path: str,
+    phones: list[PhoneSpec],
+    language: str,
+    config: AlignmentConfig | None,
+) -> tuple[list[PhoneSpec], str, float, list[str]]:
+    alignment_config = config or AlignmentConfig()
+    result = build_aligner(alignment_config).align(
+        learner_path,
+        phones,
+        language,
+    )
+    aligned_by_index = {phone.phone_index: phone for phone in result.phones}
+    aligned_phones: list[PhoneSpec] = []
+    for index, phone in enumerate(phones, start=1):
+        aligned = aligned_by_index.get(index)
+        if aligned is None:
+            continue
+        aligned_phones.append(
+            PhoneSpec(
+                ipa=phone.ipa,
+                label=phone.label,
+                reference_start=phone.reference_start,
+                reference_end=phone.reference_end,
+                learner_start=aligned.start,
+                learner_end=aligned.end,
+                alignment_confidence=aligned.confidence,
+                alignment_source=aligned.source,
+            )
+        )
+    return (
+        aligned_phones,
+        result.source,
+        result.confidence,
+        list(result.warnings),
+    )
+
+
+def analyze_pronunciation(
+    request: AnalysisRequest,
+    alignment_config: AlignmentConfig | None = None,
+) -> AnalysisResult:
     reference_path = str(request.reference_object)
     learner_path = str(request.learner_object)
 
@@ -139,7 +191,14 @@ def analyze_pronunciation(request: AnalysisRequest) -> AnalysisResult:
 
     reference_sound = read_wav(reference_path)
     learner_sound = read_wav(learner_path)
-    learner_phones = infer_learner_segments(request.phonemes, learner_sound.duration)
+    learner_phones, alignment_source, alignment_confidence, warnings = (
+        align_learner_phones(
+            learner_path,
+            request.phonemes,
+            request.language,
+            alignment_config,
+        )
+    )
 
     reference_tracks = extract_phone_tracks(
         reference_path,
@@ -169,4 +228,7 @@ def analyze_pronunciation(request: AnalysisRequest) -> AnalysisResult:
         errors=errors,
         reference_phones=reference_tracks,
         learner_phones=learner_tracks,
+        alignment_source=alignment_source,
+        alignment_confidence=alignment_confidence,
+        warnings=warnings,
     )

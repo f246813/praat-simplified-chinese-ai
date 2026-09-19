@@ -25,6 +25,8 @@ class PhoneSpec:
     reference_end: float = 0.0
     learner_start: float | None = None
     learner_end: float | None = None
+    alignment_confidence: float = 1.0
+    alignment_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -37,6 +39,8 @@ class PhoneFeatureTracks:
     start: float
     end: float
     tracks: dict[str, FeatureTrack] = field(default_factory=dict)
+    alignment_confidence: float = 1.0
+    alignment_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +49,8 @@ class PhoneFeatureTracks:
             "start": self.start,
             "end": self.end,
             "tracks": {name: track.to_dict() for name, track in self.tracks.items()},
+            "alignment_confidence": self.alignment_confidence,
+            "alignment_source": self.alignment_source,
         }
 
 
@@ -62,6 +68,7 @@ class PronunciationError:
     reference_value: float
     learner_value: float
     unit: str = ""
+    alignment_confidence: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -98,6 +105,9 @@ class AnalysisResult:
     reference_phones: list[PhoneFeatureTracks]
     learner_phones: list[PhoneFeatureTracks]
     explanation: str = ""
+    alignment_source: str = ""
+    alignment_confidence: float = 1.0
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,4 +121,36 @@ class AnalysisResult:
             "reference_phones": [phone.to_dict() for phone in self.reference_phones],
             "learner_phones": [phone.to_dict() for phone in self.learner_phones],
             "explanation": self.explanation,
+            "alignment_source": self.alignment_source,
+            "alignment_confidence": self.alignment_confidence,
+            "warnings": self.warnings,
+        }
+
+
+@dataclass(slots=True)
+class AlignedPhone:
+    phone_index: int
+    ipa: str
+    start: float
+    end: float
+    confidence: float = 1.0
+    source: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class AlignmentResult:
+    phones: list[AlignedPhone]
+    source: str
+    confidence: float = 1.0
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "phones": [phone.to_dict() for phone in self.phones],
+            "source": self.source,
+            "confidence": self.confidence,
+            "warnings": self.warnings,
         }

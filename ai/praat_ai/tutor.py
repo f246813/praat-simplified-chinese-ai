@@ -133,7 +133,7 @@ def run_tutor(
             except QwenServerError as error:
                 server_error = str(error)
 
-        result = analyze_pronunciation(request)
+        result = analyze_pronunciation(request, config.alignment)
         output_dir = bridge.output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         prefix = request.output_prefix
@@ -214,6 +214,10 @@ def run_from_praat(
         request=request,
     )
     print(f"AI 纠音完成，发现 {len(outputs.result.errors)} 个偏差。")
+    print(
+        f"对齐：{outputs.result.alignment_source or 'unknown'}，"
+        f"置信度 {outputs.result.alignment_confidence:.2f}"
+    )
     print(f"报告：{outputs.json_path}")
     print(f"标注：{outputs.textgrid_path}")
     if outputs.overlay_path:

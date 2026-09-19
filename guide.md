@@ -356,7 +356,8 @@ AI 纠音实验代码位于 `ai/`：
 
 - Qwen3.5-0.8B 是视觉语言模型，不是音频模型。
 - Qwen 只能解析请求、选择受限工具和解释已有结果，不能直接计算发音分数。
-- 音素对齐、特征比较和错误区间必须由 Praat/Parselmouth/NumPy 的确定性流水线完成。
+- 音素对齐采用 MFA 主对齐、wav2vec2/CTC 交叉验证、比例分段兜底；特征比较和错误区间由 Praat/Parselmouth/NumPy 的确定性流水线完成。
+- 配置入口是 `ai/ai_config.json` 的 `alignment` 节点；缺少模型时自动回退并记录警告。
 - AI 前端必须复用 `praat.get_selected()`、`praat.call()` 和 `praat.get_output_dir()`，不要绕过桥接直接修改 Praat 内存对象。
 - 修改 Python 代码后运行：
 
