@@ -272,6 +272,20 @@ CASES: tuple[Case, ...] = (
             'appendFileLine: "@RESULT@", "自定义改名完成"'
         ),
     ),
+    # 模型在自定义脚本里写 writeInfoLine 会弹出 Praat Info 窗口，前端会把它改写成
+    # appendFileLine；这里验改写后的脚本在真 Praat 里语法正确、内容也回来了。
+    Case(
+        "custom_script-info-rewrite",
+        {},
+        SOUND,
+        ONE_SOUND,
+        "Info 改写成功",
+        custom_script=(
+            'selectObject: 1\nwriteInfoLine: "Info 改写成功"\n'
+            'echo "这一行会被省略"\n'
+        ),
+        tool="custom_script",
+    ),
     # 越界时间：应该被截断到对象末尾，而不是报错或者回一个 --undefined--。
     Case(
         "pitch-out-of-range",

@@ -191,6 +191,9 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 双引号、禁止 `runSystem`、`deleteFile`、`exit` 等命令，并且**必须是 Praat 脚本**——
 模型如果给出 Python 代码（`import`、`def`、`print(`、`numpy` 之类），前端会直接
 拒绝并提示改用内置工具，而不是把 Python 送进 Praat 换回一句看不懂的英文报错。
+自定义脚本里如果出现 `appendInfoLine` / `writeInfoLine`，前端会把它们改写成
+`appendFileLine` 写进结果文件（内容照样显示在对话里），`print*` / `echo` /
+`clearinfo` 之类的纯输出命令会被省略——它们都会弹出「Praat Info」窗口。
 
 注意事项：
 

@@ -200,6 +200,53 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('selectObject("Sound", "tone")', script)
         self.assertIn("chat_state.txt", script)
 
+    def test_custom_script_must_not_open_the_info_window(self) -> None:
+        """模型写 writeInfoLine / print 会弹出「Praat Info」，脚本层要兜住。"""
+
+        directory = tempfile.TemporaryDirectory()
+        base = Path(directory.name)
+        result = base / "chat_result.tsv"
+        context = tools.ToolContext(
+            tools.parse_object_context(CONTEXT), result, base / "chat_state.txt"
+        )
+        script = tools.render(
+            tools.CUSTOM_SCRIPT_TOOL,
+            {},
+            context,
+            custom_script=(
+                'selectObject: 1\n'
+                'writeInfoLine: "共振峰：", 500\n'
+                "clearinfo\n"
+                'printline "这行会被丢掉"\n'
+                'Rename: "新名字"\n'
+            ),
+        )
+        directory.cleanup()
+        # 可执行的行里不许再有会弹 Info 窗口的命令（被注释掉的那几行不算）。
+        for line in script.splitlines():
+            if line.strip().startswith("#"):
+                continue
+            self.assertIsNone(tools.INFO_LINE_PATTERN.match(line), line)
+            self.assertIsNone(tools.INFO_OTHER_PATTERN.match(line), line)
+        # 行式的输出改成写结果文件，模型想回给用户的那句话还在。
+        self.assertIn('appendFileLine: "', script)
+        self.assertIn('"共振峰：", 500', script)
+        self.assertIn('Rename: "新名字"', script)
+        # 被省略的命令留一条注释，方便排查。
+        self.assertIn("已省略会弹出 Praat Info 窗口", script)
+
+    def test_write_info_line_without_arguments_stays_valid(self) -> None:
+        script = tools.neutralize_info_commands(
+            "writeInfoLine:\n", Path("D:/x/result.tsv")
+        )
+        self.assertEqual(script.strip(), 'appendFileLine: "D:/x/result.tsv", ""')
+
+    def test_append_file_line_lines_are_untouched(self) -> None:
+        original = 'appendFileLine: "D:/x/result.tsv", "ok"\n'
+        self.assertEqual(
+            tools.neutralize_info_commands(original, Path("D:/x/result.tsv")), original
+        )
+
 
 class ObjectMatchingTests(unittest.TestCase):
     """模型给的对象写法常常和 Praat 列表里的名字不完全一样。"""

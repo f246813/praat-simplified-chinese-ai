@@ -43,6 +43,21 @@ PYTHON_SCRIPT_PATTERNS = re.compile(
     re.MULTILINE,
 )
 
+# 会弹出「Praat Info」窗口的输出命令。脚本是交给 GUI 版 Praat 执行的，这些命令
+# 走 gui_information()，于是每执行一次就把 Info 窗口顶到前面（用户报的 bug，
+# 见 guide.md §8.5）。自定义脚本里一律改写：
+#   - 行式的 appendInfoLine / writeInfoLine 直接换成 appendFileLine 写结果文件，
+#     模型想回给用户的那句话不会丢；
+#   - 其余（appendInfo / writeInfo / print* / echo / clearinfo）只是输出，注释掉
+#     不会影响脚本的计算结果。
+INFO_LINE_PATTERN = re.compile(
+    r"^(\s*)(appendInfoLine|writeInfoLine)\s*:(.*)$", re.IGNORECASE
+)
+INFO_OTHER_PATTERN = re.compile(
+    r"^\s*(?:appendInfo|writeInfo|printline|printtab|print|echo|clearinfo)\b[^\n]*$",
+    re.IGNORECASE,
+)
+
 TEMPORARY_OBJECT_NAME = "ai-chat-temp"
 
 CUSTOM_SCRIPT_TOOL = "custom_script"
@@ -2212,6 +2227,35 @@ def validate_script(script: str, *, maximum_length: int = 6000) -> str:
     return normalized
 
 
+def neutralize_info_commands(script: str, result_path: Path | str) -> str:
+    """把自定义脚本里会弹出 Info 窗口的输出命令改写成写结果文件。
+
+    前端把脚本送到 GUI 版 Praat 里跑，``appendInfoLine`` / ``writeInfoLine``
+    / ``print`` / ``echo`` 这些都会走 ``gui_information()`` 把「Praat Info」
+    窗口弹出来（用户报的 bug）。模型偶尔会在自定义脚本里写这些命令，所以这里
+    在脚本层面兜底：行式的两条改成 ``appendFileLine``（内容照样回传到对话窗口），
+    其余只是输出的命令改成注释，不影响脚本的计算部分。
+    """
+
+    target = quote(str(result_path))
+    lines: list[str] = []
+    for line in script.splitlines():
+        match = INFO_LINE_PATTERN.match(line)
+        if match:
+            indent, _command, arguments = match.groups()
+            payload = arguments.strip() or '""'
+            lines.append(f"{indent}appendFileLine: {target}, {payload}")
+            continue
+        if INFO_OTHER_PATTERN.match(line):
+            lines.append(
+                "# praat-ai: 已省略会弹出 Praat Info 窗口的输出命令："
+                f"{line.strip()}"
+            )
+            continue
+        lines.append(line)
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
 def render(
     tool_name: str,
     arguments: Mapping[str, Any] | None,
@@ -2226,6 +2270,7 @@ def render(
         raise ToolError("模型没有选择工具。")
     if name == CUSTOM_SCRIPT_TOOL:
         script = validate_script(custom_script)
+        script = neutralize_info_commands(script, context.result_path)
         return _assemble(script.rstrip("\n").splitlines(), context)
     tool = TOOL_MAP.get(name)
     if tool is None:

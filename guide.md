@@ -588,6 +588,12 @@ AI 纠音实验代码位于 `ai/`：
   不会因为用户关掉编辑器或 Info 窗口而消失。
 - 窗口类名按前缀匹配 `praat`（`PraatChildWindow1 Praat` / `PraatShell1 Praat`），
   别写死类名里的数字和程序名。
+- **自定义脚本里也不许写 Info 命令**：`tools.neutralize_info_commands()` 在
+  `render()` 里把 `appendInfoLine` / `writeInfoLine` 行改写成 `appendFileLine`
+  写结果文件（模型想回给用户的那句话不会丢），`appendInfo` / `writeInfo` /
+  `print*` / `echo` / `clearinfo` 改成注释（它们只是输出，去掉不影响计算）。
+  `ai/tests/verify_chat_templates.py` 的 `custom_script-info-rewrite` 用例在真
+  Praat 里守着这条。
 - 想退回老路径：`PRAAT_AI_SEND_MODE=argv`（只排障用，会激活 Praat 的子窗口）。
 - 脚本执行失败时 Praat 仍然会自己弹错误对话框（`Melder_flushError`），对话窗口
   读不到那些文字，还是按「请查看 Praat 弹出的错误提示」提示用户。

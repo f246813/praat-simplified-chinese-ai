@@ -85,6 +85,9 @@ foned/FunctionEditor.cpp:2060      FunctionEditor_selectionMarksChanged()
   「Praat Info」、把声音编辑器顶到对话窗口前面。前端现在自己写
   `%APPDATA%\Praat\Message.txt` 再对对象窗口发 `WM_APP`。细节和取证见
   guide.md §8.5；`verify_chat_no_popup.py --legacy` 是反证。
+- **脚本里的 Info 输出命令也要挡住**：`tools.neutralize_info_commands()` 把
+  `appendInfoLine` / `writeInfoLine` 改写成 `appendFileLine`（写结果文件），
+  `print*` / `echo` / `clearinfo` 改成注释。模型写自定义脚本时会随手用这些命令。
 - `To Harmonicity (cc)` 的 periodsPerWindow 给 0.5 会让 Praat 7.0.02 在
   `Sound_to_Pitch.cpp` 直接断言崩溃，只能 ≥ 1。
 - `minPitch 250`（4 ms 窗口）在 220 Hz 上会判成「全是噪声」，窗口按 1/minPitch 走。
