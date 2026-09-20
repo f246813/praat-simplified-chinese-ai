@@ -441,6 +441,17 @@ EXACT_MAP = {
     "Run Python script": "运行 Python 脚本",
     "Python settings...": "Python 设置...",
     "Python settings": "Python 设置",
+    "Models": "模型",
+    "Add model path...": "添加模型路径...",
+    "Start frontend": "启动前端",
+    "Stop frontend": "停止前端",
+    "Run AI tutor": "开始 AI 纠音",
+    "Auto": "自动",
+    "Frontend: ": "前端: ",
+    "running": "运行中",
+    "stopped": "已停止",
+    "VRAM: ": "显存用量: ",
+    "unavailable": "不可用",
     "Python script file": "Python 脚本文件",
     "Python executable path": "Python 可执行文件路径",
     "Insert Praat Python template": "插入 Praat Python 模板",
@@ -4961,4 +4972,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

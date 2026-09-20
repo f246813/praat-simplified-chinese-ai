@@ -122,6 +122,7 @@ class GuiControlBlockValueChangedCallbacks {
 
 	void _Gui_callCallbacks (GuiObject w, XtCallbackList *callbacks, XtPointer call);
 	char32 * _GuiWin_getDrawingAreaClassName (void);
+	conststringW _GuiWin_getDrawingAreaClassNameW (void);
 
 	GuiObject _Gui_initializeWidget (int widgetClass, GuiObject parent, conststring32 name);
 	void _Gui_invalidateWidget (GuiObject me);

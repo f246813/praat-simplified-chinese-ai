@@ -72,6 +72,7 @@ class BridgePipelineTests(unittest.TestCase):
                 plus_select=lambda *args, **kwargs: None,
             )
             with patch.dict(sys.modules, {"praat": helper}):
+                progress: list[tuple[float, str]] = []
                 outputs = run_tutor(
                     config_path=config,
                     request=AnalysisRequest(
@@ -88,7 +89,10 @@ class BridgePipelineTests(unittest.TestCase):
                         error_threshold=1.0,
                         qwen_explain=False,
                         qwen_vision=False,
-                    )
+                    ),
+                    progress=lambda fraction, message: progress.append(
+                        (fraction, message)
+                    ),
                 )
 
             self.assertTrue(outputs.json_path.is_file())
@@ -96,6 +100,9 @@ class BridgePipelineTests(unittest.TestCase):
             self.assertIsNotNone(outputs.overlay_path)
             self.assertTrue(outputs.overlay_path.is_file())
             self.assertGreater(len(outputs.result.errors), 0)
+            self.assertEqual(progress[0][0], 0.08)
+            self.assertEqual(progress[-1], (1.0, "分析完成"))
+            self.assertTrue(any("音素对齐" in message for _, message in progress))
 
 
 if __name__ == "__main__":

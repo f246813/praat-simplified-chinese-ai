@@ -76,7 +76,10 @@ class QwenServerManager:
             command,
             stdout=self.log_handle,
             stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            ),
         )
 
         deadline = time.time() + 60
