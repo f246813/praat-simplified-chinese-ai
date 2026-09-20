@@ -188,6 +188,106 @@ class ScriptRenderingTests(unittest.TestCase):
                 self.assertIn("fixed$ (newId, 0)", script, tool_name)
 
 
+class BorrowedMeasurementTests(unittest.TestCase):
+    """B3：借用 chengafni 的测量脚本（公式照抄，真机验证在 verify_chat_templates）。"""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        base = Path(self.directory.name)
+        self.result = base / "chat_result.tsv"
+        self.context = tools.ToolContext(
+            tools.parse_object_context(
+                "id\tclass\tname\tselected\n"
+                "1\tSound\tSound tone\t1\n"
+                "2\tTextGrid\tTextGrid grid\t0\n"
+                "3\tIntensity\tIntensity tone\t0\n"
+                "4\tPitch\tPitch tone\t0\n"
+            ),
+            self.result,
+            base / "chat_state.txt",
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def render(self, name: str, **arguments: object) -> str:
+        return tools.render(name, arguments, self.context)
+
+    def test_spectral_emphasis_follows_the_source_script(self) -> None:
+        script = self.render("spectral_emphasis", object=1)
+        self.assertIn("intensity = Get intensity (dB)", script)
+        self.assertIn("To Pitch: 0, 75.000000, 600.000000", script)
+        self.assertIn("Filter (pass Hann band): 0, cutoff, 20.000000", script)
+        # 中间对象要删掉，最后回到用户原来选中的对象。
+        self.assertIn("Remove", script)
+        self.assertIn("selectObject: 1", script)
+
+    def test_spectral_emphasis_falls_back_to_the_only_sound(self) -> None:
+        """指错类型但列表里只有一个 Sound 时按它算（guide §8.4 的按类型兜底）。"""
+
+        script = self.render("spectral_emphasis", object=2)
+        self.assertIn("selectObject: 1", script)
+
+    def test_hl_ratio_rejects_overlapping_bands(self) -> None:
+        with self.assertRaises(tools.ToolError):
+            self.render("hl_ratio", object=1, low_to=5000, high_from=4000)
+        script = self.render("hl_ratio", object=1)
+        self.assertIn("To Spectrum", script)
+        self.assertIn("lowBand = Get band energy: 0.000000, 4000.000000", script)
+
+    def test_hammarberg_index_needs_sound_or_ltas(self) -> None:
+        script = self.render("hammarberg_index", object=1)
+        self.assertIn("To Ltas: 100.000000", script)
+        self.assertIn('lowBand = Get maximum: 0.000000, 2000.000000, "Parabolic"', script)
+        with self.assertRaises(tools.ToolError):
+            self.render("hammarberg_index", object=2)
+
+    def test_pitch_peak_latency_rejects_objects_without_pitch(self) -> None:
+        script = self.render("pitch_peak_latency", object=1)
+        self.assertIn('peakTime = Get time of maximum: tmin, tmax, "Hertz", "Parabolic"', script)
+        self.assertIn("latency = (peakTime - tmin) / (tmax - tmin)", script)
+        # TextGrid 有时长但没有 To Pitch：要在这里拦住，而不是让 Praat 弹英文错误框。
+        with self.assertRaises(tools.ToolError):
+            self.render("pitch_peak_latency", object=2)
+        # 已经是 Pitch 的直接用，不再做一次 To Pitch。
+        self.assertNotIn("To Pitch", self.render("pitch_peak_latency", object=4))
+
+    def test_peak_to_average_uses_rms_not_the_signed_mean(self) -> None:
+        script = self.render("peak_to_average_ratio", object=1)
+        self.assertIn('peak = Get maximum: tmin, tmax, "Sinc70"', script)
+        self.assertIn("rms = Get root-mean-square: tmin, tmax", script)
+        self.assertNotIn("Get mean: 1", script)
+
+    def test_intensity_slope_local_and_global(self) -> None:
+        local = self.render("intensity_slope", object=1)
+        self.assertIn('Formula: "abs(self[col+1]-self[col])/dx"', local)
+        self.assertIn("Down to Matrix", local)
+        global_ = self.render("intensity_slope", object=1, method="global")
+        self.assertIn("slope = (lastEl - firstEl) / (lastTime - firstTime)", global_)
+        self.assertNotIn("Formula:", global_)
+
+    def test_intensity_slope_rejects_bad_method_and_range(self) -> None:
+        with self.assertRaises(tools.ToolError):
+            self.render("intensity_slope", object=1, method="whatever")
+        # Intensity 对象没有「取片段」命令：别假装能按范围算。
+        with self.assertRaises(tools.ToolError):
+            self.render("intensity_slope", object=3, **{"from": 0.1, "to": 0.5})
+        with self.assertRaises(tools.ToolError):
+            self.render("intensity_slope", object=2)
+
+    def test_intensity_slope_extracts_a_part_for_sound_ranges(self) -> None:
+        script = self.render("intensity_slope", object=1, **{"from": 0.2, "to": 0.8})
+        self.assertIn("extractedId = Extract part:", script)
+        self.assertIn("if extractedId <> 0", script)
+
+    def test_intensity_slope_whole_object_does_not_delete_anything(self) -> None:
+        """整段分析时 extractedId = 0，收尾的删除要跳过（不能删错对象）。"""
+
+        script = self.render("intensity_slope", object=1)
+        self.assertIn("extractedId = 0", script)
+        self.assertIn("if extractedId <> 0", script)
+
+
 class ScriptValidationTests(unittest.TestCase):
     def test_single_quotes_become_double_quotes(self) -> None:
         script = tools.validate_script("selectObject('Sound', 'tone')")

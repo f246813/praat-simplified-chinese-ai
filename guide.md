@@ -533,6 +533,24 @@ AI 纠音实验代码位于 `ai/`：
   `writeInfoLine` / `appendInfo` / `writeInfo` 改写成 `appendFileLine`；
   `printline` / `print` / `echo` 在 Praat 里写的是**字面文字**，整段抄成一个字符串
   参数；只有 `printtab` / `clearinfo` 没有内容可保留，改成注释。
+- **借来的测量工具**（2026-09-20，B3）：公式照抄 Chen Gafni 的 Praat 插件脚本
+  （https://github.com/chengafni/praat），出处都写在各自的 docstring 里：
+  `spectral_emphasis`（谱强调 = 低通前后损失的强度，Traunmüller & Eriksson 2000）、
+  `hl_ratio`（高频段能量 ÷ 低频段能量，默认 4–8 kHz ÷ 0–4 kHz）、
+  `hammarberg_index`（0–2 kHz 最大电平 − 2–5 kHz 最大电平，Hammarberg et al. 1980）、
+  `pitch_peak_latency`（（基频峰值 − 区间起点）÷ 区间时长）、
+  `peak_to_average_ratio`（峰值 ÷ 有效值，Hillenbrand et al. 1994）、
+  `intensity_slope`（强度平均斜率，`local` = 相邻点绝对差的平均 ÷ 步长、
+  `global` = 首尾差 ÷ 时长）。两个和来源不同的地方要记住：
+  ① `peak_to_average_ratio` 的分母用 **RMS**——原脚本用 `Get mean`（有符号均值），
+  对语音来说那个值≈0，比值会跑到几万、同一个音两次能差一个数量级；
+  ② 他的 `align_intervals` 靠编辑器命令 `Align interval`（对象列表上没有对应命令）、
+  `label_words` 依赖交互式选文件，所以这两个没有收进来。
+  这些中间对象（Pitch / Spectrum / Ltas / Matrix / 截出来的片段）用完就删，最后会
+  回到用户原来选中的对象；`spectral_emphasis`、`hl_ratio`、`hammarberg_index`、
+  `pitch_peak_latency`、`peak_to_average_ratio`、`intensity_slope` 一共九条真机用例
+  在 `ai/tests/verify_chat_templates.py` 里（正弦的峰值/有效值正好是 1.41=√2，
+  可以拿它当数值对不对的快速判断）。
 - **Praat 可执行文件由 `praat_ai/praat_app.py` 找**：环境变量
   `PRAAT_AI_PRAAT_EXECUTABLE` → 仓库根目录 → `PATH` → 常见安装位置；找到和没找到
   都缓存，没找到 30 秒后重试一次。**每条请求只查一次** `tasklist`

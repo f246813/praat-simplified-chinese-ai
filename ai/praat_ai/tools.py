@@ -2099,6 +2099,408 @@ def _build_duplicate(arguments: Mapping[str, Any], context: ToolContext) -> str:
     return _assemble(lines, context)
 
 
+# ── 借用 chengafni/praat 的现成测量（B3） ────────────────────────────────────
+#
+# 下面六个工具的公式照抄 Chen Gafni（https://github.com/chengafni/praat，
+# chengafni.wordpress.com）的插件脚本，出处和文献都写在各自的 docstring 里。
+# 两处按「对象列表」的实际情况做了说明性调整（他的脚本大多跑在编辑器里）：
+#   * 编辑器里才有的命令换成对象列表上的等价命令（例如 ``Get intensity (dB)``
+#     在对象列表上就是整段声音的强度，和编辑器里同一个实现）；
+#   * 需要分析的中间对象（Pitch / Spectrum / Ltas / Matrix）用完就删，不污染
+#     用户的对象列表。
+
+
+def _build_spectral_emphasis(
+    arguments: Mapping[str, Any], context: ToolContext
+) -> str:
+    """谱强调（spectral emphasis）。
+
+    照抄 ``plugin_SpectralEmphasis/spectralEmphasis.praat``：
+    谱强调 = 原声音强度 − 低通滤波后的强度，低通上限 = 该段平均基频 × multiplier。
+    用于嗓音质量分析，见 Traunmüller & Eriksson (2000)。
+    """
+
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "谱强调需要声音对象"
+    )
+    multiplier = _number(arguments, "multiplier", 1.5, 0.1, 10.0)
+    smoothing = _number(arguments, "smoothing", 20.0, 0.1, 5000.0)
+    floor = _number(arguments, "pitch_floor", 75.0, 20.0, 1000.0)
+    ceiling = _number(arguments, "pitch_ceiling", 600.0, 50.0, 2000.0)
+    lines = [
+        f"selectObject: {row.id}",
+        "duration = Get total duration",
+        "intensity = Get intensity (dB)",
+        f"To Pitch: 0, {floor:.6f}, {ceiling:.6f}",
+        'meanPitch = Get mean: 0, 0, "Hertz"',
+        "Remove",
+        f"selectObject: {row.id}",
+        "if meanPitch = undefined",
+        _write_result(
+            context,
+            [quote("谱强调无法计算：这段声音里没有可用的基频（全是清音或无声段）。")],
+        ),
+        "else",
+        f"cutoff = meanPitch * {multiplier:.6f}",
+        f"Filter (pass Hann band): 0, cutoff, {smoothing:.6f}",
+        "filtered = Get intensity (dB)",
+        "Remove",
+        f"selectObject: {row.id}",
+        "emphasis = intensity - filtered",
+        _write_result(
+            context,
+            [
+                quote("谱强调（Spectral emphasis）= "),
+                "fixed$ (emphasis, 2)",
+                quote(" dB：低通上限 "),
+                "fixed$ (cutoff, 1)",
+                quote(" Hz（该段平均基频 "),
+                "fixed$ (meanPitch, 1)",
+                quote(f" Hz × {multiplier:g}），平滑 {smoothing:g} Hz"),
+            ],
+        ),
+        "endif",
+    ]
+    return _assemble(lines, context)
+
+
+def _build_hl_ratio(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """高/低频段能量比（H/L）。
+
+    照抄 ``plugin_HL/HL.praat``：``Get band energy`` 两段的能量相除
+    （默认 0–4000 Hz 与 4000–8000 Hz）。输入是 Sound 时先做 ``To Spectrum``。
+    """
+
+    row = context.resolve_object(arguments.get("object"))
+    low_from = _number(arguments, "low_from", 0.0, 0.0, 96000.0)
+    low_to = _number(arguments, "low_to", 4000.0, 1.0, 96000.0)
+    high_from = _number(arguments, "high_from", 4000.0, 1.0, 96000.0)
+    high_to = _number(arguments, "high_to", 8000.0, 2.0, 96000.0)
+    if low_to > high_from:
+        raise ToolError("低频段上限不能高于高频段下限（默认 0–4000 与 4000–8000 Hz）。")
+    temporary = row.class_name != "Spectrum"
+    if temporary:
+        context.require_class(
+            row, SOUND_CLASSES, "H/L 需要声音对象，或者现成的 Spectrum 对象"
+        )
+    lines = [f"selectObject: {row.id}"]
+    if temporary:
+        lines.extend(['To Spectrum: "yes"', f"Rename: {quote(TEMPORARY_OBJECT_NAME)}"])
+    lines.extend(
+        [
+            f"lowBand = Get band energy: {low_from:.6f}, {low_to:.6f}",
+            f"highBand = Get band energy: {high_from:.6f}, {high_to:.6f}",
+            "if lowBand = 0",
+            _write_result(
+                context,
+                [quote("H/L 无法计算：低频段能量为 0（可能是静音，或者低频段选得太窄）。")],
+            ),
+            "else",
+            "hl = highBand / lowBand",
+            _write_result(
+                context,
+                [
+                    quote("H/L = "),
+                    "fixed$ (hl, 4)",
+                    quote(f"（高频 {high_from:g}–{high_to:g} Hz 能量 ÷ 低频 "),
+                    quote(f"{low_from:g}–{low_to:g} Hz 能量）"),
+                ],
+            ),
+            "endif",
+        ]
+    )
+    if temporary:
+        lines.append("Remove")
+    lines.append(f"selectObject: {row.id}")
+    return _assemble(lines, context)
+
+
+def _build_hammarberg_index(
+    arguments: Mapping[str, Any], context: ToolContext
+) -> str:
+    """Hammarberg 指数。
+
+    照抄 ``plugin_HammarbergIndex/hammarbergIndex.praat``：
+    0–2000 Hz 的 LTAS 最大电平 减去 2000–5000 Hz 的 LTAS 最大电平（dB）。
+    见 Hammarberg et al. (1980)。输入是 Sound 时先做 ``To Ltas``。
+    """
+
+    row = context.resolve_object(arguments.get("object"))
+    low_from = _number(arguments, "low_from", 0.0, 0.0, 96000.0)
+    low_to = _number(arguments, "low_to", 2000.0, 1.0, 96000.0)
+    high_from = _number(arguments, "high_from", 2000.0, 1.0, 96000.0)
+    high_to = _number(arguments, "high_to", 5000.0, 2.0, 96000.0)
+    bandwidth = _number(arguments, "bandwidth", 100.0, 1.0, 1000.0)
+    temporary = row.class_name != "Ltas"
+    if temporary:
+        context.require_class(
+            row, SOUND_CLASSES, "Hammarberg 指数需要声音对象，或者现成的 Ltas 对象"
+        )
+    lines = [f"selectObject: {row.id}"]
+    if temporary:
+        lines.extend([f"To Ltas: {bandwidth:.6f}", f"Rename: {quote(TEMPORARY_OBJECT_NAME)}"])
+    lines.extend(
+        [
+            f'lowBand = Get maximum: {low_from:.6f}, {low_to:.6f}, "Parabolic"',
+            f'highBand = Get maximum: {high_from:.6f}, {high_to:.6f}, "Parabolic"',
+            "hammarberg = lowBand - highBand",
+            _write_result(
+                context,
+                [
+                    quote("Hammarberg 指数 = "),
+                    "fixed$ (hammarberg, 2)",
+                    quote(" dB（0–2000 Hz 最大电平 "),
+                    "fixed$ (lowBand, 2)",
+                    quote(" dB − 2000–5000 Hz 最大电平 "),
+                    "fixed$ (highBand, 2)",
+                    quote(" dB）"),
+                ],
+            ),
+        ]
+    )
+    if temporary:
+        lines.append("Remove")
+    lines.append(f"selectObject: {row.id}")
+    return _assemble(lines, context)
+
+
+def _build_pitch_peak_latency(
+    arguments: Mapping[str, Any], context: ToolContext
+) -> str:
+    """基频峰值延迟。
+
+    照抄 ``plugin_PitchPeakLatency/pitchPeakLatency.praat``：
+    （峰值时刻 − 区间起点）÷ 区间时长，0.5 表示峰值正好在区间中间。
+    """
+
+    row = context.resolve_object(arguments.get("object"))
+    # 只有声音能现做 Pitch、或者直接给 Pitch；TextGrid 这类有时长但没有「To Pitch」
+    # 命令的对象要在这里拦住，不然 Praat 会弹一句英文错误框，还会挡住后面的消息。
+    if row.class_name not in SOUND_CLASSES:
+        context.require_class(row, frozenset({"Pitch"}), "基频峰值延迟需要声音对象或 Pitch 对象")
+    temporary = row.class_name != "Pitch"
+    floor = _number(arguments, "pitch_floor", 75.0, 20.0, 1000.0)
+    ceiling = _number(arguments, "pitch_ceiling", 600.0, 50.0, 2000.0)
+    lines = [f"selectObject: {row.id}", "duration = Get total duration"]
+    lines.extend(_range_lines(arguments, row))
+    if temporary:
+        lines.extend(
+            [
+                f"To Pitch: 0, {floor:.6f}, {ceiling:.6f}",
+                f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
+            ]
+        )
+    lines.extend(
+        [
+            'peakTime = Get time of maximum: tmin, tmax, "Hertz", "Parabolic"',
+            "if peakTime = undefined",
+            _write_result(
+                context,
+                [
+                    quote("基频峰值延迟无法计算："),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒这一段里没有可用的基频（全是清音或无声段）。"),
+                ],
+            ),
+            "else",
+            "latency = (peakTime - tmin) / (tmax - tmin)",
+            _write_result(
+                context,
+                [
+                    quote("基频峰值延迟 = "),
+                    "fixed$ (latency, 3)",
+                    quote("（峰值 "),
+                    "fixed$ (peakTime, 3)",
+                    quote(" 秒出现在 "),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒这一段里；0.5 = 正好在中间）"),
+                    "rangeNote$",
+                ],
+            ),
+            "endif",
+        ]
+    )
+    if temporary:
+        lines.extend(["Remove", f"selectObject: {row.id}"])
+    return _assemble(lines, context)
+
+
+def _build_peak_to_average_ratio(
+    arguments: Mapping[str, Any], context: ToolContext
+) -> str:
+    """峰值/平均值比（peak-to-average ratio）。
+
+    出处 Hillenbrand et al. (1994)，参考 ``plugin_PA/peak_to_average.praat``。
+
+    **和原脚本的一处差别**：原脚本用 ``Get mean``（有符号均值）当分母，对一段语音来说
+    那个值接近 0，比值会跑到几万、同一个音两次能差一个数量级。这里用同一套「幅度
+    统计」里稳定的 **RMS（有效值）** 当分母，结果落在 1–5 这种可比较的范围内，
+    同时把峰值和有效值都写进结果，便于核对。
+    """
+
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "峰值/平均值比需要声音对象"
+    )
+    lines = [f"selectObject: {row.id}", "duration = Get total duration"]
+    lines.extend(_range_lines(arguments, row))
+    lines.extend(
+        [
+            'peak = Get maximum: tmin, tmax, "Sinc70"',
+            "rms = Get root-mean-square: tmin, tmax",
+            "if rms = 0",
+            _write_result(
+                context,
+                [
+                    quote("峰值/平均值比无法计算："),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒这一段是静音（有效值为 0）。"),
+                ],
+            ),
+            "else",
+            "ratio = peak / rms",
+            _write_result(
+                context,
+                [
+                    quote("峰值/有效值 = "),
+                    "fixed$ (ratio, 2)",
+                    quote("（峰值 "),
+                    "fixed$ (peak, 4)",
+                    quote(" Pa ÷ 有效值 "),
+                    "fixed$ (rms, 4)",
+                    quote(" Pa，"),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒）"),
+                    "rangeNote$",
+                ],
+            ),
+            "endif",
+        ]
+    )
+    return _assemble(lines, context)
+
+
+def _build_intensity_slope(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """强度曲线的平均斜率（dB/s）。
+
+    照抄 ``plugin_IntensitySlope/meanIntensitySlope.praat``：
+
+    - ``local``：相邻两点绝对差 ÷ 时间步长，再取平均，
+      即 mean{|I[t+1]−I[t]| / dt}；
+    - ``global``：区间首尾之差 ÷ 区间时长，即 {I[tmax]−I[tmin]} / (tmax−tmin)。
+
+    范围默认整段；给了 from/to（或编辑器圈选）时，先按这个范围把声音截出来再分析。
+    """
+
+    row = context.resolve_object(arguments.get("object"))
+    if row.class_name not in SOUND_CLASSES:
+        context.require_class(
+            row, frozenset({"Intensity"}), "强度斜率需要声音对象或 Intensity 对象"
+        )
+    method = str(arguments.get("method", "local") or "local").strip().casefold()
+    if method not in {"local", "global", "局部", "整体"}:
+        raise ToolError("method 只能是 local（局部）或 global（整体）。")
+    local = method in {"local", "局部"}
+    pitch_floor = _number(arguments, "pitch_floor", 100.0, 20.0, 1000.0)
+    time_step = _number(arguments, "time_step", 0.001, 0.0001, 1.0)
+    lines = [f"selectObject: {row.id}", "duration = Get total duration"]
+    extracted = ""
+    if row.class_name in SOUND_CLASSES:
+        # 整段分析时不会截片段，所以先给 extractedId 一个初值（0 = 没截）。
+        lines.append("extractedId = 0")
+        lines.extend(_range_lines(arguments, row))
+        # 只分析一段时先把这一段截出来（Intensity 对象本身没有「取片段」的命令）。
+        lines.extend(
+            [
+                "if tmin > 0 or tmax < duration",
+                "extractedId = Extract part: tmin, tmax, \"rectangular\", 1, \"no\"",
+                f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
+                "tmin = 0",
+                "tmax = Get total duration",
+                "endif",
+            ]
+        )
+        extracted = "extractedId"
+    else:
+        # Intensity / Pitch 这类对象没有「取片段」命令：只能整段算，别假装能按范围算。
+        if arguments.get("from", arguments.get("start", None)) not in (None, "") or arguments.get(
+            "to", arguments.get("end", None)
+        ) not in (None, ""):
+            raise ToolError(
+                "对已经提取出来的 Intensity 对象只能整段算斜率；"
+                "要按时间范围算，请直接对声音对象用这个工具。"
+            )
+        lines.extend(["tmin = 0", "tmax = duration", 'rangeNote$ = ""'])
+    lines.extend(
+        [
+            f'intensityId = To Intensity: {pitch_floor:.6f}, {time_step:.6f}, "yes"',
+            "Down to Matrix",
+            'matrixId = selected ("Matrix")',
+            "colsNum = Get number of columns",
+        ]
+    )
+    if local:
+        result_lines = [
+            'Formula: "abs(self[col+1]-self[col])/dx"',
+            "matSum = Get sum",
+            "lastEl = Get value in cell: 1, colsNum",
+            "slope = (matSum - lastEl) / (colsNum - 1)",
+            _write_result(
+                context,
+                [
+                    quote("强度局部斜率（相邻点绝对差 ÷ 时间步长，取平均）= "),
+                    "fixed$ (slope, 2)",
+                    quote(" dB/s（"),
+                    "fixed$ (colsNum, 0)",
+                    quote(f" 个点，步长 {time_step:g} 秒）"),
+                    "rangeNote$",
+                ],
+            ),
+        ]
+    else:
+        result_lines = [
+            "firstTime = Get lowest x",
+            "lastTime = Get highest x",
+            "firstEl = Get value in cell: 1, 1",
+            "lastEl = Get value in cell: 1, colsNum",
+            "slope = (lastEl - firstEl) / (lastTime - firstTime)",
+            _write_result(
+                context,
+                [
+                    quote("强度整体斜率（首尾差 ÷ 时长）= "),
+                    "fixed$ (slope, 2)",
+                    quote(" dB/s（"),
+                    "fixed$ (firstEl, 2)",
+                    quote(" dB → "),
+                    "fixed$ (lastEl, 2)",
+                    quote(" dB）"),
+                    "rangeNote$",
+                ],
+            ),
+        ]
+    lines.extend(result_lines)
+    # 收尾：把中间对象删掉，恢复用户原来的选中对象。
+    lines.append("selectObject: matrixId")
+    lines.append("Remove")
+    lines.append("selectObject: intensityId")
+    lines.append("Remove")
+    if extracted:
+        # extractedId = 0 表示这次没截片段（整段分析），别去删一个不存在的对象。
+        lines.append(f"if {extracted} <> 0")
+        lines.append(f"    selectObject: {extracted}")
+        lines.append("    Remove")
+        lines.append("endif")
+    lines.append(f"selectObject: {row.id}")
+    return _assemble(lines, context)
+
+
 @dataclass(frozen=True, slots=True)
 class Tool:
     name: str
@@ -2275,6 +2677,74 @@ TOOLS: tuple[Tool, ...] = (
         summary="复制一个对象。",
         signature="name（可选，新名称）、object（可选）",
         build=_build_duplicate,
+    ),
+    Tool(
+        name="spectral_emphasis",
+        summary=(
+            "算谱强调（spectral emphasis）：低通滤波前后损失多少强度（dB），"
+            "用于嗓音质量分析（Traunmüller & Eriksson 2000）。"
+        ),
+        signature=(
+            "multiplier（默认 1.5，低通上限 = 平均基频 × 它）、smoothing（默认 20 Hz）、"
+            "pitch_floor（默认 75）、pitch_ceiling（默认 600）、object（必须是 Sound）"
+        ),
+        build=_build_spectral_emphasis,
+    ),
+    Tool(
+        name="hl_ratio",
+        summary="算高频段与低频段的能量比 H/L（默认 4–8 kHz ÷ 0–4 kHz）。",
+        signature=(
+            "low_from（默认 0）、low_to（默认 4000）、high_from（默认 4000）、"
+            "high_to（默认 8000）、object（Sound 或 Spectrum）"
+        ),
+        build=_build_hl_ratio,
+    ),
+    Tool(
+        name="hammarberg_index",
+        summary=(
+            "算 Hammarberg 指数：0–2 kHz 的 LTAS 最大电平 减去 2–5 kHz 的最大电平"
+            "（dB，Hammarberg et al. 1980）。"
+        ),
+        signature=(
+            "low_from（默认 0）、low_to（默认 2000）、high_from（默认 2000）、"
+            "high_to（默认 5000）、bandwidth（做 Ltas 的带宽，默认 100）、"
+            "object（Sound 或 Ltas）"
+        ),
+        build=_build_hammarberg_index,
+    ),
+    Tool(
+        name="pitch_peak_latency",
+        summary=(
+            "算基频峰值延迟：（基频最高点 − 区间起点）÷ 区间时长，"
+            "0.5 表示峰值正好在中间。"
+        ),
+        signature=(
+            "from、to（秒，默认整个对象或编辑器圈选）、pitch_floor（默认 75）、"
+            "pitch_ceiling（默认 600）、object（可选）"
+        ),
+        build=_build_pitch_peak_latency,
+    ),
+    Tool(
+        name="peak_to_average_ratio",
+        summary=(
+            "算峰值/有效值比（peak-to-average，Hillenbrand et al. 1994）："
+            "峰值幅度 ÷ RMS。"
+        ),
+        signature="from、to（秒，默认整个对象或编辑器圈选）、object（必须是 Sound）",
+        build=_build_peak_to_average_ratio,
+    ),
+    Tool(
+        name="intensity_slope",
+        summary=(
+            "算强度曲线的平均斜率（dB/s）：local = 相邻点绝对差的平均 ÷ 时间步长，"
+            "global = 首尾差 ÷ 时长。"
+        ),
+        signature=(
+            "method（local/global，默认 local）、from、to（秒，默认整个对象）、"
+            "pitch_floor（做 Intensity 用，默认 100）、time_step（默认 0.001 秒）、"
+            "object（Sound 或 Intensity）"
+        ),
+        build=_build_intensity_slope,
     ),
 )
 
@@ -2562,6 +3032,76 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
         "properties": {
             "name": _text_arg("副本的新名字"),
             "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "spectral_emphasis": {
+        "type": "object",
+        "properties": {
+            "multiplier": _number_arg("低通上限 = 平均基频 × 这个倍数，默认 1.5"),
+            "smoothing": _number_arg("低通滤波的平滑带宽 Hz，默认 20"),
+            "pitch_floor": _number_arg("求平均基频用的下限 Hz，默认 75"),
+            "pitch_ceiling": _number_arg("求平均基频用的上限 Hz，默认 600"),
+            "object": _object_arg("要分析的 Sound"),
+        },
+        "required": [],
+    },
+    "hl_ratio": {
+        "type": "object",
+        "properties": {
+            "low_from": _number_arg("低频段起点 Hz，默认 0"),
+            "low_to": _number_arg("低频段终点 Hz，默认 4000"),
+            "high_from": _number_arg("高频段起点 Hz，默认 4000"),
+            "high_to": _number_arg("高频段终点 Hz，默认 8000"),
+            "object": _object_arg("Sound 或现成的 Spectrum"),
+        },
+        "required": [],
+    },
+    "hammarberg_index": {
+        "type": "object",
+        "properties": {
+            "low_from": _number_arg("低频段起点 Hz，默认 0"),
+            "low_to": _number_arg("低频段终点 Hz，默认 2000"),
+            "high_from": _number_arg("高频段起点 Hz，默认 2000"),
+            "high_to": _number_arg("高频段终点 Hz，默认 5000"),
+            "bandwidth": _number_arg("做 Ltas 用的带宽 Hz，默认 100"),
+            "object": _object_arg("Sound 或现成的 Ltas"),
+        },
+        "required": [],
+    },
+    "pitch_peak_latency": {
+        "type": "object",
+        "properties": {
+            "from": _seconds_arg("区间起点（秒），不填就是整个对象或编辑器圈选"),
+            "to": _seconds_arg("区间终点（秒），不填就是整个对象或编辑器圈选"),
+            "pitch_floor": _number_arg("基频下限 Hz，默认 75"),
+            "pitch_ceiling": _number_arg("基频上限 Hz，默认 600"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "peak_to_average_ratio": {
+        "type": "object",
+        "properties": {
+            "from": _seconds_arg("区间起点（秒），不填就是整个对象或编辑器圈选"),
+            "to": _seconds_arg("区间终点（秒），不填就是整个对象或编辑器圈选"),
+            "object": _object_arg("要分析的 Sound"),
+        },
+        "required": [],
+    },
+    "intensity_slope": {
+        "type": "object",
+        "properties": {
+            "method": {
+                "type": "string",
+                "enum": ["local", "global"],
+                "description": "local = 相邻点绝对差的平均 ÷ 时间步长（默认）；global = 首尾差 ÷ 时长",
+            },
+            "from": _seconds_arg("起点（秒），不填就是整个对象或编辑器圈选"),
+            "to": _seconds_arg("终点（秒），不填就是整个对象或编辑器圈选"),
+            "pitch_floor": _number_arg("做 Intensity 用的下限 Hz，默认 100"),
+            "time_step": _number_arg("Intensity 的时间步长（秒），默认 0.001"),
+            "object": _object_arg("Sound 或现成的 Intensity"),
         },
         "required": [],
     },
