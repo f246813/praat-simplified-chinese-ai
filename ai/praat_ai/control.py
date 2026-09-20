@@ -11,6 +11,14 @@ from typing import Any
 
 from .config import AppConfig, default_config_path, load_config
 from .process import process_alive as _process_alive
+from .presets import (
+    PresetError,
+    active_preset,
+    apply_preset_to_profile,
+    find_preset,
+    list_presets,
+    preset_config_values,
+)
 from .server import (
     QwenServerError,
     QwenServerManager,
@@ -90,6 +98,15 @@ def collect_status(config_path: str | Path | None = None) -> dict[str, Any]:
     ]
     configured_model = configured_model_name(config)
     model = Path(live_model).name if live_model else configured_model
+    current_preset = active_preset(config)
+    preset_summaries = list_presets(config)
+    if current_preset is not None and live_model:
+        # 预设里写的模型和端口上实际加载的模型是否一致，界面要能区分这两种情况。
+        preset_matches_live = model_name_matches(
+            live_model, current_preset.model_path
+        )
+    else:
+        preset_matches_live = False
     status = {
         "success": True,
         "frontend_model": model,
@@ -98,6 +115,13 @@ def collect_status(config_path: str | Path | None = None) -> dict[str, Any]:
         and not model_name_matches(live_model, config.server.model_path),
         "frontend_model_source": "server" if live_model else "config",
         "frontend_vision": any("multimodal" in item for item in capabilities),
+        "frontend_preset": current_preset.id if current_preset else "",
+        "frontend_preset_label": (
+            current_preset.display_name if current_preset else ""
+        ),
+        "frontend_preset_matches_live": preset_matches_live,
+        "frontend_preset_configured": config.server.active_preset,
+        "presets": preset_summaries,
         "frontend_running": running,
         "frontend_status": "running" if running else "stopped",
         "alignment_mode": config.alignment.backend,
@@ -244,10 +268,15 @@ def _launch_server(
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
     gpu = detect_gpu()
+    preset = active_preset(config)
+    vision_requested = (
+        preset.vision if preset is not None else config.qwen.vision_when_requested
+    )
     profile = select_runtime_profile(
         gpu.free_mb if gpu else None,
-        config.qwen.vision_when_requested,
+        vision_requested,
     )
+    profile = apply_preset_to_profile(profile, preset)
     config.server.auto_start = True
     manager = QwenServerManager(config, profile)
     manager.ensure_started()
@@ -332,9 +361,12 @@ def set_frontend_model(
     model = Path(model_path)
     if not model.is_file():
         raise FileNotFoundError(f"Model file not found: {model}")
+    known = find_preset(load_config(config_path), str(model))
     values: dict[str, Any] = {
         "server": {
             "model_path": str(model),
+            # 手动选中的模型如果命中预设，就同步预设状态，避免状态栏对不上。
+            "active_preset": known.id if known else "",
         },
         "qwen": {
             "model": model.name,
@@ -352,6 +384,33 @@ def set_frontend_model(
     update_config(values, config_path)
     config = load_config(config_path)
     # 端口上已有服务却加载着旧模型时，必须重启，否则切换模型只是改了配置。
+    if server_model_state(config.qwen.base_url, config.server.model_path) is False:
+        return _restart_service(config, config_path)
+    return collect_status(config_path)
+
+
+def apply_preset(
+    preset_key: str,
+    config_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """切换到配置里声明的模型预设（必要时真正重启 llama-server）。"""
+
+    config = load_config(config_path)
+    presets = config.server.presets or []
+    if not presets:
+        raise PresetError(
+            "ai_config.json 里还没有配置模型预设（server.presets）。"
+        )
+    preset = find_preset(config, preset_key)
+    if preset is None:
+        available = "、".join(
+            f"{item.id}（{item.display_name}）" for item in presets
+        )
+        raise PresetError(f"没有找到预设「{preset_key}」。可用预设：{available}")
+    values = preset_config_values(preset, config.server.mmproj_by_model)
+    update_config(values, config_path)
+    config = load_config(config_path)
+    # 端口上已有服务却加载着别的模型时，必须重启，否则切换预设只是改配置。
     if server_model_state(config.qwen.base_url, config.server.model_path) is False:
         return _restart_service(config, config_path)
     return collect_status(config_path)
@@ -399,6 +458,17 @@ def execute_command(
         return stop_frontend(config_path)
     if normalized == "set-model":
         return set_frontend_model(value, config_path=config_path)
+    if normalized in {"set-preset", "preset"}:
+        return apply_preset(value, config_path)
+    if normalized == "presets":
+        config = load_config(config_path)
+        return {
+            "success": True,
+            "presets": list_presets(config),
+            "active_preset": (
+                active_preset(config).id if active_preset(config) else ""
+            ),
+        }
     if normalized == "set-mmproj":
         return set_frontend_model(
             load_config(config_path).server.model_path,

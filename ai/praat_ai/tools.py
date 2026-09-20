@@ -33,9 +33,51 @@ FORBIDDEN_SCRIPT_PATTERNS = re.compile(
 
 SINGLE_QUOTED_LITERAL = re.compile(r"'([^'\n]*)'")
 
+# 模型偶尔会把 Python 代码当成 Praat 脚本填进 script 字段。这类脚本在 Praat 里
+# 只会得到一句莫名其妙的英文报错，所以这里直接识别出来并给出中文提示。
+PYTHON_SCRIPT_PATTERNS = re.compile(
+    r"^\s*(?:import|from)\s+[A-Za-z_][\w.]*(?:\s+import\s+|\s*$)"
+    r"|^\s*def\s+\w+\s*\("
+    r"|^\s*(?:print|input|len|range)\s*\("
+    r"|\bparselmouth\b|\bnumpy\b|np\.\w+|\bos\.\w+\(",
+    re.MULTILINE,
+)
+
 TEMPORARY_OBJECT_NAME = "ai-chat-temp"
 
 CUSTOM_SCRIPT_TOOL = "custom_script"
+
+# 「有时长概念」的对象类：只有这些类才能用 Get total duration 之类的查询，
+# 否则脚本会在 Praat 里直接报 “Command not available”，用户只看到一句英文错误。
+TIME_DOMAIN_CLASSES = frozenset(
+    {
+        "Sound",
+        "LongSound",
+        "Pitch",
+        "Formant",
+        "Intensity",
+        "Harmonicity",
+        "Spectrogram",
+        "BarkSpectrogram",
+        "Cochleagram",
+        "Excitation",
+        "MFCC",
+        "Manipulation",
+        "PointProcess",
+        "TextGrid",
+        "TextTier",
+        "IntervalTier",
+        "DurationTier",
+        "PitchTier",
+        "IntensityTier",
+        "AmplitudeTier",
+        "FormantTier",
+        "Polygon",
+    }
+)
+
+# 只有 Sound 类对象有 Play / 采样率 / 通道数。
+SOUND_CLASSES = frozenset({"Sound", "LongSound"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +90,24 @@ class ObjectRow:
     @property
     def label(self) -> str:
         return f"{self.id}: {self.name}"
+
+    def name_variants(self) -> set[str]:
+        """对象名可能带或不带类名前缀，这里把所有可接受的写法都列出来。"""
+
+        variants = {self.name, self.label, f"{self.class_name} {self.name}"}
+        for prefix in (f"{self.class_name} ", self.class_name):
+            if self.name.startswith(prefix):
+                variants.add(self.name[len(prefix) :].strip())
+        variants.add(f"{self.class_name} {self.id}")
+        return {_normalize_text(item) for item in variants if item}
+
+
+def _normalize_text(value: Any) -> str:
+    text = str(value or "").casefold()
+    for character in ('"', "'", "“", "”", "‘", "’"):
+        text = text.replace(character, "")
+    text = text.replace("_", " ").replace("\u3000", " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,15 +134,44 @@ class ToolContext:
         for row in self.objects:
             if text in {row.name, f"{row.class_name} {row.name}", row.label}:
                 return row
-        lowered = text.casefold()
+        normalized = _normalize_text(text)
+        # 「2 号」「#2」「id 2」都当成 id 处理。
+        identifier = re.fullmatch(r"(?:id\s*)?#?(\d+)\s*(?:号|对象)?", normalized)
+        if identifier:
+            wanted = int(identifier.group(1))
+            for row in self.objects:
+                if row.id == wanted:
+                    return row
         for row in self.objects:
-            if lowered in {
-                row.name.casefold(),
-                row.label.casefold(),
-                f"{row.class_name} {row.name}".casefold(),
-            }:
+            if normalized in row.name_variants():
                 return row
+        # 模型常把 "Sound tone" 简写成 "tone"，或反过来只写类名加编号；
+        # 唯一命中就接受，多个候选就让用户挑，避免猜错对象。
+        partial = [
+            row
+            for row in self.objects
+            if any(
+                normalized in variant or variant in normalized
+                for variant in row.name_variants()
+            )
+        ]
+        if len(partial) == 1:
+            return partial[0]
+        if len(partial) > 1:
+            options = "、".join(f"{row.id}: {row.name}" for row in partial)
+            raise ToolError(f"“{text}”对应多个对象，请用对象 id 指定：{options}")
         raise ToolError(f"对象列表里没有“{text}”，请先确认 Praat 中选中的对象。")
+
+    def require_class(
+        self,
+        row: ObjectRow,
+        classes: frozenset[str],
+        description: str,
+    ) -> None:
+        if row.class_name not in classes:
+            raise ToolError(
+                f"{description}（对象 {row.id} 是 {row.class_name}）。"
+            )
 
 
 def parse_object_context(text: str) -> tuple[ObjectRow, ...]:
@@ -152,11 +241,37 @@ def _integer(
     return rounded
 
 
-def _time_line(arguments: Mapping[str, Any], *, fallback: str) -> str:
+def _time_lines(
+    arguments: Mapping[str, Any],
+    *,
+    fallback: str,
+    suffix_variable: str = "note$",
+) -> list[str]:
+    """把查询时间夹进对象时长，并返回“被截断”时的中文后缀变量。
+
+    时间超出对象范围时 Praat 不会报错，而是返回 ``--undefined--``；
+    这里先夹到有效区间，再让模板把 ``--undefined--`` 换成中文说明。
+    """
+
     value = arguments.get("time", None)
     if value is None or value == "":
-        return f"time = {fallback}"
-    return f"time = {_number(arguments, 'time', 0.0, 0.0, 36000.0):.6f}"
+        lines = [f"time = {fallback}"]
+    else:
+        lines = [f"time = {_number(arguments, 'time', 0.0, 0.0, 36000.0):.6f}"]
+    lines.extend(
+        [
+            f'{suffix_variable} = ""',
+            "if time < 0",
+            "    time = 0",
+            f'    {suffix_variable} = "（已按对象时长截断）"',
+            "endif",
+            "if time > duration",
+            "    time = duration",
+            f'    {suffix_variable} = "（已按对象时长截断）"',
+            "endif",
+        ]
+    )
+    return lines
 
 
 def _unit_literal(arguments: Mapping[str, Any], default: str) -> str:
@@ -167,6 +282,36 @@ def _unit_literal(arguments: Mapping[str, Any], default: str) -> str:
     if lowered in {"hertz", "hz", "赫兹"}:
         return '"hertz"'
     raise ToolError(f"单位 {value!r} 不受支持，只能用 hertz 或 Bark。")
+
+
+def _unit_display(arguments: Mapping[str, Any], default: str) -> str:
+    return " Bark" if _unit_literal(arguments, default) == '"Bark"' else " Hz"
+
+
+def _formant_numbers(arguments: Mapping[str, Any]) -> list[int]:
+    """支持 ``formant`` 写成一个数字、列表或 "1,2" 这类文本。"""
+
+    raw = arguments.get("formant", arguments.get("formants", None))
+    if raw is None or raw == "":
+        return [2]
+    items = raw if isinstance(raw, (list, tuple)) else re.split(r"[,，、;\s]+", str(raw))
+    numbers: list[int] = []
+    for item in items:
+        if str(item).strip() == "":
+            continue
+        try:
+            number = _integer({"value": item}, "value", 1, 1, 20)
+        except ToolError as error:
+            raise ToolError(
+                f"共振峰编号只能是 1–20 的整数，收到：{item!r}"
+            ) from error
+        if number not in numbers:
+            numbers.append(number)
+    if not numbers:
+        return [2]
+    if len(numbers) > 6:
+        raise ToolError("一次最多查询 6 条共振峰。")
+    return numbers
 
 
 def _finish(context: ToolContext) -> list[str]:
@@ -192,11 +337,12 @@ def _formant_lines(
     label: str,
 ) -> list[str]:
     row = context.resolve_object(arguments.get("object"))
-    formant = _integer(arguments, "formant", 2, 1, 20)
+    formatns = _formant_numbers(arguments)
     unit = _unit_literal(arguments, "hertz")
+    unit_text = _unit_display(arguments, "hertz")
     temporary = row.class_name != "Formant"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
-    lines.append(_time_line(arguments, fallback="duration / 2"))
+    lines.extend(_time_lines(arguments, fallback="duration / 2"))
     if temporary:
         lines.extend(
             [
@@ -204,19 +350,35 @@ def _formant_lines(
                 f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
             ]
         )
-    lines.append(f"value = {command}: {formant}, time, {unit}, \"linear\"")
-    lines.append(
-        _write_result(
-            context,
+    for formant in formatns:
+        lines.extend(
             [
-                quote(f"第 {formant} 共振峰{label}（"),
-                "fixed$ (time, 3)",
-                quote(" 秒处）= "),
-                "fixed$ (value, 3)",
-                quote(" Hz"),
-            ],
+                f'value = {command}: {formant}, time, {unit}, "linear"',
+                "if value = undefined",
+                _write_result(
+                    context,
+                    [
+                        quote(f"第 {formant} 共振峰{label}（"),
+                        "fixed$ (time, 3)",
+                        quote(" 秒处）无法计算：该时刻没有可用的共振峰数据"),
+                        "note$",
+                    ],
+                ),
+                "else",
+                _write_result(
+                    context,
+                    [
+                        quote(f"第 {formant} 共振峰{label}（"),
+                        "fixed$ (time, 3)",
+                        quote(" 秒处）= "),
+                        "fixed$ (value, 3)",
+                        quote(unit_text),
+                        "note$",
+                    ],
+                ),
+                "endif",
+            ]
         )
-    )
     if temporary:
         lines.extend(["Remove", f"selectObject: {row.id}"])
     return lines
@@ -224,6 +386,7 @@ def _formant_lines(
 
 def _build_duration(arguments: Mapping[str, Any], context: ToolContext) -> str:
     row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长")
     lines = [
         f"selectObject: {row.id}",
         "duration = Get total duration",
@@ -251,9 +414,10 @@ def _build_formant_frequency(arguments: Mapping[str, Any], context: ToolContext)
 
 def _build_pitch(arguments: Mapping[str, Any], context: ToolContext) -> str:
     row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做基频分析")
     temporary = row.class_name != "Pitch"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
-    lines.append(_time_line(arguments, fallback="duration / 2"))
+    lines.extend(_time_lines(arguments, fallback="duration / 2"))
     if temporary:
         floor = _number(arguments, "pitch_floor", 75.0, 20.0, 1000.0)
         ceiling = _number(arguments, "pitch_ceiling", 600.0, 50.0, 2000.0)
@@ -264,17 +428,121 @@ def _build_pitch(arguments: Mapping[str, Any], context: ToolContext) -> str:
             ]
         )
     lines.append('value = Get value at time: time, "Hertz", "linear"')
-    lines.append(
-        _write_result(
-            context,
-            [
-                quote("基频（"),
-                "fixed$ (time, 3)",
-                quote(" 秒处）= "),
-                "fixed$ (value, 3)",
-                quote(" Hz"),
-            ],
+    lines.extend(
+        [
+            "if value = undefined",
+            _write_result(
+                context,
+                [
+                    quote("基频（"),
+                    "fixed$ (time, 3)",
+                    quote(
+                        " 秒处）无法计算：该时刻没有周期性声源"
+                        "（可能是无声段或清音）"
+                    ),
+                    "note$",
+                ],
+            ),
+            "else",
+            _write_result(
+                context,
+                [
+                    quote("基频（"),
+                    "fixed$ (time, 3)",
+                    quote(" 秒处）= "),
+                    "fixed$ (value, 3)",
+                    quote(" Hz"),
+                    "note$",
+                ],
+            ),
+            "endif",
+        ]
+    )
+    if temporary:
+        lines.extend(["Remove", f"selectObject: {row.id}"])
+    return _assemble(lines, context)
+
+
+def _build_pitch_statistics(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+) -> str:
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做基频分析")
+    temporary = row.class_name != "Pitch"
+    lines = [
+        f"selectObject: {row.id}",
+        "duration = Get total duration",
+        # 注意：Praat 里 from / to / end 都是保留字，变量名只能用 tmin / tmax。
+        "tmin = 0",
+        "tmax = duration",
+    ]
+    from_value = arguments.get("from", arguments.get("start", None))
+    if from_value not in (None, ""):
+        lines.append(
+            f"tmin = {_number(arguments, 'from', 0.0, 0.0, 36000.0):.6f}"
         )
+    to_value = arguments.get("to", arguments.get("end", None))
+    if to_value not in (None, ""):
+        lines.append(f"tmax = {_number(arguments, 'to', 0.0, 0.0, 36000.0):.6f}")
+    lines.extend(
+        [
+            "if tmin < 0",
+            "    tmin = 0",
+            "endif",
+            "if tmax > duration",
+            "    tmax = duration",
+            "endif",
+            "if tmin > tmax",
+            "    tmin = 0",
+            "    tmax = duration",
+            "endif",
+        ]
+    )
+    if temporary:
+        floor = _number(arguments, "pitch_floor", 75.0, 20.0, 1000.0)
+        ceiling = _number(arguments, "pitch_ceiling", 600.0, 50.0, 2000.0)
+        lines.extend(
+            [
+                f"To Pitch: 0, {floor:.6f}, {ceiling:.6f}",
+                f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
+            ]
+        )
+    lines.extend(
+        [
+            'mean = Get mean: tmin, tmax, "Hertz"',
+            'minimum = Get minimum: tmin, tmax, "Hertz", "Parabolic"',
+            'maximum = Get maximum: tmin, tmax, "Hertz", "Parabolic"',
+            "if mean = undefined",
+            _write_result(
+                context,
+                [
+                    quote("基频统计（"),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒）无法计算：该区间没有周期性声源（可能是无声段或清音）"),
+                ],
+            ),
+            "else",
+            _write_result(
+                context,
+                [
+                    quote("基频统计（"),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒）：平均 "),
+                    "fixed$ (mean, 3)",
+                    quote(" Hz，最低 "),
+                    "fixed$ (minimum, 3)",
+                    quote(" Hz，最高 "),
+                    "fixed$ (maximum, 3)",
+                    quote(" Hz"),
+                ],
+            ),
+            "endif",
+        ]
     )
     if temporary:
         lines.extend(["Remove", f"selectObject: {row.id}"])
@@ -283,9 +551,10 @@ def _build_pitch(arguments: Mapping[str, Any], context: ToolContext) -> str:
 
 def _build_intensity(arguments: Mapping[str, Any], context: ToolContext) -> str:
     row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做强度分析")
     temporary = row.class_name != "Intensity"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
-    lines.append(_time_line(arguments, fallback="duration / 2"))
+    lines.extend(_time_lines(arguments, fallback="duration / 2"))
     if temporary:
         lines.extend(
             [
@@ -294,20 +563,130 @@ def _build_intensity(arguments: Mapping[str, Any], context: ToolContext) -> str:
             ]
         )
     lines.append('value = Get value at time: time, "cubic"')
-    lines.append(
-        _write_result(
-            context,
-            [
-                quote("强度（"),
-                "fixed$ (time, 3)",
-                quote(" 秒处）= "),
-                "fixed$ (value, 3)",
-                quote(" dB"),
-            ],
-        )
+    lines.extend(
+        [
+            "if value = undefined",
+            _write_result(
+                context,
+                [
+                    quote("强度（"),
+                    "fixed$ (time, 3)",
+                    quote(" 秒处）无法计算：该时刻没有强度数据"),
+                    "note$",
+                ],
+            ),
+            "else",
+            _write_result(
+                context,
+                [
+                    quote("强度（"),
+                    "fixed$ (time, 3)",
+                    quote(" 秒处）= "),
+                    "fixed$ (value, 3)",
+                    quote(" dB"),
+                    "note$",
+                ],
+            ),
+            "endif",
+        ]
     )
     if temporary:
         lines.extend(["Remove", f"selectObject: {row.id}"])
+    return _assemble(lines, context)
+
+
+def _build_intensity_statistics(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+) -> str:
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做强度分析")
+    temporary = row.class_name != "Intensity"
+    lines = [
+        f"selectObject: {row.id}",
+        "duration = Get total duration",
+        "tmin = 0",
+        "tmax = duration",
+    ]
+    from_value = arguments.get("from", arguments.get("start", None))
+    if from_value not in (None, ""):
+        lines.append(
+            f"tmin = {_number(arguments, 'from', 0.0, 0.0, 36000.0):.6f}"
+        )
+    to_value = arguments.get("to", arguments.get("end", None))
+    if to_value not in (None, ""):
+        lines.append(f"tmax = {_number(arguments, 'to', 0.0, 0.0, 36000.0):.6f}")
+    lines.extend(
+        [
+            "if tmin < 0",
+            "    tmin = 0",
+            "endif",
+            "if tmax > duration",
+            "    tmax = duration",
+            "endif",
+            "if tmin > tmax",
+            "    tmin = 0",
+            "    tmax = duration",
+            "endif",
+        ]
+    )
+    if temporary:
+        lines.extend(
+            [
+                'To Intensity: 100, 0, "yes"',
+                f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
+            ]
+        )
+    lines.extend(
+        [
+            'mean = Get mean: tmin, tmax, "energy"',
+            'maximum = Get maximum: tmin, tmax, "Parabolic"',
+            _write_result(
+                context,
+                [
+                    quote("强度统计（"),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒）：平均 "),
+                    "fixed$ (mean, 3)",
+                    quote(" dB，最高 "),
+                    "fixed$ (maximum, 3)",
+                    quote(" dB"),
+                ],
+            ),
+        ]
+    )
+    if temporary:
+        lines.extend(["Remove", f"selectObject: {row.id}"])
+    return _assemble(lines, context)
+
+
+def _build_object_info(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    row = context.resolve_object(arguments.get("object"))
+    has_duration = row.class_name in TIME_DOMAIN_CLASSES
+    is_sound = row.class_name in SOUND_CLASSES
+    lines = [f"selectObject: {row.id}"]
+    if has_duration:
+        lines.append("duration = Get total duration")
+    if is_sound:
+        lines.extend(["channels = Get number of channels", "rate = Get sampling frequency"])
+    fragments = [quote(f"{row.class_name}「{row.name}」（id {row.id}）")]
+    if has_duration:
+        fragments.extend([quote("：时长 "), "fixed$ (duration, 3)", quote(" 秒")])
+    if is_sound:
+        fragments.extend(
+            [
+                quote("，通道数 "),
+                "fixed$ (channels, 0)",
+                quote("，采样率 "),
+                "fixed$ (rate, 0)",
+                quote(" Hz"),
+            ]
+        )
+    if not has_duration:
+        fragments.append(quote("：这类对象没有时长信息"))
+    lines.append(_write_result(context, fragments))
     return _assemble(lines, context)
 
 
@@ -332,6 +711,7 @@ def _build_view(arguments: Mapping[str, Any], context: ToolContext) -> str:
 
 def _build_play(arguments: Mapping[str, Any], context: ToolContext) -> str:
     row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, SOUND_CLASSES, "只有声音对象可以直接播放")
     lines = [
         f"selectObject: {row.id}",
         "Play",
@@ -363,6 +743,180 @@ def _build_remove(arguments: Mapping[str, Any], context: ToolContext) -> str:
     return _assemble(lines, context)
 
 
+def _new_name(arguments: Mapping[str, Any], default: str) -> str:
+    name = str(
+        arguments.get("name", "") or arguments.get("new_name", "") or ""
+    ).strip()
+    return name or default
+
+
+def _build_create_sound(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    name = _new_name(arguments, "新建声音")
+    duration = _number(arguments, "duration", 1.0, 0.001, 3600.0)
+    frequency = _number(arguments, "frequency", 220.0, 0.0, 20000.0)
+    amplitude = _number(arguments, "amplitude", 0.5, 0.0, 1.0)
+    if frequency <= 0.0:
+        lines = [
+            f"Create Sound from formula: {quote(name)}, 1, 0, "
+            f"{duration:.6f}, 44100, ~ 0",
+            "duration = Get total duration",
+        ]
+        description = "静音"
+    else:
+        lines = [
+            f"Create Sound as pure tone: {quote(name)}, 1, 0, "
+            f"{duration:.6f}, 44100, {frequency:.6f}, {amplitude:.6f}, 0.01, 0.01",
+            "duration = Get total duration",
+        ]
+        description = f"{frequency:.1f} Hz 纯音"
+    lines.append(
+        _write_result(
+            context,
+            [
+                quote(f"已创建{description}："),
+                quote(name),
+                quote("，时长 "),
+                "fixed$ (duration, 3)",
+                quote(" 秒"),
+            ],
+        )
+    )
+    return _assemble(lines, context)
+
+
+def _build_concatenate(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    first = context.resolve_object(arguments.get("object"))
+    other = arguments.get("object2", arguments.get("other", None))
+    if other in (None, ""):
+        raise ToolError("拼接需要 object2 参数，指出第二个声音对象。")
+    second = context.resolve_object(other)
+    context.require_class(first, SOUND_CLASSES, "只有声音对象可以拼接")
+    context.require_class(second, SOUND_CLASSES, "只有声音对象可以拼接")
+    if first.id == second.id:
+        raise ToolError("拼接需要两个不同的声音对象。")
+    name = _new_name(arguments, "拼接结果")
+    lines = [
+        f"selectObject: {first.id}",
+        f"plusObject: {second.id}",
+        "Concatenate",
+        f"Rename: {quote(name)}",
+        "duration = Get total duration",
+        _write_result(
+            context,
+            [
+                quote(f"已把 {first.name} 和 {second.name} 拼成："),
+                quote(name),
+                quote("，时长 "),
+                "fixed$ (duration, 3)",
+                quote(" 秒"),
+            ],
+        ),
+    ]
+    return _assemble(lines, context)
+
+
+def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, SOUND_CLASSES, "只有声音对象可以截取片段")
+    start = _number(arguments, "start", 0.0, 0.0, 36000.0)
+    raw_end = arguments.get("end", arguments.get("finish", None))
+    if raw_end in (None, ""):
+        raise ToolError("截取片段需要 end 参数（结束时间，单位秒）。")
+    end = _number(arguments, "end", 0.0, 0.0, 36000.0)
+    if start >= end:
+        raise ToolError("开始时间必须小于结束时间。")
+    name = _new_name(arguments, "片段")
+    lines = [
+        f"selectObject: {row.id}",
+        "duration = Get total duration",
+        # Praat 里 start / end 不是保留字，但为了和其它模板一致，统一用 t1 / t2。
+        f"t1 = {start:.6f}",
+        f"t2 = {end:.6f}",
+        "if t2 > duration",
+        "    t2 = duration",
+        "endif",
+        "if t1 > t2 - 0.001",
+        "    t1 = t2 - 0.001",
+        "endif",
+        "if t1 < 0",
+        "    t1 = 0",
+        "endif",
+        'Extract part: t1, t2, "rectangular", 1, "no"',
+        f"Rename: {quote(name)}",
+        "duration = Get total duration",
+        _write_result(
+            context,
+            [
+                quote("已截取片段："),
+                quote(name),
+                quote("，区间 "),
+                "fixed$ (t1, 3)",
+                quote("–"),
+                "fixed$ (t2, 3)",
+                quote(" 秒，共 "),
+                "fixed$ (duration, 3)",
+                quote(" 秒"),
+            ],
+        ),
+    ]
+    return _assemble(lines, context)
+
+
+def _build_save_sound(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, SOUND_CLASSES, "只有声音对象可以保存为 WAV 文件")
+    path = str(
+        arguments.get("path", "") or arguments.get("file", "") or ""
+    ).strip().strip('"')
+    if not path:
+        raise ToolError("保存声音需要 path 参数，例如 D:/out/a.wav。")
+    if not re.match(r"^(?:[A-Za-z]:[\\/]|\\\\|/)", path):
+        raise ToolError(f"保存路径必须是完整路径，收到：{path}")
+    if not path.lower().endswith(".wav"):
+        path += ".wav"
+    lines = [
+        f"selectObject: {row.id}",
+        f"Save as WAV file: {quote(path)}",
+        _write_result(context, [quote("已保存 WAV 文件："), quote(path)]),
+    ]
+    return _assemble(lines, context)
+
+
+def _build_resample(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, SOUND_CLASSES, "只有声音对象可以改变采样率")
+    rate = _integer(arguments, "rate", 16000, 1000, 768000)
+    lines = [
+        f"selectObject: {row.id}",
+        f"Resample: {rate}, 50",
+        "actual = Get sampling frequency",
+        _write_result(
+            context,
+            [
+                quote("已重采样为新对象，采样率 "),
+                "fixed$ (actual, 0)",
+                quote(" Hz（原对象保持不变）"),
+            ],
+        ),
+    ]
+    return _assemble(lines, context)
+
+
+def _build_duplicate(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    row = context.resolve_object(arguments.get("object"))
+    default_name = row.name if row.name else f"对象 {row.id}"
+    name = _new_name(arguments, f"{default_name} 副本")
+    # 模型常把「复制一份」理解成「用同一个名字复制」，那样看不出哪个是副本。
+    if _normalize_text(name) in row.name_variants():
+        name = f"{name} 副本"
+    lines = [
+        f"selectObject: {row.id}",
+        f"Copy: {quote(name)}",
+        _write_result(context, [quote("已复制为："), quote(name)]),
+    ]
+    return _assemble(lines, context)
+
+
 @dataclass(frozen=True, slots=True)
 class Tool:
     name: str
@@ -376,6 +930,12 @@ class Tool:
 
 TOOLS: tuple[Tool, ...] = (
     Tool(
+        name="object_info",
+        summary="查看对象的基本信息：类型、名称、时长、通道数和采样率。",
+        signature="object（可选，对象 id 或名称）",
+        build=_build_object_info,
+    ),
+    Tool(
         name="duration",
         summary="查询对象的时长（秒）。",
         signature="object（可选，对象 id 或名称）",
@@ -383,14 +943,14 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="formant_bandwidth",
-        summary="查询第 n 共振峰在某一时刻的带宽（Hz）；对象是 Sound 时自动先做共振峰分析。",
-        signature="formant（默认 2）、time（秒，默认中点）、unit（hertz/Bark）、object（可选）",
+        summary="查询第 n 共振峰在某一时刻的带宽；对象是 Sound 时自动先做共振峰分析。",
+        signature="formant（默认 2，可写 1,2 查多条）、time（秒，默认中点）、unit（hertz/Bark）、object（可选）",
         build=_build_formant_bandwidth,
     ),
     Tool(
         name="formant_frequency",
-        summary="查询第 n 共振峰在某一时刻的频率（Hz）；对象是 Sound 时自动先做共振峰分析。",
-        signature="formant（默认 2）、time（秒，默认中点）、unit（hertz/Bark）、object（可选）",
+        summary="查询第 n 共振峰在某一时刻的频率；对象是 Sound 时自动先做共振峰分析。查 F1、F2 时用 formant: \"1,2\"。",
+        signature="formant（默认 2，可写 1,2 查多条）、time（秒，默认中点）、unit（hertz/Bark）、object（可选）",
         build=_build_formant_frequency,
     ),
     Tool(
@@ -400,10 +960,22 @@ TOOLS: tuple[Tool, ...] = (
         build=_build_pitch,
     ),
     Tool(
+        name="pitch_statistics",
+        summary="统计一段时间的基频：平均值、最低值、最高值（Hz）。要「基频平均/最高/范围」时用这个。",
+        signature="from、to（秒，默认整个对象）、pitch_floor、pitch_ceiling、object（可选）",
+        build=_build_pitch_statistics,
+    ),
+    Tool(
         name="intensity",
         summary="查询某一时刻的强度（dB）。",
         signature="time（秒，默认中点）、object（可选）",
         build=_build_intensity,
+    ),
+    Tool(
+        name="intensity_statistics",
+        summary="统计一段时间的强度：平均值和最高值（dB）。",
+        signature="from、to（秒，默认整个对象）、object（可选）",
+        build=_build_intensity_statistics,
     ),
     Tool(
         name="select_object",
@@ -434,6 +1006,42 @@ TOOLS: tuple[Tool, ...] = (
         summary="删除对象。",
         signature="object（可选）",
         build=_build_remove,
+    ),
+    Tool(
+        name="create_sound",
+        summary="新建一个声音对象：frequency 大于 0 生成纯音，等于 0 生成静音。",
+        signature="duration（秒，默认 1）、frequency（Hz，默认 220）、amplitude（0–1）、name（可选）",
+        build=_build_create_sound,
+    ),
+    Tool(
+        name="concatenate_sounds",
+        summary="把两个 Sound 首尾拼接成一个新 Sound。",
+        signature="object、object2（两个声音）、name（可选）",
+        build=_build_concatenate,
+    ),
+    Tool(
+        name="extract_part",
+        summary="按时间区间从一个 Sound 里截取片段（生成新对象）。",
+        signature="start、end（秒）、name（可选）、object（可选）",
+        build=_build_extract_part,
+    ),
+    Tool(
+        name="save_sound",
+        summary="把 Sound 另存为 WAV 文件。",
+        signature="path（完整路径，例如 D:/out/a.wav）、object（可选）",
+        build=_build_save_sound,
+    ),
+    Tool(
+        name="resample_sound",
+        summary="改变采样率，生成一个新的 Sound 对象。",
+        signature="rate（Hz，常用 16000/22050/44100）、object（可选）",
+        build=_build_resample,
+    ),
+    Tool(
+        name="duplicate_object",
+        summary="复制一个对象。",
+        signature="name（可选，新名称）、object（可选）",
+        build=_build_duplicate,
     ),
 )
 
@@ -471,6 +1079,11 @@ def validate_script(script: str, *, maximum_length: int = 6000) -> str:
         raise ToolError("模型没有给出可执行的 Praat 脚本。")
     if len(normalized) > maximum_length:
         raise ToolError("模型生成的脚本过长。")
+    if PYTHON_SCRIPT_PATTERNS.search(normalized):
+        raise ToolError(
+            "模型给出的是 Python 代码，不是 Praat 脚本。"
+            "请换用内置工具描述这个操作，或让模型改用 Praat 英文命令。"
+        )
     if FORBIDDEN_SCRIPT_PATTERNS.search(normalized):
         raise ToolError("模型生成的脚本包含被禁止的命令。")
     for line in normalized.splitlines():

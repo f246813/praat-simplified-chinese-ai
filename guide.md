@@ -411,3 +411,65 @@ AI 纠音实验代码位于 `ai/`：
 - 服务不是本前端启动的（`runtime/qwen.pid` 不存在或进程已死）时不能自动重启，
   `_restart_service()` 会抛 `QwenServerError` 让用户手动停止，避免误杀别人的进程。
 - 回归用例：`ai/tests/test_frontend_model.py`。
+
+### 8.3 模型预设（server.presets）
+
+「模型预设」把「用哪个模型、配哪个 mmproj、用多大上下文、用什么生成参数」固化成
+一键切换，实现分布在四个地方，改的时候要一起看：
+
+- `ai/ai_config.json` 的 `server.presets`：每条预设的 `id / label / model_path /
+  mmproj_path / vision / context_tokens / n_gpu_layers / threads / qwen`。
+  `active_preset` 记录当前选中的预设。
+- `ai/praat_ai/presets.py`：解析、查表、展开成配置、按预设覆盖显存档位。
+  这里是纯函数，不碰进程。
+- `ai/praat_ai/control.py`：`apply_preset()` 先把预设写进配置（含
+  `mmproj_by_model` 的合并），再复用 `set_frontend_model()` 那套「端口上的模型
+  和配置不一致就重启」的判断；`collect_status()` 额外上报
+  `frontend_preset / frontend_preset_label / frontend_preset_matches_live /
+  presets`。
+- `ai/praat_ai/chat.py`：对话窗口顶部的下拉框，切换后重新读配置并重建
+  `QwenClient`（`reload_config()`）。
+
+约定：
+
+- 预设里的 `model_path` 与 `mmproj_path` 必须成对；`vision: true` 但没有 mmproj
+  的预设按纯文本处理，`preset_view()` 和 `apply_preset_to_profile()` 必须给出
+  同一个结论，否则界面会显示一套、实际跑另一套。
+- 预设只覆盖启动参数，不能绕过模型一致性检查：服务不是本前端启动的依然拒绝重启。
+- 手动用菜单选模型时（`set_frontend_model`）要同步 `active_preset`：命中预设就写
+  预设 id，没命中就清空，否则状态栏会显示一个早就不在跑的预设。
+- 回归用例：`ai/tests/test_presets.py`；真机切换用
+  `python ai/tests/verify_presets_live.py`（会重启 llama-server，检查端口上的模型
+  和 `ai/logs/qwen-server.log` 里的 mmproj 是否和预设一致）。
+
+### 8.4 对话链路的行为约定（都踩过坑）
+
+- **发送脚本不能阻塞等 60 秒。** `Praat.exe --send` 在 Praat 弹出错误对话框或
+  被模态窗口挡住时会一直阻塞（实测 > 60 秒），脚本其实已经排队。所以
+  `chat._send_script()` 现在是「后台 Popen + 输出重定向到 `runtime/chat_send.log`
+  + 轮询 `chat_state.txt`」；超过 25 秒且发送进程还活着就杀掉它并提示用户关掉
+  Praat 里的对话框。不要再改回 `subprocess.run(timeout=60)`。
+- **每次执行前先刷新对象列表。** `chat.refresh_object_context()` 送一条
+  `appendInfoLine` + 状态标记的空脚本：Praat 每执行完一条脚本命令都会走
+  `praat_updateSelection()`，从而重写 `runtime/chat_context.tsv`。这样 Praat
+  重启过、对象改名过之后不会拿着旧 id 去规划（旧 id 会让 Praat 报
+  「没有编号为 1」）。注意批处理（`--run`）下 `PraatAiControl_refreshChatContext()`
+  直接返回，所以**批处理验证不了上下文回传**，只能验模板语法。
+- **多实例**：`--send` 只能把脚本交给最新打开的那个 Praat。`chat.py` 会数
+  `tasklist` 里的 Praat 进程，多于一个就提醒用户关掉多余的窗口。
+- **Praat 脚本保留字**：`from`、`to`、`end` 不能当变量名，会报
+  `Symbol misplaced`；时间区间统一用 `tmin` / `tmax` / `t1` / `t2`。
+  另外这个版本**不支持 `try` / `catch`**（`Unknown variable: try`），所以命令是否
+  可用要在 Python 侧按对象类判断（见 `tools.TIME_DOMAIN_CLASSES`、`SOUND_CLASSES`）。
+- **`--undefined--`**：时间越界或静音段查询不会报错，而是返回 `undefined`。
+  模板要 `if value = undefined` 分支给中文说明，并先把时间夹进对象时长
+  （结果里带「已按对象时长截断」），否则用户会看到 `--undefined--` 这种输出。
+- **模型会拿 Python 当 Praat 脚本**。`tools.validate_script()` 先做
+  `PYTHON_SCRIPT_PATTERNS` 检查，命中就报「模型给出的是 Python 代码」，
+  不要放它进 Praat。想要减少这种情况就加工具（模型没工具可用时会自己编脚本）。
+- **对象名写法不一致**：Praat 里有的对象名自带类名前缀（`Sound 思い出す`），
+  有的没有。`ToolContext.resolve_object()` 用 `name_variants()` 做容错匹配，
+  唯一命中才接受，多个候选/完全找不到时给中文错误。
+- 回归用例：`ai/tests/test_chat_tools.py`、`ai/tests/test_chat_window.py`；
+  真机链路用 `python ai/tests/verify_chat_live.py`（临时开一个 Praat，
+  验证建对象、改名后对象列表会刷新、基频查询和截取片段）。

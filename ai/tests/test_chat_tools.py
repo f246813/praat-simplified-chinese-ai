@@ -11,6 +11,14 @@ CONTEXT = (
     "2\tFormant\tFormant tone\t0\n"
 )
 
+MIXED_CONTEXT = (
+    "id\tclass\tname\tselected\n"
+    "1\tSound\tSound 思い出す\t1\n"
+    "2\tSound\ttone\t0\n"
+    "3\tTextGrid\tTextGrid 思い出す\t0\n"
+    "4\tTable\tTable words\t0\n"
+)
+
 
 class ObjectContextTests(unittest.TestCase):
     def test_context_is_parsed(self) -> None:
@@ -82,11 +90,25 @@ class ScriptRenderingTests(unittest.TestCase):
         self.assertIn('value = Get value at time: time, "cubic"', intensity)
 
     def test_every_script_ends_with_state_marker(self) -> None:
+        base = Path(self.directory.name)
+        context = tools.ToolContext(
+            tools.parse_object_context(
+                "id\tclass\tname\tselected\n"
+                "1\tSound\tSound tone\t1\n"
+                "2\tSound\ttone2\t0\n"
+            ),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+        extra: dict[str, dict[str, object]] = {
+            "rename_object": {"new_name": "测试"},
+            "extract_part": {"start": 0.1, "end": 0.4},
+            "save_sound": {"path": "D:/tmp/ai-chat.wav"},
+            "concatenate_sounds": {"object": 1, "object2": 2},
+        }
         for tool in tools.TOOLS:
-            arguments: dict[str, object] = {}
-            if tool.name == "rename_object":
-                arguments["new_name"] = "测试"
-            script = self.render(tool.name, **arguments)
+            arguments: dict[str, object] = dict(extra.get(tool.name, {}))
+            script = tools.render(tool.name, arguments, context)
             last = [line for line in script.splitlines() if line.strip()][-1]
             self.assertIn("chat_state.txt", last, tool.name)
             self.assertIn('"done"', last, tool.name)
@@ -143,6 +165,247 @@ class ScriptValidationTests(unittest.TestCase):
         directory.cleanup()
         self.assertIn('selectObject("Sound", "tone")', script)
         self.assertIn("chat_state.txt", script)
+
+
+class ObjectMatchingTests(unittest.TestCase):
+    """模型给的对象写法常常和 Praat 列表里的名字不完全一样。"""
+
+    def setUp(self) -> None:
+        self.context = tools.ToolContext(
+            tools.parse_object_context(MIXED_CONTEXT),
+            Path("r.tsv"),
+            Path("s.txt"),
+        )
+
+    def test_name_without_class_prefix_matches(self) -> None:
+        self.assertEqual(self.context.resolve_object("思い出す").id, 1)
+
+    def test_short_name_matches_full_name(self) -> None:
+        self.assertEqual(self.context.resolve_object("tone").id, 2)
+
+    def test_chinese_id_forms_are_accepted(self) -> None:
+        for text in ("3", "3 号", "#3", "id 3"):
+            self.assertEqual(self.context.resolve_object(text).id, 3, text)
+
+    def test_ambiguous_name_is_rejected_with_candidates(self) -> None:
+        with self.assertRaises(tools.ToolError) as caught:
+            self.context.resolve_object("Sound")
+        self.assertIn("多个对象", str(caught.exception))
+
+    def test_unknown_name_still_fails(self) -> None:
+        with self.assertRaises(tools.ToolError):
+            self.context.resolve_object("Sound nothing")
+
+
+class ToolGuardTests(unittest.TestCase):
+    """对象类型不匹配时要给出中文原因，而不是让 Praat 抛英文错误。"""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        base = Path(self.directory.name)
+        self.context = tools.ToolContext(
+            tools.parse_object_context(MIXED_CONTEXT),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_play_requires_sound(self) -> None:
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("play", {"object": 3}, self.context)
+        self.assertIn("声音", str(caught.exception))
+
+    def test_duration_rejects_objects_without_time(self) -> None:
+        with self.assertRaises(tools.ToolError):
+            tools.render("duration", {"object": 4}, self.context)
+
+    def test_object_info_skips_duration_for_tables(self) -> None:
+        script = tools.render("object_info", {"object": 4}, self.context)
+        self.assertNotIn("Get total duration", script)
+        self.assertIn("没有时长", script)
+
+    def test_object_info_reports_sound_properties(self) -> None:
+        script = tools.render("object_info", {"object": 2}, self.context)
+        self.assertIn("Get total duration", script)
+        self.assertIn("Get number of channels", script)
+        self.assertIn("Get sampling frequency", script)
+
+
+class QueryRobustnessTests(unittest.TestCase):
+    """越界时间和 --undefined-- 结果都要变成中文说明。"""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        base = Path(self.directory.name)
+        self.context = tools.ToolContext(
+            tools.parse_object_context(MIXED_CONTEXT),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_pitch_clamps_time_and_explains_undefined(self) -> None:
+        script = tools.render("pitch", {"time": 5.0}, self.context)
+        self.assertIn("if time > duration", script)
+        self.assertIn("已按对象时长截断", script)
+        self.assertIn("if value = undefined", script)
+        self.assertIn("没有周期性声源", script)
+
+    def test_formant_query_explains_undefined(self) -> None:
+        script = tools.render("formant_bandwidth", {"formant": 2}, self.context)
+        self.assertIn("if value = undefined", script)
+        self.assertIn("没有可用的共振峰数据", script)
+
+    def test_intensity_query_explains_undefined(self) -> None:
+        script = tools.render("intensity", {}, self.context)
+        self.assertIn("if value = undefined", script)
+        self.assertIn("没有强度数据", script)
+
+
+class NewToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.base = Path(self.directory.name)
+        self.context = tools.ToolContext(
+            tools.parse_object_context(MIXED_CONTEXT),
+            self.base / "chat_result.tsv",
+            self.base / "chat_state.txt",
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_formant_can_query_several_numbers_at_once(self) -> None:
+        script = tools.render(
+            "formant_frequency",
+            {"formant": "1,2", "time": 0.4},
+            self.context,
+        )
+        self.assertIn('Get value at time: 1, time, "hertz", "linear"', script)
+        self.assertIn('Get value at time: 2, time, "hertz", "linear"', script)
+        self.assertIn("第 2 共振峰频率", script)
+
+    def test_invalid_formant_number_message_is_chinese(self) -> None:
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("formant_frequency", {"formant": "0,2"}, self.context)
+        self.assertIn("共振峰编号", str(caught.exception))
+
+    def test_create_sound_builds_pure_tone_and_silence(self) -> None:
+        tone = tools.render(
+            "create_sound",
+            {"duration": 1.5, "frequency": 220, "amplitude": 0.4},
+            self.context,
+        )
+        self.assertIn("Create Sound as pure tone", tone)
+        self.assertIn("220.000000", tone)
+        silence = tools.render("create_sound", {"frequency": 0}, self.context)
+        self.assertIn("Create Sound from formula", silence)
+        self.assertIn("~ 0", silence)
+
+    def test_concatenate_needs_two_different_sounds(self) -> None:
+        script = tools.render(
+            "concatenate_sounds",
+            {"object": 1, "object2": 2},
+            self.context,
+        )
+        self.assertIn("selectObject: 1", script)
+        self.assertIn("plusObject: 2", script)
+        self.assertIn("Concatenate", script)
+        with self.assertRaises(tools.ToolError):
+            tools.render("concatenate_sounds", {"object": 1, "object2": 1}, self.context)
+        with self.assertRaises(tools.ToolError):
+            tools.render("concatenate_sounds", {"object": 1}, self.context)
+
+    def test_concatenate_rejects_non_sound(self) -> None:
+        with self.assertRaises(tools.ToolError):
+            tools.render(
+                "concatenate_sounds",
+                {"object": 1, "object2": 3},
+                self.context,
+            )
+
+    def test_extract_part_clamps_and_validates(self) -> None:
+        script = tools.render(
+            "extract_part",
+            {"object": 1, "start": 0.2, "end": 0.5},
+            self.context,
+        )
+        self.assertIn('Extract part: t1, t2, "rectangular", 1, "no"', script)
+        self.assertIn("if t2 > duration", script)
+        # Praat 的 from / to / end 都是保留字，模板里不能拿来当变量名。
+        for line in script.splitlines():
+            name = line.split("=")[0].strip()
+            self.assertNotIn(name, {"from", "to", "end"})
+        with self.assertRaises(tools.ToolError):
+            tools.render("extract_part", {"start": 0.5}, self.context)
+        with self.assertRaises(tools.ToolError):
+            tools.render("extract_part", {"start": 0.5, "end": 0.2}, self.context)
+
+    def test_save_sound_requires_absolute_wav_path(self) -> None:
+        script = tools.render(
+            "save_sound",
+            {"object": 1, "path": "D:\\out\\a"},
+            self.context,
+        )
+        self.assertIn('Save as WAV file: "D:/out/a.wav"', script)
+        with self.assertRaises(tools.ToolError):
+            tools.render("save_sound", {"object": 1}, self.context)
+        with self.assertRaises(tools.ToolError):
+            tools.render("save_sound", {"object": 1, "path": "a.wav"}, self.context)
+        with self.assertRaises(tools.ToolError):
+            tools.render("save_sound", {"object": 3, "path": "D:/out/a.wav"}, self.context)
+
+    def test_resample_requires_integer_rate(self) -> None:
+        script = tools.render("resample_sound", {"rate": 16000}, self.context)
+        self.assertIn("Resample: 16000, 50", script)
+        with self.assertRaises(tools.ToolError):
+            tools.render("resample_sound", {"rate": 16000.5}, self.context)
+
+    def test_duplicate_object_uses_copy(self) -> None:
+        script = tools.render("duplicate_object", {"object": 1}, self.context)
+        self.assertIn('Copy: "', script)
+
+    def test_pitch_statistics_uses_mean_min_max(self) -> None:
+        script = tools.render(
+            "pitch_statistics",
+            {"object": 1, "from": 0.1, "to": 0.6},
+            self.context,
+        )
+        self.assertIn('Get mean: tmin, tmax, "Hertz"', script)
+        self.assertIn('Get minimum: tmin, tmax, "Hertz", "Parabolic"', script)
+        self.assertIn('Get maximum: tmin, tmax, "Hertz", "Parabolic"', script)
+        self.assertIn("tmin = 0.100000", script)
+        self.assertIn("tmax = 0.600000", script)
+
+    def test_intensity_statistics_uses_energy_mean(self) -> None:
+        script = tools.render("intensity_statistics", {"object": 1}, self.context)
+        self.assertIn('Get mean: tmin, tmax, "energy"', script)
+
+
+class PythonScriptRejectionTests(unittest.TestCase):
+    """模型把 Python 当 Praat 脚本时会带来莫名其妙的报错，必须提前拦下。"""
+
+    def test_python_scripts_are_rejected(self) -> None:
+        samples = (
+            'import numpy as np\nsound = 1\n',
+            "from praat import *\n",
+            "def make_sound():\n    return 1\n",
+            'print("hello")\n',
+            'os.system("dir")\n',
+        )
+        for sample in samples:
+            with self.assertRaises(tools.ToolError, msg=sample):
+                tools.validate_script(sample)
+
+    def test_praat_scripts_are_still_accepted(self) -> None:
+        script = tools.validate_script(
+            'selectObject: 1\nRename: "测试"\nappendInfoLine: "ok"\n'
+        )
+        self.assertIn("Rename", script)
 
 
 if __name__ == "__main__":

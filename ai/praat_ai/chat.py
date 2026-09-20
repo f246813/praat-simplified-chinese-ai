@@ -25,15 +25,27 @@ from tkinter import ttk
 
 from . import tools
 from .config import load_config
+from .presets import PresetError, active_preset, list_presets
 from .qwen import QwenClient, QwenError
+from .server import running_model_info
 
 
 SEND_NOISE = (
     "An instance of Praat that is not me is already running.",
-    "Cannot write message file",
 )
 
 EXECUTION_TIMEOUT_SEC = 25.0
+
+
+def context_ping_script() -> str:
+    """一条不需要任何对象的脚本：Praat 每执行完一条命令都会刷新对象列表文件，
+    所以用它既能确认 Praat 还在响应，又能把 ``chat_context.tsv`` 更新到最新。
+    """
+
+    return (
+        'appendInfoLine: "praat-ai context ping"\n'
+        f'appendFileLine: {tools.quote(state_path())}, "done"\n'
+    )
 
 
 def runtime_dir() -> Path:
@@ -56,6 +68,10 @@ def state_path() -> Path:
 
 def script_path() -> Path:
     return runtime_dir() / "chat_command.praat"
+
+
+def send_log_path() -> Path:
+    return runtime_dir() / "chat_send.log"
 
 
 def praat_executable() -> str:
@@ -113,7 +129,18 @@ def _clean_send_output(text: str) -> str:
 
 
 def _send_script(executable: str, script: str) -> tuple[bool, str]:
-    """Hand the script to the running Praat and wait for its result files."""
+    """Hand the script to the running Praat and wait for its result files.
+
+    这里故意不用 ``subprocess.run``：``Praat.exe --send`` 在 Praat 被对话框或
+    编辑器挡住时会一直阻塞在发送上（实测超过 60 秒），此时脚本很可能已经在
+    Praat 里排队，直接判失败会误导用户。所以改成：
+
+    1. 后台启动发送进程，输出重定向到 ``runtime/chat_send.log``（不用管道，
+       免得发送进程被写满的管道卡住）；
+    2. 轮询状态文件，出现就成功，并把已经没用的发送进程收掉；
+    3. 超时且发送进程还活着，就说明 Praat 没在处理消息，杀掉发送进程并给出
+       中文原因；发送进程已经退出则把 Praat 自己的输出交给用户。
+    """
 
     target = script_path()
     target.write_text(script, encoding="utf-8")
@@ -126,25 +153,65 @@ def _send_script(executable: str, script: str) -> tuple[bool, str]:
     creation_flags = 0
     if os.name == "nt":
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    log_path = send_log_path()
     try:
-        completed = subprocess.run(
-            [executable, "--FULL-TRUST", "--send", str(target)],
-            cwd=Path(__file__).resolve().parents[1],
-            capture_output=True,
-            timeout=60,
-            creationflags=creation_flags,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
+        log_path.unlink()
+    except FileNotFoundError:
+        pass
+    try:
+        with log_path.open("wb") as log_handle:
+            process = subprocess.Popen(
+                [executable, "--FULL-TRUST", "--send", str(target)],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=creation_flags,
+            )
+    except OSError as error:
         return False, f"调用 Praat 失败：{error}"
-
-    output = _clean_send_output(_decode_console(completed.stdout + completed.stderr))
 
     deadline = time.monotonic() + EXECUTION_TIMEOUT_SEC
     while time.monotonic() < deadline:
         if state_path().is_file():
-            return True, output
+            _close_send_process(process)
+            return True, ""
+        if process.poll() is not None:
+            break
         time.sleep(0.15)
+
+    output = _clean_send_output(_read_send_log())
+    if state_path().is_file():
+        _close_send_process(process)
+        return True, output
+    if process.poll() is None:
+        _close_send_process(process)
+        reason = (
+            f"Praat 在 {EXECUTION_TIMEOUT_SEC:.0f} 秒内没有执行这个脚本。"
+            "常见原因：Praat 里有没关掉的对话框或错误提示、编辑器正在播放/被"
+            "模态窗口挡住。关掉那些窗口后再发一次即可。"
+        )
+        return False, f"{output}\n{reason}".strip()
     return False, output
+
+
+def _read_send_log() -> str:
+    try:
+        data = send_log_path().read_bytes()
+    except OSError:
+        return ""
+    return _decode_console(data)
+
+
+def _close_send_process(process: subprocess.Popen[bytes]) -> None:
+    """收掉发送进程：脚本已经交给 Praat 之后它就没事可做了。"""
+
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
 
 
 def _read_results() -> list[str]:
@@ -156,6 +223,99 @@ def _read_results() -> list[str]:
     except OSError:
         return []
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def praat_process_ids(executable: str = "Praat.exe") -> list[int] | None:
+    """正在运行的 Praat 进程 id；``None`` 表示查不到（不要据此拦截用户）。
+
+    对话窗口把脚本交给「已经开着的 Praat」；如果 Praat 其实没开，
+    ``Praat.exe --send`` 会另起一个空实例，脚本必然找不到对象，用户还要白等
+    一次超时。而 ``--send`` 只能把脚本交给最新的那个 Praat，所以同时开多个
+    实例时也要提醒用户，免得脚本跑进了错误的窗口。
+    """
+
+    if os.name != "nt" or not executable:
+        return None
+    name = Path(executable).name
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=15,
+            creationflags=creation_flags,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    output = (completed.stdout or "").strip()
+    if not output or output.upper().startswith("INFO"):
+        return []
+    ids: list[int] = []
+    for line in output.splitlines():
+        parts = [item.strip().strip('"') for item in line.split('","')]
+        if len(parts) >= 2 and parts[1].isdigit():
+            ids.append(int(parts[1]))
+    return ids
+
+
+def praat_process_running(executable: str) -> bool:
+    process_ids = praat_process_ids(executable)
+    if process_ids is None:
+        return True   # 查不到进程列表时不拦截，交给 --send 自己判断
+    return bool(process_ids)
+
+
+def praat_instance_warning(executable: str) -> str:
+    """同时开着多个 Praat 时返回一句提醒，否则返回空字符串。"""
+
+    process_ids = praat_process_ids(executable)
+    if not process_ids or len(process_ids) < 2:
+        return ""
+    return (
+        f"检测到 {len(process_ids)} 个 Praat 在运行：脚本只会送给最新打开的那个"
+        "窗口。请关掉多余的 Praat，否则可能操作到别的对象列表。"
+    )
+
+
+def model_status_text(config) -> str:
+    """状态栏文案：模型来自服务实际加载的模型，而不是配置里的文件名。"""
+
+    info = running_model_info(config.qwen.base_url)
+    live = Path(str(info.get("id", ""))).name if info else ""
+    configured = (
+        Path(config.server.model_path).name if config.server.model_path else ""
+    )
+    capabilities = [str(item).casefold() for item in (info.get("capabilities") or [])]
+    vision = any("multimodal" in item for item in capabilities)
+    preset = active_preset(config)
+    parts = [f"模型：{live or configured or '未配置'}"]
+    if live and vision:
+        parts.append("视觉已开")
+    if live and configured and live.casefold() != configured.casefold():
+        parts.append(f"配置里是 {configured}")
+    if not live:
+        parts.append("服务未响应")
+    if preset is not None:
+        parts.append(f"预设：{preset.display_name}")
+    return "  |  ".join(parts)
+
+
+def refresh_object_context(executable: str) -> tuple[bool, str]:
+    """让正在运行的 Praat 重新写一次对象列表，返回 ``(是否成功, 说明)``。
+
+    ``chat_context.tsv`` 由 Praat 维护：Praat 重启、换会话或对象被改动之后，
+    对话窗口手里的列表可能是旧的。旧 id 会让脚本报「没有编号为 1」这种看不懂
+    的错误，所以每次执行前先送一条空脚本刷新，顺带确认 Praat 还在响应用户。
+    """
+
+    if not executable or not praat_process_running(executable):
+        return False, ""
+    ok, output = _send_script(executable, context_ping_script())
+    if ok:
+        return True, ""
+    return False, output or "Praat 没有响应，无法刷新对象列表。"
 
 
 class ChatWindow:
@@ -180,20 +340,51 @@ class ChatWindow:
 
         frame = ttk.Frame(self.root, padding=16, style="Chat.TFrame")
         frame.pack(fill="both", expand=True)
-        frame.rowconfigure(2, weight=1)
+        frame.rowconfigure(3, weight=1)
         frame.columnconfigure(0, weight=1)
 
-        self.status = tk.StringVar(
-            value=(
-                f"Praat AI  |  {self.config.qwen.model}  |  "
-                f"{'前端已连接' if self.client.available() else '前端未连接'}"
-            )
-        )
+        self.presets: list[dict] = list_presets(self.config)
+        self.preset_ids: dict[str, str] = {}
+        self.status = tk.StringVar(value="Praat AI  |  " + model_status_text(self.config))
         ttk.Label(
             frame,
             textvariable=self.status,
             font=("Microsoft YaHei UI", 10, "bold"),
         ).grid(row=0, column=0, sticky="ew", pady=(0, 4))
+
+        preset_row = ttk.Frame(frame, style="Chat.TFrame")
+        preset_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        preset_row.columnconfigure(1, weight=1)
+        ttk.Label(
+            preset_row,
+            text="模型预设",
+            style="Hint.TLabel",
+            font=("Microsoft YaHei UI", 9),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.preset_choice = tk.StringVar(value="")
+        self.preset_box = ttk.Combobox(
+            preset_row,
+            textvariable=self.preset_choice,
+            values=[],
+            state="readonly",
+            width=56,
+        )
+        self.preset_box.grid(row=0, column=1, sticky="ew")
+        self.preset_button = ttk.Button(
+            preset_row,
+            text="应用预设",
+            width=10,
+            command=self.apply_selected_preset,
+        )
+        self.preset_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self.preset_hint = tk.StringVar(value="")
+        ttk.Label(
+            preset_row,
+            textvariable=self.preset_hint,
+            style="Hint.TLabel",
+            font=("Microsoft YaHei UI", 8),
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.refresh_preset_widgets()
 
         self.context_label = tk.StringVar(value=selected_object_label())
         ttk.Label(
@@ -201,10 +392,10 @@ class ChatWindow:
             textvariable=self.context_label,
             style="Hint.TLabel",
             font=("Microsoft YaHei UI", 9),
-        ).grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        ).grid(row=2, column=0, sticky="ew", pady=(0, 10))
 
         transcript_frame = ttk.Frame(frame)
-        transcript_frame.grid(row=2, column=0, sticky="nsew")
+        transcript_frame.grid(row=3, column=0, sticky="nsew")
         transcript_frame.rowconfigure(0, weight=1)
         transcript_frame.columnconfigure(0, weight=1)
         self.transcript = tk.Text(
@@ -268,7 +459,7 @@ class ChatWindow:
         )
 
         composer = ttk.Frame(frame, padding=10, style="Composer.TFrame")
-        composer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        composer.grid(row=4, column=0, sticky="ew", pady=(12, 0))
         composer.columnconfigure(0, weight=1)
         self.entry = tk.Text(
             composer,
@@ -300,11 +491,94 @@ class ChatWindow:
         self.append("assistant", "请直接用自然语言描述要执行的 Praat 操作。")
         self.append_hint(
             "例如：提取当前语音的第二共振峰带宽；把选中的声音改名为 测试；"
-            "打开编辑器；查询 0.5 秒处的基频。"
+            "查询 0.5 秒处的基频；统计整段基频；截取 0.2–0.5 秒；"
+            "把两个声音拼起来；另存为 D:/out/a.wav。"
         )
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self.flush_messages)
         self.root.after(400, self.entry.focus_set)
+
+    # ------------------------------------------------------------ 模型预设
+
+    def preset_label_for(self, preset: dict) -> str:
+        parts = [preset["label"] or preset["model"]]
+        if preset["model"]:
+            parts.append(preset["model"])
+        parts.append("视觉" if preset["vision"] else "纯文本")
+        if not preset["available"]:
+            parts.append("文件缺失")
+        if preset["active"]:
+            parts.append("当前")
+        return " · ".join(item for item in parts if item)
+
+    def preset_hint_text(self) -> str:
+        if not self.presets:
+            return (
+                "还没有配置模型预设：在 ai/ai_config.json 的 server.presets "
+                "里添加模型条目后重启前端。"
+            )
+        current = next((preset for preset in self.presets if preset["active"]), None)
+        if current is None:
+            return "当前模型不在预设列表里；选中一个预设并点「应用预设」即可切换。"
+        bits = [f"{current['label']}：{current['model']}"]
+        if current["mmproj"]:
+            bits.append(f"投影文件 {current['mmproj']}")
+        if current["context_tokens"]:
+            bits.append(f"上下文 {current['context_tokens']} token")
+        return "；".join(item for item in bits if item)
+
+    def refresh_preset_widgets(self) -> None:
+        self.preset_ids = {
+            self.preset_label_for(preset): preset["id"] for preset in self.presets
+        }
+        labels = list(self.preset_ids)
+        self.preset_box.configure(
+            values=labels,
+            state="readonly" if labels else "disabled",
+        )
+        self.preset_button.configure(state="normal" if labels else "disabled")
+        current = next((preset for preset in self.presets if preset["active"]), None)
+        if current is not None:
+            self.preset_choice.set(self.preset_label_for(current))
+        elif labels:
+            self.preset_choice.set(labels[0])
+        else:
+            self.preset_choice.set("")
+        self.preset_hint.set(self.preset_hint_text())
+
+    def apply_selected_preset(self, _event: object = None) -> None:
+        if self.busy:
+            return
+        preset_id = self.preset_ids.get(self.preset_choice.get(), "")
+        if not preset_id:
+            return
+        self.busy = True
+        self.send_button.configure(state="disabled")
+        self.preset_button.configure(state="disabled")
+        self.status.set("Praat AI  |  正在切换模型预设…")
+        threading.Thread(
+            target=self.apply_preset_worker,
+            args=(preset_id,),
+            daemon=True,
+        ).start()
+
+    def apply_preset_worker(self, preset_id: str) -> None:
+        try:
+            from . import control
+
+            result = control.apply_preset(preset_id)
+        except (PresetError, QwenError, OSError, ValueError) as error:
+            self.messages.put(("assistant", f"切换模型预设失败：{error}"))
+        else:
+            label = str(result.get("frontend_preset_label", "")) or preset_id
+            model = str(result.get("frontend_model", ""))
+            vision = "视觉已开" if result.get("frontend_vision") else "纯文本"
+            self.messages.put(
+                ("assistant", f"已切换模型预设：{label}（{model}，{vision}）")
+            )
+        finally:
+            self.messages.put(("reload", ""))
+            self.messages.put(("done", ""))
 
     def append(self, role: str, text: str) -> None:
         label = "你" if role == "user" else "Praat AI"
@@ -341,6 +615,7 @@ class ChatWindow:
         self.entry.delete("1.0", "end")
         self.busy = True
         self.send_button.configure(state="disabled")
+        self.preset_button.configure(state="disabled")
         self.status.set("Praat AI  |  正在处理请求…")
         self.append("user", text)
         threading.Thread(
@@ -394,6 +669,17 @@ class ChatWindow:
 
     def process_message(self, text: str) -> None:
         try:
+            executable = praat_executable()
+            praat_ready = bool(executable) and praat_process_running(executable)
+            if praat_ready:
+                warning = praat_instance_warning(executable)
+                if warning:
+                    self.messages.put(("hint", warning))
+                # 先刷新对象列表，免得拿着过期 id 去规划。
+                refreshed, note = refresh_object_context(executable)
+                if not refreshed and note:
+                    self.messages.put(("hint", note))
+
             reply, script = self.plan_script(text)
             if not script:
                 self.messages.put(("assistant", reply))
@@ -401,10 +687,14 @@ class ChatWindow:
                 self.history.append({"role": "assistant", "content": reply})
                 return
 
-            executable = praat_executable()
             if not executable:
                 raise OSError(
                     "未配置 Praat 可执行文件路径，请从 Praat 菜单重新启动前端。"
+                )
+            if not praat_ready:
+                raise OSError(
+                    "没有检测到正在运行的 Praat。请先打开 Praat，"
+                    "再从菜单「前端 → 启动前端」启动对话窗口。"
                 )
 
             success, output = _send_script(executable, script)
@@ -423,17 +713,23 @@ class ChatWindow:
             else:
                 message = (
                     f"{reply}\n执行未完成：Praat 没有返回结果，"
-                    "请查看 Praat 主窗口弹出的错误提示。"
+                    "请查看 Praat 主窗口弹出的错误提示（脚本执行失败时 Praat "
+                    "会自己弹出提示，对话窗口拿不到那些文字）。"
                 )
                 if output:
                     message += f"\n{output}"
+                else:
+                    message += (
+                        "\n（Praat 没有输出任何信息：常见原因是脚本里的命令和当前"
+                        "选中的对象不匹配，或者 Praat 正被对话框挡住。）"
+                    )
                 message += f"\n\n本次脚本：\n{tools.describe_script(script)}"
                 self.messages.put(("assistant", message))
                 self.history.append({"role": "user", "content": text})
                 self.history.append(
                     {"role": "assistant", "content": "（上次脚本执行未完成）"}
                 )
-        except (QwenError, tools.ToolError, OSError) as error:
+        except (QwenError, tools.ToolError, PresetError, OSError) as error:
             self.messages.put(("assistant", f"处理失败：{error}"))
         finally:
             self.messages.put(("done", ""))
@@ -445,9 +741,14 @@ class ChatWindow:
                 if role == "done":
                     self.busy = False
                     self.send_button.configure(state="normal")
-                    self.status.set(f"Praat AI  |  {self.config.qwen.model}  |  就绪")
+                    self.preset_button.configure(
+                        state="normal" if self.presets else "disabled"
+                    )
+                    self.status.set("Praat AI  |  " + model_status_text(self.config))
                     self.context_label.set(selected_object_label())
                     self.entry.focus_set()
+                elif role == "reload":
+                    self.reload_config()
                 elif role in {"result", "failure"}:
                     self.append_lines(role, text)
                 elif role == "hint":
@@ -465,6 +766,15 @@ class ChatWindow:
         except FileNotFoundError:
             pass
         self.root.destroy()
+
+    def reload_config(self) -> None:
+        """重新读取 ai_config.json（切换预设之后模型和 mmproj 都会变）。"""
+
+        self.config = load_config()
+        self.client = QwenClient(self.config.qwen)
+        self.presets = list_presets(self.config)
+        self.refresh_preset_widgets()
+        self.status.set("Praat AI  |  " + model_status_text(self.config))
 
     def run(self) -> int:
         self.root.mainloop()

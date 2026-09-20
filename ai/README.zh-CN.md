@@ -51,6 +51,44 @@ llama-server：只要端口上运行的不是配置里的模型，前端会先�
 状态里的「前端模型」来自服务实际加载的模型，配置值单独放在
 `frontend_model_configured`，两者不一致时 `frontend_model_mismatch` 为 true。
 
+### 模型预设
+
+在 `ai/ai_config.json` 的 `server.presets` 里声明常用模型，就可以在对话窗口顶部的
+「模型预设」下拉框里一键切换，不用每次去选文件路径。每个预设包含：
+
+```json
+"presets": [
+  {
+    "id": "qwen3.5-2b-vision",
+    "label": "Qwen3.5-2B（视觉，操作更准）",
+    "model_path": "D:\\llama.cpp-Qwen\\Qwen3.5-2B-UD-Q5_K_XL.gguf",
+    "mmproj_path": "D:/models/mmproj-2B-F16.gguf",
+    "vision": true,
+    "context_tokens": 8192,
+    "qwen": {"plan_max_tokens": 900}
+  }
+]
+```
+
+- `id` 是稳定标识，`label` 只用于显示；`active_preset` 记录当前选中的预设。
+- `context_tokens` 覆盖按显存自动选择的上下文长度；`qwen` 里的键覆盖 `qwen` 配置节
+  （例如给 2B 模型放宽 `plan_max_tokens`），点「应用预设」时一起写进配置。
+- 预设里的 `model_path` 和 `mmproj_path` 必须成对：切换时前端会把这一对写进
+  `mmproj_by_model`，避免把 0.8B 的投影文件带给 2B 模型。
+- 声明 `vision: true` 但没有 `mmproj_path` 的预设只能纯文本运行，界面会直接标成
+  「纯文本」。
+- 模型文件不存在时，预设在下拉框里显示「文件缺失」，切换会给出中文错误，不会
+  改动配置。
+
+对话框顶部还会显示服务实际加载的模型和投影文件；如果端口上跑的不是配置里的模型，
+点「应用预设」会先停掉旧服务再用新配置重启（服务不是本前端启动的则拒绝，避免误杀
+别人的进程）。命令行也可以切换：
+
+```powershell
+python ai/run_ai_control.py presets
+python ai/run_ai_control.py set-preset qwen3.5-0.8b-fast
+```
+
 `server.mmproj_path` 只对匹配的模型有效：如果它和所选模型不匹配（例如 0.8B 的
 mmproj 配 2B），前端会自动按纯文本模式启动并在 `ai/logs/qwen-server.log` 记录原因，
 此时状态里的 `frontend_vision` 为 false。需要视觉能力就要给对应模型配自己的 mmproj。
@@ -117,15 +155,50 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 5. 脚本把数值结果写入 `ai/runtime/chat_result.tsv`，最后写完成标记
    `ai/runtime/chat_state.txt`；窗口轮询到标记后把结果显示在对话里。
 
-已内置的工具：时长、第 n 共振峰带宽、第 n 共振峰频率、基频、强度、选中对象、
-打开编辑器、播放、重命名、删除。模板覆盖不到的请求会退回 `custom_script`，
-此时脚本必须通过安全检查（单引号自动改成双引号、禁止 `runSystem`、
-`deleteFile`、`exit` 等命令）。
+已内置的工具：
+
+| 类别 | 工具 |
+| --- | --- |
+| 查看 | `object_info`、`duration` |
+| 声学查询 | `formant_frequency`（可一次查 1,2…）、`formant_bandwidth`、`pitch`、`pitch_statistics`、`intensity`、`intensity_statistics` |
+| 编辑 | `select_object`、`rename_object`、`duplicate_object`、`remove_object`、`resample_sound` |
+| 生成与导出 | `create_sound`（纯音/静音）、`extract_part`、`concatenate_sounds`、`save_sound`（WAV） |
+| 交互 | `view_edit`、`play` |
+
+模板覆盖不到的请求会退回 `custom_script`，此时脚本必须通过安全检查：单引号自动改成
+双引号、禁止 `runSystem`、`deleteFile`、`exit` 等命令，并且**必须是 Praat 脚本**——
+模型如果给出 Python 代码（`import`、`def`、`print(`、`numpy` 之类），前端会直接
+拒绝并提示改用内置工具，而不是把 Python 送进 Praat 换回一句看不懂的英文报错。
 
 注意事项：
 
 - 查询类工具默认取声音的中间时刻，可以在请求里直接写秒数。
+- 时间超出对象时长会自动截断到对象末尾，结果里会标注「已按对象时长截断」；
+  静音段或清音段查基频时结果会写「该时刻没有周期性声源」，不会再出现
+  `--undefined--` 这种没意义的输出。
 - 共振峰查询会临时创建一个 `ai-chat-temp` 对象，脚本结束前自动删除并恢复原选中对象。
 - `An instance of Praat that is not me is already running.` 是 `--send` 的常规提示，
   不是错误，窗口会过滤掉。
+- 每次执行前窗口会先送一条空脚本刷新对象列表，所以 Praat 重启过、对象改过名字之后
+  仍然按最新列表规划，不会拿着旧 id 去操作。
+- 每次发送最多等 25 秒。如果 Praat 里有没关掉的错误对话框或模态窗口，脚本会卡在
+  发送上，窗口会明确提示「Praat 在 25 秒内没有执行这个脚本」并告诉你关掉那些窗口，
+  不会一直挂着。
+- 同时开着多个 Praat 时，`--send` 只会把脚本交给最新打开的窗口；窗口检测到多实例
+  会提醒你关掉多余的 Praat。
 - 修改 `ai/` 下的 Python 代码后，要重新从菜单启动前端，对话窗口才会加载新代码。
+
+## 手工回归
+
+改完 `ai/` 的模板或链路后，除了单元测试，还建议跑这两条真机回归：
+
+```powershell
+$env:PYTHONPATH = 'ai'
+python -m unittest discover -s ai/tests -v      # 单元测试
+python ai/tests/verify_chat_templates.py        # 每个工具模板在真 Praat 批处理里跑一遍
+python ai/tests/verify_chat_window_ui.py        # 对话窗口能不能正常建起来（会闪一下窗口）
+python ai/tests/verify_chat_live.py             # 对话窗口链路（会临时开一个 Praat）
+python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
+```
+
+后三条需要本机装好模型、并且在没有沙箱限制的终端里执行。

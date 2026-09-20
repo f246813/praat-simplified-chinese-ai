@@ -18,6 +18,38 @@ class QwenConfig:
     vision_when_requested: bool = True
     max_context_tokens: int = 8192
     keep_alive_sec: int = 300
+    # 生成参数：小模型和视觉模型对它们的敏感度不同，所以放进配置，
+    # 由 server.presets[].qwen 按预设覆盖。
+    plan_max_tokens: int = 700
+    plan_temperature: float = 0.1
+    top_p: float = 0.8
+    presence_penalty: float = 1.5
+
+
+@dataclass(slots=True)
+class ServerPreset:
+    """一个可以直接切换的本地模型预设。
+
+    ``id`` 是稳定标识（菜单和状态上报都用它）；``label`` 只用于显示。
+    ``context_tokens`` / ``n_gpu_layers`` / ``threads`` 为 0 或 ``None`` 时按显存
+    自动选择（见 :mod:`praat_ai.vram`），否则覆盖自动值。
+    ``qwen`` 里的键会覆盖 ``qwen`` 配置节，用来给不同模型配生成参数
+    （例如小模型关闭 thinking、加大 ``max_tokens``）。
+    """
+
+    id: str = ""
+    label: str = ""
+    model_path: str = ""
+    mmproj_path: str = ""
+    vision: bool = True
+    context_tokens: int = 0
+    n_gpu_layers: int | None = None
+    threads: int | None = None
+    qwen: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def display_name(self) -> str:
+        return self.label or Path(self.model_path).name or self.id
 
 
 @dataclass(slots=True)
@@ -26,6 +58,8 @@ class ServerConfig:
     model_path: str = ""
     mmproj_path: str = ""
     mmproj_by_model: dict[str, str] = field(default_factory=dict)
+    presets: list[ServerPreset] = field(default_factory=list)
+    active_preset: str = ""
     host: str = "127.0.0.1"
     port: int = 8000
     n_gpu_layers: int = -1
@@ -96,13 +130,62 @@ def _merge_dataclass(instance: Any, values: dict[str, Any]) -> None:
             setattr(instance, key, value)
 
 
+def preset_from_raw(value: dict[str, Any], index: int = 0) -> ServerPreset:
+    """Build a :class:`ServerPreset` from one JSON entry (tolerant to typos)."""
+
+    model_path = str(value.get("model_path", "") or "")
+    preset = ServerPreset(
+        id=str(value.get("id", "") or "").strip(),
+        label=str(value.get("label", "") or value.get("name", "") or "").strip(),
+        model_path=model_path,
+        mmproj_path=str(value.get("mmproj_path", "") or ""),
+    )
+    if not preset.id:
+        preset.id = Path(model_path).name or f"preset-{index + 1}"
+    if "vision" in value:
+        preset.vision = bool(value.get("vision"))
+    for key in ("context_tokens", "n_gpu_layers", "threads"):
+        if value.get(key) not in (None, ""):
+            try:
+                setattr(preset, key, int(value[key]))
+            except (TypeError, ValueError):
+                pass
+    qwen = value.get("qwen")
+    if isinstance(qwen, dict):
+        preset.qwen = dict(qwen)
+    return preset
+
+
+def presets_from_raw(value: Any) -> list[ServerPreset]:
+    if isinstance(value, dict):
+        # 兼容 {id: {...}} 写法：把键当成 id。
+        items = []
+        for key, entry in value.items():
+            if isinstance(entry, dict):
+                merged = dict(entry)
+                merged.setdefault("id", key)
+                items.append(merged)
+        return [preset_from_raw(entry, index) for index, entry in enumerate(items)]
+    if isinstance(value, list):
+        return [
+            preset_from_raw(entry, index)
+            for index, entry in enumerate(value)
+            if isinstance(entry, dict)
+        ]
+    return []
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     config = AppConfig()
     candidate = Path(path) if path else default_config_path()
     if candidate.is_file():
         raw = json.loads(candidate.read_text(encoding="utf-8"))
         _merge_dataclass(config.qwen, raw.get("qwen", {}))
-        _merge_dataclass(config.server, raw.get("server", {}))
+        server_values = dict(raw.get("server", {}))
+        presets_value = server_values.pop("presets", None)
+        _merge_dataclass(config.server, server_values)
+        if presets_value is not None:
+            config.server.presets = presets_from_raw(presets_value)
         _merge_dataclass(config.analysis, raw.get("analysis", {}))
         alignment_values = raw.get("alignment", {})
         _merge_dataclass(
