@@ -192,8 +192,15 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 模型如果给出 Python 代码（`import`、`def`、`print(`、`numpy` 之类），前端会直接
 拒绝并提示改用内置工具，而不是把 Python 送进 Praat 换回一句看不懂的英文报错。
 自定义脚本里如果出现 `appendInfoLine` / `writeInfoLine`，前端会把它们改写成
-`appendFileLine` 写进结果文件（内容照样显示在对话里），`print*` / `echo` /
-`clearinfo` 之类的纯输出命令会被省略——它们都会弹出「Praat Info」窗口。
+`appendFileLine` 写进结果文件（内容照样显示在对话里）；`appendInfo` / `writeInfo`
+同样处理，`printline` / `print` / `echo` 写的是字面文字，会整段抄进结果文件；
+只有 `printtab` / `clearinfo` 没有内容可保留，才会改成注释——这些命令原本都会弹出
+「Praat Info」窗口。
+
+模型选工具走的是 **llama-server 的原生 function calling**（工具自带参数 schema，
+类型/枚举/必填项由服务端约束）。如果换成不支持工具调用的服务端，设
+`PRAAT_AI_PLANNER=json` 可以退回老的提示词接口。读入磁盘上的文件请用 `read_file`
+（`Read from file:`），它和「另存为」`save_sound` 是两个方向，不要混。
 
 注意事项：
 
@@ -202,8 +209,11 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
   静音段或清音段查基频时结果会写「该时刻没有周期性声源」，不会再出现
   `--undefined--` 这种没意义的输出。
 - 共振峰查询会临时创建一个 `ai-chat-temp` 对象，脚本结束前自动删除并恢复原选中对象。
-- 每次执行前窗口会先送一条空脚本刷新对象列表，所以 Praat 重启过、对象改过名字之后
-  仍然按最新列表规划，不会拿着旧 id 去操作。
+- 每条指令之后 Praat 都会把最新对象列表交给对话窗口（`cb_userMessage()` 里的
+  `PraatAiControl_refreshChatContext(true)`），执行前再送一条空脚本确认 Praat
+  还在响应，所以 Praat 重启过、对象改过名字之后仍然按最新列表规划，不会拿着旧 id
+  去操作。每条指令有独立编号（`runtime/commands/chat_command_<编号>.praat`），
+  配上消息文件「自消费」，超时的旧指令不会被执行两遍、也不会顶掉新指令。
 - 每次发送最多等 25 秒。如果 Praat 里有没关掉的错误对话框或模态窗口，脚本会卡在
   队列里，窗口会明确提示「Praat 在 25 秒内没有执行这个脚本」并告诉你关掉那些窗口，
   不会一直挂着（超时后前端会把排队中的消息换成空脚本，免得它稍后执行下一条指令）。
@@ -212,7 +222,7 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 - 脚本执行失败时 Praat 还是会自己弹出错误对话框（那些文字前端读不到），关掉它再
   发一次即可。
 - 排障用的退路：设环境变量 `PRAAT_AI_SEND_MODE=argv` 可以退回老的
-  `Praat.exe --send`（会激活 Praat 的一个窗口，平时不要开）。
+  `Praat.exe --send`（会激活 Praat 的一个窗口，而且没有「自消费」保护，平时不要开）。
 - 修改 `ai/` 下的 Python 代码后，要重新从菜单启动前端，对话窗口才会加载新代码。
 
 ## 手工回归

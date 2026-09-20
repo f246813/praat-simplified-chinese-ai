@@ -355,6 +355,8 @@ AI 纠音实验代码位于 `ai/`：
 - `ai/README.zh-CN.md`：使用说明。
 - `ai/praat_ai/`：Praat 桥接、Qwen 客户端、声学分析、DTW、报告和显存档位。
 - `ai/run_ai_tutor.py`：在 Praat Python 编辑器中运行的入口。
+- `ai/docs/adr/`：对话前端的架构决策记录（投递方式、结果契约、规划接口）。
+  §8.4/§8.5 记「哪里容易踩坑」，ADR 记「为什么这么做、还考虑过什么」。
 - `docs/ai-frontend/DESIGN.zh-CN.md`：总体架构和分阶段方案。
 
 重要边界：
@@ -455,14 +457,56 @@ AI 纠音实验代码位于 `ai/`：
   `PRAAT_AI_SEND_MODE=argv` 时用来排障，那条路仍然用「后台 Popen + 输出重定向
   到 `runtime/chat_send.log` + 轮询 `chat_state.txt`」，不要改回
   `subprocess.run(timeout=60)`（它在 Praat 弹出对话框时会一直阻塞，实测 > 60 秒）。
-- **每次执行前先刷新对象列表。** `chat.refresh_object_context()` 送一条
-  只写状态标记的空脚本：Praat 每执行完一条脚本命令都会走
-  `praat_updateSelection()`，从而重写 `runtime/chat_context.tsv`。这样 Praat
-  重启过、对象改名过之后不会拿着旧 id 去规划（旧 id 会让 Praat 报
-  「没有编号为 1」）。注意批处理（`--run`）下 `PraatAiControl_refreshChatContext()`
-  直接返回，所以**批处理验证不了上下文回传**，只能验模板语法。
-  这条空脚本只能写文件：`appendInfoLine` 之类的命令会走 `gui_information()`，
-  把「Praat Info」窗口弹出来（§8.5 的 bug 就是这么来的）。
+  决策与备选方案：`ai/docs/adr/ADR-001-chat-script-delivery.md`。
+- **一条指令一个脚本文件 + 自己的编号。** 脚本写在
+  `runtime/commands/chat_command_<编号>.praat`，开头先把自己的编号写进
+  `runtime/chat_started.txt`。`Message.txt` 是全局唯一的，旧消息醒来时如果读到的
+  还是那个共用文件名，执行的就会是**刚写进去的新脚本**；文件名分开之后，旧消息
+  最多把它自己那条再跑一遍，而等待完成时对一下编号就能认出「上一条超时指令刚刚
+  才跑完」，把它的完成标记和结果一起丢掉（`chat._wait_for_result`）——不要为了
+  「省事」把编号和分文件去掉。旧脚本按「超过 40 个**且**超过一小时」删
+  （`chat.prune_command_scripts`），删早了会让残留消息找不到文件、Praat 弹错误框。
+  老的固定路径 `runtime/chat_command.praat` 只用于兼容和排障。
+- **消息文件自消费。** 投递的消息第一句就把 `Message.txt` 覆写成空操作
+  （`sendpraat.consume_statement()`）：`cb_userMessage()` 每收到一条 `WM_APP` 都
+  重新读那个文件，而 `praat_executeScript_noGUI()` 执行完不删它，所以排队中的
+  每条消息都会把**当前的**消息内容再跑一遍（「删除」执行两次就是这么来的）。
+  `PRAAT_AI_SEND_MODE=argv` 那条排障路径没有这层保护（消息文件由 Praat 自己写），
+  别拿它跑有副作用的动作。
+- **对象列表由 Praat 主动交给前端。** `runtime/chat_context.tsv` 由
+  `sys/PraatAiControl.cpp` 写：`cb_userMessage()` 里每条 app 消息执行完都会调
+  `PraatAiControl_refreshChatContext(true)` 强制重写一次（2026-09-20 补的），
+  用户在对象列表里改选中也会重写。**别以为「每条命令都会刷新」**：实测只写文件的
+  空脚本、`clearinfo`、`select all`（列表为空时）都不触发重写，以前就是因为这个
+  拿着**上一个 Praat 实例**的旧列表去规划（挑到不存在的 9 号对象 → Praat 弹英文
+  错误框 → 后面的消息全被挡住）。`chat.refresh_object_context()` 仍然每次请求前
+  送一条只写状态标记的空脚本：它的作用是确认 Praat 还在响应，并把列表刷到最新。
+  批处理（`--run`）下这个钩子直接返回，所以**批处理验证不了上下文回传**，只能验
+  模板语法。这条空脚本只能写文件：`appendInfoLine` 之类的命令会走
+  `gui_information()`，把「Praat Info」窗口弹出来（§8.5 的 bug 就是这么来的）。
+- **规划走原生 function calling。** 工具自带 JSON Schema
+  （`tools.TOOL_PARAMETERS`），`QwenClient.plan_praat_command()` 把
+  `tools.tool_schemas()` 交给 llama-server，读回来的是 `tool_calls`；
+  `PRAAT_AI_PLANNER=json` 可以退回老的「提示词 + `json_object`」接口（换到不支持
+  工具调用的服务端时用它）。一次响应里可能带**多个** `tool_calls`（实测
+  「0.25 秒和 0.75 秒的基频」会给两个 `pitch`），按顺序拼成同一条脚本，上限 3 个
+  （`tools.MAX_ACTIONS_PER_REQUEST`）。**加工具时必须同时加 schema**：
+  `ai/tests/test_planner_tools.py` 会拿 `Tool.signature` 对拍。决策见
+  `ai/docs/adr/ADR-003-planning-interface.md`。
+- **文件读入是独立工具**：`read_file`（`Read from file:`）和 `save_sound`
+  （`Save as WAV file:`）方向相反，必须分开——换成 tool calling 时丢了少样本示例，
+  模型立刻把「读取 D:/in/a.wav」做成了「另存为」。文件不存在时在脚本里用
+  `fileReadable()` 判断并回一句中文，不要指望 Praat 的英文报错。
+- **结果输出不许静默丢**（`tools.neutralize_info_commands`，见
+  `ai/docs/adr/ADR-002-result-output-contract.md`）：`appendInfoLine` /
+  `writeInfoLine` / `appendInfo` / `writeInfo` 改写成 `appendFileLine`；
+  `printline` / `print` / `echo` 在 Praat 里写的是**字面文字**，整段抄成一个字符串
+  参数；只有 `printtab` / `clearinfo` 没有内容可保留，改成注释。
+- **Praat 可执行文件由 `praat_ai/praat_app.py` 找**：环境变量
+  `PRAAT_AI_PRAAT_EXECUTABLE` → 仓库根目录 → `PATH` → 常见安装位置；找到和没找到
+  都缓存，没找到 30 秒后重试一次。**每条请求只查一次** `tasklist`
+  （`chat.praat_process_ids()` 的结果同时用来判断「在不在跑」和「开了几个」），
+  不要再各自调一遍 `praat_process_running()` / `praat_instance_warning()`。
 - **多实例**：投递只能送给最新打开的那个 Praat（`sendpraat.choose_window()`
   取窗口号最大的进程，和 `--send` 一致）。`chat.py` 会数 `tasklist` 里的
   Praat 进程，多于一个就提醒用户关掉多余的窗口。
@@ -515,6 +559,11 @@ AI 纠音实验代码位于 `ai/`：
   `Sound_to_Pitch.cpp` 直接断言崩溃，只能 ≥ 1；minPitch 250（4 ms 窗口）在 220 Hz 上
   会判成"全是噪声"，窗口就按 1/minPitch 走。范围整段都在浊音里时必须报"起点已是浊音"
   而不是给一个 1 ms 的假数，VOT < 5 ms 时也要加一句提醒。
+  **可选字段的占位 0**：走原生 tool calling 之后模型习惯把可选字段"填满"，
+  「提取这段语音的 vot」会给 `burst: 0, voicing: 0`。两条都是 0 的 VOT 本来就没有
+  意义，`_build_vot()` 把它当成"没给"、继续走自动估计；只给一条仍然按错误处理
+  （那才是真的漏了）。同理，schema 里纯数字的字段只用 `"type": "number"`——
+  允许字符串时模型会把说明文字（例如「默认按 Praat 自动」）当成值填进来。
 - **圈大了不能静默取第一个**：范围内第一段浊音之后若还有 ≥20 毫秒无声、再出现
   连续两帧以上的浊音，就在结果末尾补一句"范围偏大：后面还有第 2 段浊音从 x 秒开始，
   本次只报了第一个候选"。它只是提示范围该收紧，不改报出来的那个 VOT，也不加提示词
@@ -581,19 +630,26 @@ AI 纠音实验代码位于 `ai/`：
 几条不能踩坏的约定：
 
 - **消息文件是全局唯一的**（Praat 只认 `Message.txt` 这个名字），所以同一时刻
-  只能有一条指令在飞。前端逐条同步执行刚好满足；**一旦超时必须调用
-  `sendpraat.cancel_pending()`**，把消息文件换成只有注释的空脚本，否则那条排队
-  中的 `WM_APP` 醒来时会执行**下一条指令**的脚本（可能把「删除」执行两遍）。
+  只能有一条指令在飞。前端逐条同步执行刚好满足；三层保护一起用：
+  ①投递的消息第一句**自消费**（把 `Message.txt` 换成空操作，`sendpraat.consume_statement()`），
+  ②每条指令一个**自己的脚本文件**（`runtime/commands/chat_command_<编号>.praat`），
+  ③超时兜底再调用一次 `sendpraat.cancel_pending()`。少掉①或②就会出现
+  「排队的旧消息执行了新脚本」「同一个脚本跑两遍」这类事故。
+- **每条 app 消息之后 Praat 都会重写对象列表**（`cb_userMessage()` 里
+  `PraatAiControl_refreshChatContext(true)`）。这条是 2026-09-20 补的：以前只有
+  「对象被创建/删除」或用户改选中才会重写，只写文件的空脚本不触发，前端就会拿着
+  上一个实例的旧列表去规划。改 `cb_userMessage()` 时别把这行删掉。
 - 投递目标优先选对象窗口（`Praat Objects`，类名 `PraatShell…`）：它一直在，
   不会因为用户关掉编辑器或 Info 窗口而消失。
 - 窗口类名按前缀匹配 `praat`（`PraatChildWindow1 Praat` / `PraatShell1 Praat`），
   别写死类名里的数字和程序名。
 - **自定义脚本里也不许写 Info 命令**：`tools.neutralize_info_commands()` 在
-  `render()` 里把 `appendInfoLine` / `writeInfoLine` 行改写成 `appendFileLine`
-  写结果文件（模型想回给用户的那句话不会丢），`appendInfo` / `writeInfo` /
-  `print*` / `echo` / `clearinfo` 改成注释（它们只是输出，去掉不影响计算）。
-  `ai/tests/verify_chat_templates.py` 的 `custom_script-info-rewrite` 用例在真
-  Praat 里守着这条。
+  `render()` 里把每一条会弹 Info 窗口的输出命令都翻译成 `appendFileLine` 写结果文件
+  （内容一句不丢）：带值列表的 `appendInfoLine` / `writeInfoLine` / `appendInfo` /
+  `writeInfo` 参数原样带过去；`printline` / `print` / `echo` 写的是字面文字，
+  整段抄成一个字符串参数；只有 `printtab` / `clearinfo` 没有内容可保留，改成注释。
+  `ai/tests/verify_chat_templates.py` 的 `custom_script-info-rewrite` 与
+  `custom_script-literal-output` 用例在真 Praat 里守着这条。
 - 想退回老路径：`PRAAT_AI_SEND_MODE=argv`（只排障用，会激活 Praat 的子窗口）。
 - 脚本执行失败时 Praat 仍然会自己弹错误对话框（`Melder_flushError`），对话窗口
   读不到那些文字，还是按「请查看 Praat 弹出的错误提示」提示用户。

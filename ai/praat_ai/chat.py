@@ -9,6 +9,11 @@
 4. 脚本把数值结果写进 ``runtime/chat_result.tsv``，执行完成写
    ``runtime/chat_state.txt``；对话窗口轮询到完成标记后把结果读回来显示。
 
+每条指令一个脚本文件（``runtime/commands/chat_command_<编号>.praat``）并且脚本开头
+先写下自己的编号（``runtime/chat_started.txt``）：Praat 的 ``Message.txt`` 是全局
+唯一的，超时指令还可能压在消息队列里，靠这两样才能保证「投递出去的那条」和
+「真的执行了的那条」对得上（见 guide.md §8.5）。
+
 注意：``An instance of Praat that is not me is already running.`` 是
 ``--send`` 转发脚本时的常规提示，不是错误，所以不显示给用户。
 """
@@ -21,10 +26,11 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+import uuid
 from pathlib import Path
 from tkinter import ttk
 
-from . import sendpraat, tools
+from . import praat_app, sendpraat, tools
 from .config import load_config
 from .presets import PresetError, active_preset, list_presets
 from .qwen import QwenClient, QwenError
@@ -36,6 +42,12 @@ SEND_NOISE = (
 )
 
 EXECUTION_TIMEOUT_SEC = 25.0
+
+#: ``runtime/commands/`` 里最多留几个脚本文件（旧的才删，见 :func:`prune_command_scripts`）。
+MAX_COMMAND_SCRIPTS = 40
+
+#: 超过这个岁数的旧脚本文件才允许删：``Message.txt`` 里可能还引用着最近几个。
+COMMAND_SCRIPT_TTL_SEC = 3600.0
 
 
 def context_ping_script() -> str:
@@ -73,8 +85,92 @@ def state_path() -> Path:
     return runtime_dir() / "chat_state.txt"
 
 
-def script_path() -> Path:
-    return runtime_dir() / "chat_command.praat"
+def script_path(request_id: str = "") -> Path:
+    """这次请求的脚本路径。
+
+    不带编号时返回老路径 ``runtime/chat_command.praat``（只用于兼容旧调用和排障）。
+    带上编号就每条指令一个文件：``Message.txt`` 全局唯一，队列里可能还压着上一条
+    超时消息；如果所有指令共用一个文件名，那条旧消息醒来时执行的会是**刚写进去的
+    新脚本**。文件名分开之后，旧消息最多把它自己那条再跑一遍（用户要求的操作，
+    而且 :func:`_wait_for_result` 能从编号看出来），不会把新指令执行成别的东西。
+    """
+
+    if not request_id:
+        return runtime_dir() / "chat_command.praat"
+    return command_dir() / f"chat_command_{request_id}.praat"
+
+
+def command_dir() -> Path:
+    path = runtime_dir() / "commands"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def new_request_id() -> str:
+    """一条指令的编号（用它区分脚本文件、完成标记是谁写的）。"""
+
+    return uuid.uuid4().hex[:12]
+
+
+def request_id_from_path(path: Path | str) -> str:
+    """从脚本文件名反推请求编号（诊断和单测用）；不是这种名字就返回空串。"""
+
+    name = Path(path).name
+    if name.startswith("chat_command_") and name.endswith(".praat"):
+        return name[len("chat_command_") : -len(".praat")]
+    return ""
+
+
+def started_marker_path() -> Path:
+    return runtime_dir() / "chat_started.txt"
+
+
+def script_preamble(request_id: str) -> str:
+    """脚本开头那句「我这条指令开始执行了」。
+
+    完成标记（``chat_state.txt``）里只有 ``done``，光看它分不清是谁写的。脚本一
+    开始就把编号写进 ``chat_started.txt``，等待完成时对一下编号，就能认出「上一条
+    超时指令刚刚才跑完」这种情况，而不是把它的数值当成本次结果（见
+    :func:`_wait_for_result`）。
+    """
+
+    if not request_id:
+        return ""
+    return (
+        f"# praat-ai 请求 {request_id}\n"
+        f'appendFileLine: {tools.quote(str(started_marker_path()))}, "started {request_id}"\n'
+    )
+
+
+def prune_command_scripts() -> int:
+    """删掉又老又旧的脚本文件，返回删了几个。
+
+    只删「数量超出 :data:`MAX_COMMAND_SCRIPTS` **而且** 超过
+    :data:`COMMAND_SCRIPT_TTL_SEC`」的那些：``Message.txt`` 里可能还引用着最近
+    几个，删早了会让残留消息找不到文件（Praat 会弹一句「文件不存在」的错误框）。
+    """
+
+    try:
+        entries = sorted(
+            command_dir().glob("chat_command_*.praat"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return 0
+    removed = 0
+    cutoff = time.time() - COMMAND_SCRIPT_TTL_SEC
+    for index, path in enumerate(entries):
+        if index < MAX_COMMAND_SCRIPTS:
+            continue
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def send_log_path() -> Path:
@@ -82,13 +178,13 @@ def send_log_path() -> Path:
 
 
 def praat_executable() -> str:
-    configured = os.getenv("PRAAT_AI_PRAAT_EXECUTABLE", "").strip()
-    if configured:
-        return configured
-    candidate = Path(__file__).resolve().parents[2] / "Praat.exe"
-    if candidate.is_file():
-        return str(candidate)
-    return ""
+    """正在跑的那个 Praat 的可执行文件；找不到返回空字符串。
+
+    具体去哪儿找见 :mod:`praat_ai.praat_app`（环境变量 → 仓库根目录 → ``PATH``
+    → 常见安装位置，带缓存和 30 秒重试）。
+    """
+
+    return praat_app.find_praat()
 
 
 def object_context() -> str:
@@ -138,7 +234,7 @@ def _clean_send_output(text: str) -> str:
 def _clear_result_files() -> None:
     """每次投递前清掉上一次的结果和完成标记（等待时只看新的那个）。"""
 
-    for path in (result_path(), state_path()):
+    for path in (result_path(), state_path(), started_marker_path()):
         try:
             path.unlink()
         except FileNotFoundError:
@@ -153,36 +249,128 @@ def _blocked_reason() -> str:
     )
 
 
-def _wait_for_result(process: subprocess.Popen[bytes] | None) -> tuple[bool, str]:
+def _read_started_marker() -> str:
+    """最后一次开始执行的请求编号（``chat_started.txt`` 里最后一个 ``started`` 行）。"""
+
+    try:
+        lines = started_marker_path().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        text = line.strip()
+        if text.startswith("started "):
+            return text.split(" ", 1)[1].strip()
+    return ""
+
+
+def _completion_state(request_id: str) -> tuple[bool, str]:
+    """``chat_state.txt`` 出现没有？是不是**本次**请求写的？"""
+
+    if not state_path().is_file():
+        return False, ""
+    if not request_id:
+        return True, ""
+    started = _read_started_marker()
+    if started == request_id:
+        return True, ""
+    return False, (
+        f"上一条超时指令（编号 {started or '未知'}）刚刚才执行完，"
+        "已丢掉它的完成标记和结果，继续等本次指令。"
+    )
+
+
+def _discard_stale_output() -> None:
+    for path in (state_path(), result_path()):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _wait_for_result(
+    process: subprocess.Popen[bytes] | None, *, request_id: str = ""
+) -> tuple[bool, str]:
     """轮询 ``chat_state.txt``；``process`` 只在那条 ``--send`` 兜底路径里非空。"""
 
     deadline = time.monotonic() + EXECUTION_TIMEOUT_SEC
+    notes = ""
     while time.monotonic() < deadline:
-        if state_path().is_file():
+        ready, stale_note = _completion_state(request_id)
+        if ready:
             if process is not None:
                 _close_send_process(process)
-            return True, ""
+            return True, notes.strip()
+        if stale_note:
+            # 完成标记是别人的：连同它的结果一起丢掉，继续等本次指令。
+            notes = stale_note
+            _discard_stale_output()
         if process is not None and process.poll() is not None:
             break
         time.sleep(0.15)
 
     output = _clean_send_output(_read_send_log()) if process is not None else ""
-    if state_path().is_file():
+    ready, _ = _completion_state(request_id)
+    if ready:
         if process is not None:
             _close_send_process(process)
-        return True, output
+        return True, notes.strip()
     if process is None:
         # 自己投递时没有「发送进程」可看：这条 WM_APP 还排在 Praat 的消息队列里，
         # 得先把消息文件换成空脚本，否则它醒来时执行的会是下一条指令的脚本。
+        # （正常情况下脚本开头那句「消息自消费」已经做过这件事，这里只是兜底。）
         sendpraat.cancel_pending()
-        return False, _blocked_reason()
+        return False, _join_notes(notes, _blocked_reason())
     if process.poll() is None:
         _close_send_process(process)
-        return False, f"{output}\n{_blocked_reason()}".strip()
-    return False, output
+        return False, _join_notes(output, notes, _blocked_reason())
+    return False, _join_notes(output, notes)
 
 
-def _send_script(executable: str, script: str) -> tuple[bool, str]:
+def _join_notes(*parts: str) -> str:
+    return "\n".join(part.strip() for part in parts if part and part.strip())
+
+
+def render_action(
+    action: Mapping[str, Any], context: tools.ToolContext
+) -> tuple[str, str]:
+    """渲染一个动作，返回 ``(脚本, 给用户的提示)``；提示为空表示没什么要说的。
+
+    工具自己报错（参数不合法、对象找不到）而模型又同时给了 ``script`` 时，用模型
+    那条脚本兜底，并把这件事告诉用户——这比直接失败好，也比悄悄换一条路好。
+    """
+
+    tool_name = str(action.get("tool", "") or "").strip()
+    arguments = action.get("arguments") or {}
+    custom_script = str(action.get("script", "") or "")
+    if tool_name == tools.CUSTOM_SCRIPT_TOOL:
+        return (
+            tools.render(
+                tool_name,
+                {},
+                context,
+                custom_script=str(arguments.get("script", "") or ""),
+            ),
+            "",
+        )
+    try:
+        return tools.render(tool_name, arguments, context), ""
+    except tools.ToolError as error:
+        if not custom_script.strip():
+            raise
+        return (
+            tools.render(
+                tools.CUSTOM_SCRIPT_TOOL,
+                {},
+                context,
+                custom_script=custom_script,
+            ),
+            f"工具 {tool_name} 无法执行（{error}），改用模型给出的脚本。",
+        )
+
+
+def _send_script(
+    executable: str, script: str, *, request_id: str = ""
+) -> tuple[bool, str]:
     """Hand the script to the running Praat and wait for its result files.
 
     默认走 :mod:`praat_ai.sendpraat`：自己写 ``Message.txt`` 再发 ``WM_APP``。
@@ -193,21 +381,26 @@ def _send_script(executable: str, script: str) -> tuple[bool, str]:
     Praat 子窗口，而且 ``--send`` 在 Praat 被模态窗口挡住时会一直阻塞（实测
     超过 60 秒，脚本其实已经排队），所以老路径仍然用「后台 Popen + 轮询」，
     不回到 ``subprocess.run(timeout=60)``。
+
+    每条指令写一个自己的脚本文件，并在开头带上请求编号（:func:`script_preamble`）：
+    这是「投递出去的那条」和「真的执行了的那条」对得上的凭据。
     """
 
-    target = script_path()
-    target.write_text(script, encoding="utf-8")
+    request_id = request_id or new_request_id()
+    target = script_path(request_id)
     _clear_result_files()
+    target.write_text(script_preamble(request_id) + script, encoding="utf-8")
+    prune_command_scripts()
     if sendpraat.send_mode() == sendpraat.ARGV_MODE:
-        return _send_script_via_argv(executable, target)
+        return _send_script_via_argv(executable, target, request_id)
     delivered, note = sendpraat.deliver(ai_directory(), target)
     if not delivered:
         return False, note
-    return _wait_for_result(None)
+    return _wait_for_result(None, request_id=request_id)
 
 
 def _send_script_via_argv(
-    executable: str, target: Path
+    executable: str, target: Path, request_id: str = ""
 ) -> tuple[bool, str]:
     """排障兜底：``Praat.exe --FULL-TRUST --send``（会激活 Praat 的一个子窗口）。"""
 
@@ -231,7 +424,7 @@ def _send_script_via_argv(
             )
     except OSError as error:
         return False, f"调用 Praat 失败：{error}"
-    return _wait_for_result(process)
+    return _wait_for_result(process, request_id=request_id)
 
 
 def _read_send_log() -> str:
@@ -299,23 +492,41 @@ def praat_process_ids(executable: str = "Praat.exe") -> list[int] | None:
     return ids
 
 
-def praat_process_running(executable: str) -> bool:
-    process_ids = praat_process_ids(executable)
+def praat_process_running_from(process_ids: list[int] | None) -> bool:
+    """按**已经查好的**进程列表判断 Praat 在不在跑。
+
+    每条指令原来会起两次 ``tasklist``（一次判断在不在跑、一次数几个实例），这里
+    让调用方查一次、两件事都用同一份结果——Praat 的进程名和实例数都不该在一次
+    请求里被查两遍（``tasklist`` 是子进程，几十毫秒起步）。
+
+    ``None`` 表示查不到（不是 Windows、tasklist 不可用），这时不拦用户：交给投递
+    那一步自己报错，比前端误判「Praat 没开」强。
+    """
+
     if process_ids is None:
-        return True   # 查不到进程列表时不拦截，交给 --send 自己判断
+        return True
     return bool(process_ids)
 
 
-def praat_instance_warning(executable: str) -> str:
-    """同时开着多个 Praat 时返回一句提醒，否则返回空字符串。"""
+def praat_instance_warning_from(process_ids: list[int] | None) -> str:
+    """按已经查好的进程列表给「多个 Praat」的提醒。"""
 
-    process_ids = praat_process_ids(executable)
     if not process_ids or len(process_ids) < 2:
         return ""
     return (
         f"检测到 {len(process_ids)} 个 Praat 在运行：脚本只会送给最新打开的那个"
         "窗口。请关掉多余的 Praat，否则可能操作到别的对象列表。"
     )
+
+
+def praat_process_running(executable: str) -> bool:
+    return praat_process_running_from(praat_process_ids(executable))
+
+
+def praat_instance_warning(executable: str) -> str:
+    """同时开着多个 Praat 时返回一句提醒，否则返回空字符串。"""
+
+    return praat_instance_warning_from(praat_process_ids(executable))
 
 
 def model_status_text(config) -> str:
@@ -341,7 +552,9 @@ def model_status_text(config) -> str:
     return "  |  ".join(parts)
 
 
-def refresh_object_context(executable: str) -> tuple[bool, str]:
+def refresh_object_context(
+    executable: str, process_ids: list[int] | None = None
+) -> tuple[bool, str]:
     """让正在运行的 Praat 重新写一次对象列表，返回 ``(是否成功, 说明)``。
 
     ``chat_context.tsv`` 由 Praat 维护：Praat 重启、换会话或对象被改动之后，
@@ -349,7 +562,11 @@ def refresh_object_context(executable: str) -> tuple[bool, str]:
     的错误，所以每次执行前先送一条空脚本刷新，顺带确认 Praat 还在响应用户。
     """
 
-    if not executable or not praat_process_running(executable):
+    if not executable:
+        return False, ""
+    if process_ids is None:
+        process_ids = praat_process_ids(executable)
+    if not praat_process_running_from(process_ids):
         return False, ""
     ok, output = _send_script(executable, context_ping_script())
     if ok:
@@ -694,7 +911,12 @@ class ChatWindow:
         return "break"
 
     def plan_script(self, text: str) -> tuple[str, str]:
-        """Return ``(reply, script)`` for one user message."""
+        """Return ``(reply, script)`` for one user message.
+
+        模型一次可能给多个工具调用（实测「0.25 秒和 0.75 秒的基频」就是两个
+        ``pitch``），它们按顺序拼成**同一条**脚本投递：一次往返、一个请求编号，
+        动作顺序就是模型给的顺序。
+        """
 
         context_text = object_context()
         rows = tools.parse_object_context(context_text)
@@ -708,43 +930,36 @@ class ChatWindow:
             context_text,
             self.history,
             tool_catalog=tools.catalog_text(),
+            tool_schemas=tools.tool_schemas(),
+            tool_labels=tools.tool_labels(),
             result_path=str(result_path()),
             state_path=str(state_path()),
         )
         reply = str(plan.get("reply", "")).strip() or "已完成。"
-        tool_name = str(plan.get("tool", "")).strip()
-        arguments = plan.get("arguments") or {}
-        custom_script = str(plan.get("script", "") or "")
-        if not tool_name and custom_script.strip():
-            tool_name = tools.CUSTOM_SCRIPT_TOOL
-        if not tool_name:
+        actions = tools.plan_actions(plan)
+        if not actions:
             return reply, ""
-        try:
-            script = tools.render(tool_name, arguments, context)
-        except tools.ToolError as error:
-            if not custom_script.strip() or tool_name == tools.CUSTOM_SCRIPT_TOOL:
-                raise
-            self.messages.put(
-                ("hint", f"工具 {tool_name} 无法执行（{error}），改用模型给出的脚本。")
-            )
-            script = tools.render(
-                tools.CUSTOM_SCRIPT_TOOL,
-                {},
-                context,
-                custom_script=custom_script,
-            )
-        return reply, script
+        scripts: list[str] = []
+        for action in actions:
+            script, note = render_action(action, context)
+            if note:
+                self.messages.put(("hint", note))
+            scripts.append(script)
+        return reply, "\n".join(scripts)
+
 
     def process_message(self, text: str) -> None:
         try:
             executable = praat_executable()
-            praat_ready = bool(executable) and praat_process_running(executable)
+            # 一次 tasklist 查清「Praat 在不在跑」和「开了几个」——以前每条指令查两次。
+            process_ids = praat_process_ids(executable) if executable else None
+            praat_ready = bool(executable) and praat_process_running_from(process_ids)
             if praat_ready:
-                warning = praat_instance_warning(executable)
+                warning = praat_instance_warning_from(process_ids)
                 if warning:
                     self.messages.put(("hint", warning))
                 # 先刷新对象列表，免得拿着过期 id 去规划。
-                refreshed, note = refresh_object_context(executable)
+                refreshed, note = refresh_object_context(executable, process_ids)
                 if not refreshed and note:
                     self.messages.put(("hint", note))
 
@@ -757,7 +972,8 @@ class ChatWindow:
 
             if not executable:
                 raise OSError(
-                    "未配置 Praat 可执行文件路径，请从 Praat 菜单重新启动前端。"
+                    praat_app.describe_search()
+                    + " 也可以从 Praat 菜单「前端 → 启动前端」重新打开对话窗口。"
                 )
             if not praat_ready:
                 raise OSError(

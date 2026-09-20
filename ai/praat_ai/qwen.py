@@ -3,17 +3,121 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import os
 import re
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .config import QwenConfig
 
 
 class QwenError(RuntimeError):
     pass
+
+
+#: 规划接口的取值（见 :func:`planner_mode`）。
+TOOLS_MODE = "tools"
+JSON_MODE = "json"
+AUTO_MODE = "auto"
+
+#: 切换规划接口的环境变量：``tools`` / ``json`` / ``auto``（默认）。
+PLANNER_MODE_ENV = "PRAAT_AI_PLANNER"
+
+
+def planner_mode() -> str:
+    """这次用哪种规划接口。
+
+    - ``tools``：把工具的 JSON Schema 放进 ``tools``，读模型返回的 ``tool_calls``
+      （llama-server 原生 function calling，实测本机 Qwen3.5-2B 支持，见
+      ai/docs/adr/ADR-003）。
+    - ``json``：老的「把工具清单和十几条规则写进提示词，让模型自己拼 JSON」。
+    - ``auto``（默认）：先走 ``tools``；模型既没给工具调用、也没给任何正文时退回
+      ``json``。换成不支持工具调用的服务端时，直接设 ``PRAAT_AI_PLANNER=json``
+      可以省掉这一趟。
+    """
+
+    value = os.getenv(PLANNER_MODE_ENV, "").strip().casefold()
+    if value in {"json", "prompt", "legacy"}:
+        return JSON_MODE
+    if value in {"tools", "tool", "function_calling", "fc"}:
+        return TOOLS_MODE
+    return AUTO_MODE
+
+
+#: 原生 function calling 用的系统提示：只写业务规则和现场信息，
+#: 工具的说明/参数/必填项都在 JSON Schema 里（不再靠提示词列清单）。
+TOOL_PLANNER_INSTRUCTIONS = """
+你是 Praat（中文版，Windows）桌面助手的操作规划器。用户用自然语言提出操作要求，你通过工具调用来完成，不要输出 Markdown。
+
+规则：
+1. 能用一个工具完成就不要写自定义脚本；只有所有工具都做不到时才用 custom_script。
+2. custom_script 里必须是 Praat 英文脚本，绝对不能是 Python：不要出现 import、def、print、numpy、parselmouth、os。
+3. Praat 脚本里字符串一律用双引号；单引号在 Praat 中是变量插值，会直接报错。
+4. 对象只能使用对象列表里真实存在的 id 或名称，不得编造。
+5. 用户明确说了对象编号（例如「3 号对象」「第二个声音」）时，object / object2 必须填那个对象。
+6. 用户说「这个声音」「当前对象」时，指的是下面标着「当前选中」的那一个，它往往不是 1 号对象，别习惯性写 1。
+7. 用户说法里带对象类型时按类型选：说「这个 TextGrid」就用 TextGrid，不要因为别的类型是当前选中就写错。
+8. 没有对应工具的测量（例如 CPP）不许拿别的量代替；这时在回复里直说做不到，并说明还缺什么。
+9. 请求能从当前选中对象直接完成时就直接调用工具，不要反问；只有完全无法执行时才在回复里提问。
+""".strip()
+
+
+def _history_messages(history: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """把对话历史转成 messages（只留最近几轮，接口不认的字段一律丢掉）。"""
+
+    messages: list[dict[str, Any]] = []
+    for item in history[-8:]:
+        role = str(item.get("role", ""))
+        content = str(item.get("content", "") or "")
+        if role in {"user", "assistant"} and content:
+            messages.append({"role": role, "content": content})
+    return messages
+
+
+def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
+    """``tool_calls[].function.arguments`` 是 JSON 字符串，解析成 dict。"""
+
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            value = extract_json_object(text)
+        except QwenError:
+            return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def extract_tool_actions(message: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """把一次响应里的 ``tool_calls`` 变成 ``[{"tool": ..., "arguments": {...}}]``。
+
+    模型可能一次给多个调用（实测同一句话里问两个时刻，它会给两个 ``pitch`` 调用），
+    顺序就是它想执行的顺序。
+    """
+
+    calls = message.get("tool_calls") or []
+    actions: list[dict[str, Any]] = []
+    if not isinstance(calls, list):
+        return actions
+    for call in calls:
+        if not isinstance(call, Mapping):
+            continue
+        function = call.get("function")
+        if not isinstance(function, Mapping):
+            continue
+        name = str(function.get("name", "") or "").strip()
+        if not name:
+            continue
+        actions.append(
+            {"tool": name, "arguments": _parse_tool_arguments(function.get("arguments"))}
+        )
+    return actions
 
 
 def _selected_object_hint(object_context: str) -> str:
@@ -50,7 +154,35 @@ class QwenClient:
         max_tokens: int = 1024,
         temperature: float = 0.2,
         json_mode: bool = False,
+        tools: list[dict[str, Any]] | None = None,
     ) -> str:
+        message = self.chat_message(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_mode=json_mode,
+            tools=tools,
+        )
+        content = message.get("content") or ""
+        reasoning = message.get("reasoning_content") or ""
+        if isinstance(content, str) and content.strip():
+            return content
+        if isinstance(reasoning, str) and reasoning.strip():
+            return _final_reasoning_fallback(reasoning)
+        return ""
+
+    def chat_message(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+        json_mode: bool = False,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        """发一次请求，返回原始的 ``message`` 对象（含 ``tool_calls``）。"""
+
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
@@ -64,6 +196,9 @@ class QwenClient:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice
 
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
@@ -82,15 +217,11 @@ class QwenClient:
 
         try:
             message = result["choices"][0]["message"]
-            content = message.get("content") or ""
-            reasoning = message.get("reasoning_content") or ""
-            if content.strip():
-                return content
-            if reasoning.strip():
-                return _final_reasoning_fallback(reasoning)
-            return ""
         except (KeyError, IndexError, TypeError) as error:
             raise QwenError("Qwen returned an unexpected response.") from error
+        if not isinstance(message, dict):
+            raise QwenError("Qwen returned an unexpected response.")
+        return message
 
     def parse_analysis_request(
         self,
@@ -143,7 +274,117 @@ class QwenClient:
         tool_catalog: str,
         result_path: str,
         state_path: str,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        tool_labels: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
+        """规划一次操作，返回 ``{"reply", "tool", "arguments", "script", "actions"}``。
+
+        默认走原生 function calling：工具的 JSON Schema 交给 llama-server，读回来的
+        ``tool_calls`` 直接就是工具名 + 参数，不用模型自己拼 JSON（也不用把十几条
+        格式规则写进提示词）。``PRAAT_AI_PLANNER=json`` 可以退回老接口，排障用。
+        """
+
+        mode = planner_mode()
+        if mode != JSON_MODE and tool_schemas:
+            plan = self._plan_with_tools(
+                user_text,
+                object_context,
+                history,
+                tool_schemas=tool_schemas,
+                tool_labels=dict(tool_labels or {}),
+                result_path=result_path,
+                state_path=state_path,
+            )
+            if plan is not None:
+                return plan
+        return self._plan_with_json(
+            user_text,
+            object_context,
+            history,
+            tool_catalog=tool_catalog,
+            result_path=result_path,
+            state_path=state_path,
+        )
+
+    def _plan_with_tools(
+        self,
+        user_text: str,
+        object_context: str,
+        history: list[dict[str, str]],
+        *,
+        tool_schemas: list[dict[str, Any]],
+        tool_labels: dict[str, str],
+        result_path: str,
+        state_path: str,
+    ) -> dict[str, Any] | None:
+        """原生 function calling 那条路；返回 ``None`` 表示「退回 JSON 接口」。"""
+
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": TOOL_PLANNER_INSTRUCTIONS
+                + "\n\n"
+                + self._tool_context(result_path, state_path, object_context),
+            },
+        ]
+        messages.extend(_history_messages(history))
+        messages.append({"role": "user", "content": user_text})
+        message = self.chat_message(
+            messages,
+            tools=tool_schemas,
+            max_tokens=self.config.plan_max_tokens,
+            temperature=self.config.plan_temperature,
+        )
+        actions = extract_tool_actions(message)
+        content = message.get("content") or ""
+        reply = content.strip() if isinstance(content, str) else ""
+        if not actions:
+            if reply:
+                # 模型选择只回话、不执行动作（例如「你好」或「这个做不到」）。
+                return {"reply": reply, "tool": "", "arguments": {}, "script": "", "actions": []}
+            if planner_mode() == TOOLS_MODE:
+                raise QwenError("模型没有返回工具调用，也没有给出任何回复。")
+            return None
+        if not reply:
+            # 只给了工具调用、没写回话：用工具说明兜一句，别让对话窗口显示空白。
+            reply = tool_labels.get(actions[0]["tool"], "") or f"执行 {actions[0]['tool']}。"
+        plan: dict[str, Any] = {
+            "reply": reply,
+            "actions": actions,
+            "tool": actions[0]["tool"],
+            "arguments": actions[0]["arguments"],
+            "script": "",
+        }
+        return plan
+
+    def _tool_context(
+        self, result_path: str, state_path: str, object_context: str
+    ) -> str:
+        return "\n".join(
+            [
+                f"结果文件（脚本把数值结果写到这里）：{result_path}",
+                f'完成标记文件（脚本最后一行必须是 appendFileLine: "{state_path}", "done"）：'
+                f"{state_path}",
+                "",
+                _selected_object_hint(object_context),
+                "",
+                "当前 Praat 对象列表（id、类、名称、是否选中）：",
+                object_context,
+            ]
+        )
+
+    def _plan_with_json(
+        self,
+        user_text: str,
+        object_context: str,
+        history: list[dict[str, str]],
+        *,
+        tool_catalog: str,
+        result_path: str,
+        state_path: str,
+    ) -> dict[str, Any]:
+        """老的提示词 + JSON 接口（``PRAAT_AI_PLANNER=json`` 或工具接口失败时用）。"""
+
         system_prompt = """
 你是 Praat（中文版，Windows）桌面助手的操作规划器。用户用自然语言提出操作要求，你只输出一个 JSON 对象，不输出 Markdown，不输出多余文字。
 

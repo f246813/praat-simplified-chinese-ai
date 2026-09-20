@@ -1,6 +1,8 @@
-"""对话窗口的状态栏、Praat 存活判断和输出过滤。"""
+"""对话窗口的状态栏、Praat 存活判断、投递编号和输出过滤。"""
 
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -149,8 +151,10 @@ class FakeSendProcess:
         log_text: str = "",
         exit_code: int | None = 0,
         write_state: bool = False,
+        started_path: Path | None = None,
     ) -> None:
         self.state_path = state_path
+        self.started_path = started_path
         self.log_text = log_text
         self.exit_code = exit_code
         self.write_state = write_state
@@ -162,6 +166,12 @@ class FakeSendProcess:
         if handle is not None and self.log_text:
             handle.write(self.log_text.encode("utf-8"))
         if self.write_state and self.state_path is not None:
+            # 真 Praat 会先执行脚本开头那句「请求编号」，再写完成标记。
+            if self.started_path is not None:
+                request_id = chat.request_id_from_path(Path(command[-1]))
+                self.started_path.write_text(
+                    f"started {request_id}\n", encoding="utf-8"
+                )
             self.state_path.write_text("done\n", encoding="utf-8")
         return self
 
@@ -193,11 +203,18 @@ class SendScriptTests(unittest.TestCase):
         self._temp.cleanup()
 
     def _deliver(self, directory, script, **_kwargs) -> tuple[bool, str]:
-        """假投递：记下参数，并像 Praat 那样写完成标记。"""
+        """假投递：记下参数，并像 Praat 那样写请求编号 + 完成标记。"""
 
         self.delivered.append((Path(directory), Path(script)))
-        chat.state_path().write_text("done\n", encoding="utf-8")
+        self._emulate_praat(Path(script))
         return True, ""
+
+    def _emulate_praat(self, script: Path, request_id: str = "") -> None:
+        """照真 Praat 的顺序落两个文件：先请求编号，再完成标记。"""
+
+        rid = request_id or chat.request_id_from_path(script)
+        chat.started_marker_path().write_text(f"started {rid}\n", encoding="utf-8")
+        chat.state_path().write_text("done\n", encoding="utf-8")
 
     def test_window_delivery_means_success(self) -> None:
         with patch.object(chat.sendpraat, "deliver", self._deliver):
@@ -205,10 +222,69 @@ class SendScriptTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(output, "")
         # 投出去的是刚写好的脚本文件，工作目录是前端自己的目录。
-        self.assertEqual(self.delivered, [(chat.ai_directory(), chat.script_path())])
-        self.assertEqual(
-            chat.script_path().read_text(encoding="utf-8"), "selectObject: 1\n"
-        )
+        directory, delivered = self.delivered[0]
+        self.assertEqual(directory, chat.ai_directory())
+        self.assertEqual(delivered.parent, chat.runtime_dir() / "commands")
+        content = delivered.read_text(encoding="utf-8")
+        # 脚本开头是请求编号（完成标记靠它认身份），后面才是模型/模板给的脚本。
+        request_id = chat.request_id_from_path(delivered)
+        self.assertTrue(content.startswith(f"# praat-ai 请求 {request_id}\n"))
+        self.assertTrue(content.endswith("selectObject: 1\n"))
+
+    def test_each_request_gets_its_own_script_file(self) -> None:
+        """两个请求不能共用一个文件名：旧消息醒来时执行的会是新脚本。"""
+
+        with patch.object(chat.sendpraat, "deliver", self._deliver):
+            chat._send_script("Praat.exe", "selectObject: 1\n")
+            chat._send_script("Praat.exe", "selectObject: 2\n")
+        first, second = (item[1] for item in self.delivered)
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.is_file())
+        self.assertTrue(second.is_file())
+
+    def test_completion_marker_from_another_request_is_ignored(self) -> None:
+        """完成标记是上一条超时指令写的时，不能把它的数值当成本次结果。"""
+
+        def stale_deliver(directory, script, **_kwargs) -> tuple[bool, str]:
+            self.delivered.append((Path(directory), Path(script)))
+            # 上一条指令刚刚才跑完：编号是别人的，结果文件里是别人的数值。
+            chat.started_marker_path().write_text(
+                "started 老指令编号\n", encoding="utf-8"
+            )
+            chat.result_path().write_text("别人的结果\n", encoding="utf-8")
+            chat.state_path().write_text("done\n", encoding="utf-8")
+            return True, ""
+
+        with patch.object(chat.sendpraat, "deliver", stale_deliver), patch.object(
+            chat, "EXECUTION_TIMEOUT_SEC", 0.4
+        ):
+            ok, output = chat._send_script("Praat.exe", "selectObject: 1\n")
+        self.assertFalse(ok)
+        self.assertIn("上一条超时指令", output)
+        # 别人的结果和标记都要丢掉，不能留在那里当本次结果。
+        self.assertFalse(chat.state_path().is_file())
+        self.assertFalse(chat.result_path().is_file())
+
+    def test_prune_keeps_the_newest_scripts(self) -> None:
+        directory = chat.command_dir()
+        old = time.time() - 7200
+        for index in range(chat.MAX_COMMAND_SCRIPTS + 5):
+            path = directory / f"chat_command_{index:012x}.praat"
+            path.write_text("selectObject: 1\n", encoding="utf-8")
+            os.utime(path, (old, old))
+        removed = chat.prune_command_scripts()
+        self.assertEqual(removed, 5)
+        self.assertEqual(len(list(directory.glob("chat_command_*.praat"))), chat.MAX_COMMAND_SCRIPTS)
+
+    def test_prune_keeps_recent_scripts_even_when_there_are_many(self) -> None:
+        """最近一小时的脚本都要留着：Message.txt 里可能还引用着它们。"""
+
+        directory = chat.command_dir()
+        for index in range(chat.MAX_COMMAND_SCRIPTS + 5):
+            (directory / f"chat_command_{index:012x}.praat").write_text(
+                "selectObject: 1\n", encoding="utf-8"
+            )
+        self.assertEqual(chat.prune_command_scripts(), 0)
 
     def test_window_delivery_failure_is_reported(self) -> None:
         with patch.object(
@@ -242,7 +318,11 @@ class SendScriptTests(unittest.TestCase):
         self.assertEqual(cancelled, [True])
 
     def test_argv_mode_keeps_the_send_process_path(self) -> None:
-        fake = FakeSendProcess(state_path=chat.state_path(), write_state=True)
+        fake = FakeSendProcess(
+            state_path=chat.state_path(),
+            started_path=chat.started_marker_path(),
+            write_state=True,
+        )
         with patch.object(chat.sendpraat, "send_mode", return_value="argv"), patch.object(
             chat.subprocess, "Popen", fake
         ):

@@ -21,7 +21,9 @@ void PraatAiControl_chooseFrontendModel ();
 void PraatAiControl_startFrontend ();
 void PraatAiControl_stopFrontend ();
 void PraatAiControl_runAnalysis ();
-void PraatAiControl_refreshChatContext ();
+/* 重写对话窗口读的对象列表。force=true 时即使内容和上次一样也重写一次
+   （app 发来的每条消息之后都用它，见 sys/praat.cpp 的 cb_userMessage）。 */
+void PraatAiControl_refreshChatContext (bool force = false);
 void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end);
 
 #endif

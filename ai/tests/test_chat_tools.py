@@ -129,6 +129,7 @@ class ScriptRenderingTests(unittest.TestCase):
             "rename_object": {"new_name": "测试"},
             "extract_part": {"start": 0.1, "end": 0.4},
             "save_sound": {"path": str(base / "ai-chat.wav")},
+            "read_file": {"path": str(base / "ai-chat.wav")},
             "concatenate_sounds": {"object": 1, "object2": 2},
             "textgrid_info": {"object": 3},
             "textgrid_set_interval": {
@@ -201,7 +202,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("chat_state.txt", script)
 
     def test_custom_script_must_not_open_the_info_window(self) -> None:
-        """模型写 writeInfoLine / print 会弹出「Praat Info」，脚本层要兜住。"""
+        """模型写 writeInfoLine / print 会弹出「Praat Info」，脚本层要兜住，内容不丢。"""
 
         directory = tempfile.TemporaryDirectory()
         base = Path(directory.name)
@@ -217,12 +218,12 @@ class ScriptValidationTests(unittest.TestCase):
                 'selectObject: 1\n'
                 'writeInfoLine: "共振峰：", 500\n'
                 "clearinfo\n"
-                'printline "这行会被丢掉"\n'
+                'printline 这行也要留着\n'
                 'Rename: "新名字"\n'
             ),
         )
         directory.cleanup()
-        # 可执行的行里不许再有会弹 Info 窗口的命令（被注释掉的那几行不算）。
+        # 可执行的行里不许再有会弹 Info 窗口的命令（被注释掉的 printtab/clearinfo 不算）。
         for line in script.splitlines():
             if line.strip().startswith("#"):
                 continue
@@ -232,8 +233,52 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('appendFileLine: "', script)
         self.assertIn('"共振峰：", 500', script)
         self.assertIn('Rename: "新名字"', script)
-        # 被省略的命令留一条注释，方便排查。
-        self.assertIn("已省略会弹出 Praat Info 窗口", script)
+        # printline 的字面文字也要带过去，不再被注释掉。
+        self.assertIn('appendFileLine: "', script)
+        self.assertNotIn("这行也要留着", "\n".join(
+            line for line in script.splitlines() if line.strip().startswith("#")
+        ))
+        self.assertIn("这行也要留着", script)
+        # 只有「没有内容可保留」的命令才留注释，方便排查。
+        self.assertIn("已省略只影响 Info 窗口的命令", script)
+
+    def test_literal_output_commands_become_result_lines(self) -> None:
+        """printline / print / echo 在 Praat 里写的是字面文字，整段抄进结果文件。"""
+
+        script = tools.neutralize_info_commands(
+            'printline 第一行\nprint 接着写\necho 说一句"带引号"的话\n',
+            Path("D:/x/result.tsv"),
+        )
+        self.assertEqual(
+            script,
+            'appendFileLine: "D:/x/result.tsv", "第一行"\n'
+            'appendFileLine: "D:/x/result.tsv", "接着写"\n'
+            'appendFileLine: "D:/x/result.tsv", "说一句""带引号""的话"\n',
+        )
+
+    def test_value_output_commands_become_result_lines(self) -> None:
+        """appendInfo / writeInfo 带的是值列表，原样换成 appendFileLine。"""
+
+        script = tools.neutralize_info_commands(
+            'appendInfo: "F1 = ", f1, " Hz"\nwriteInfo: 1, 2, 3\n',
+            Path("D:/x/result.tsv"),
+        )
+        self.assertEqual(
+            script,
+            'appendFileLine: "D:/x/result.tsv", "F1 = ", f1, " Hz"\n'
+            'appendFileLine: "D:/x/result.tsv", 1, 2, 3\n',
+        )
+
+    def test_meaningless_info_commands_are_commented_out(self) -> None:
+        """printtab 只写制表符、clearinfo 只清空 Info 窗口：没有内容可保留。"""
+
+        script = tools.neutralize_info_commands(
+            "printtab\nclearinfo\n", Path("D:/x/result.tsv")
+        )
+        self.assertNotIn("appendFileLine", script)
+        self.assertEqual(len(script.strip().splitlines()), 2)
+        for line in script.strip().splitlines():
+            self.assertTrue(line.startswith("# praat-ai:"), line)
 
     def test_write_info_line_without_arguments_stays_valid(self) -> None:
         script = tools.neutralize_info_commands(
@@ -655,6 +700,27 @@ class VotToolTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.directory.cleanup()
+
+    def test_placeholder_zero_times_fall_back_to_auto(self) -> None:
+        """模型会给可选字段填两个 0（"填满"），这该按「没给」处理，走自动估计。"""
+
+        script = tools.render(
+            "vot",
+            {"burst": 0, "voicing": 0, "object": 1},
+            self.sound_context,
+        )
+        # 没有按「两个时刻相减」那条路走（那会写 t1/t2），而是进了自动估计。
+        self.assertNotIn("vot = t2 - t1", script)
+        self.assertIn("appendFileLine", script)
+
+    def test_only_one_time_is_still_an_error(self) -> None:
+        with self.assertRaises(tools.ToolError):
+            tools.render("vot", {"burst": 0.3}, self.sound_context)
+
+    def test_non_numeric_time_is_rejected_in_chinese(self) -> None:
+        with self.assertRaises(tools.ToolError) as raised:
+            tools.render("vot", {"burst": "爆破", "voicing": 0.4}, self.sound_context)
+        self.assertIn("必须是数字", str(raised.exception))
 
     def test_textgrid_path_adds_boundaries_and_reports_ms(self) -> None:
         script = tools.render(

@@ -247,6 +247,24 @@ CASES: tuple[Case, ...] = (
     Case("resample_sound", {"rate": 16000}, SOUND, ONE_SOUND, "采样率"),
     Case("extract_part", {"start": 0.2, "end": 0.5}, SOUND, ONE_SOUND, "已截取片段"),
     Case("save_sound", {"path": "@WAV@"}, SOUND, ONE_SOUND, "已保存 WAV"),
+    # 「读取文件」以前只能靠模型自编脚本，模型会把「读取 D:/in/a.wav」理解成
+    # 「另存为」（方向反了）。现在读入有独立工具，这里验它在真 Praat 里能跑通。
+    Case(
+        "read_file",
+        {"path": "@WAV@"},
+        SOUND + f'\nSave as WAV file: "@WAV@"',
+        ONE_SOUND,
+        "已读入文件",
+    ),
+    # 文件不存在时给中文说明，而不是 Praat 那句英文错误（脚本里用 fileReadable 判断）。
+    Case(
+        "read_file-missing",
+        {"path": "@WAV@"},
+        SOUND,
+        ONE_SOUND,
+        "找不到要读取的文件",
+        tool="read_file",
+    ),
     Case(
         "concatenate_sounds",
         {"object": 1, "object2": 2},
@@ -282,7 +300,22 @@ CASES: tuple[Case, ...] = (
         "Info 改写成功",
         custom_script=(
             'selectObject: 1\nwriteInfoLine: "Info 改写成功"\n'
-            'echo "这一行会被省略"\n'
+            'appendInfo: "改写成 appendFileLine", "也照样回来"\n'
+        ),
+        tool="custom_script",
+    ),
+    # printline / print / echo 在 Praat 里写的是**字面文字**（见 sys/praat_script.cpp），
+    # 前端整段抄成一个字符串参数；这里验改写后语法正确、内容也真的回来了。
+    Case(
+        "custom_script-literal-output",
+        {},
+        SOUND,
+        ONE_SOUND,
+        "printline 的字面输出",
+        custom_script=(
+            "selectObject: 1\n"
+            "printline printline 的字面输出\n"
+            "echo echo 也要留着\n"
         ),
         tool="custom_script",
     ),
@@ -363,7 +396,9 @@ def run_case(case: Case, directory: Path) -> tuple[bool, str]:
             rendered = tools.render(tool_name, arguments, context)
     except tools.ToolError as error:
         return False, f"渲染失败：{error}"
-    script = case.prefix + "\n" + rendered
+    # 前缀里也会用 @WAV@（例如先存一个 wav 再读进来）：和参数一样替换成临时路径。
+    prefix = case.prefix.replace("@WAV@", str(wav_path).replace("\\", "/"))
+    script = prefix + "\n" + rendered
     script_path = directory / f"{case.name}.praat"
     script_path.write_text(script, encoding="utf-8")
     completed = subprocess.run(

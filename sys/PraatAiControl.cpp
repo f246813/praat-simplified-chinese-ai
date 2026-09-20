@@ -423,10 +423,10 @@ void PraatAiControl_runAnalysis () {
 	);
 }
 
-void PraatAiControl_refreshChatContext () {
+void PraatAiControl_refreshChatContext (bool force) {
 	if (Melder_batch)
 		return;   // 批处理里没有对话窗口
-	writeChatContext ();   // 内容没变化时不会重复写盘
+	writeChatContext (force);   // 默认内容没变化时不重复写盘
 }
 
 void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end) {

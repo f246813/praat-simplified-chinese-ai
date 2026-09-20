@@ -74,8 +74,19 @@ def snapshot() -> dict[str, tuple[bool, bool]]:
     return state
 
 
-def diff(before: dict[str, tuple[bool, bool]], after: dict[str, tuple[bool, bool]]) -> list[str]:
-    lines: list[str] = []
+def diff(
+    before: dict[str, tuple[bool, bool]], after: dict[str, tuple[bool, bool]]
+) -> tuple[list[str], list[str]]:
+    """返回 ``(违规, 备注)``。
+
+    只有「窗口变得可见 / 从任务栏被还原」才算违规——用户报的就是这两种现象。
+    Praat 自己会为每个命令对话框留一个**隐藏**窗口（例如创建声音之后多出一个
+    不可见的「创建纯音声音」窗口，只建一次、不会累积，实测三次创建仍然只有一个），
+    那种不该算成「弹窗」。
+    """
+
+    violations: list[str] = []
+    notes: list[str] = []
     for key in sorted(set(before) | set(after)):
         old = before.get(key)
         new = after.get(key)
@@ -83,12 +94,16 @@ def diff(before: dict[str, tuple[bool, bool]], after: dict[str, tuple[bool, bool
             continue
         label = key.encode("utf-8").decode("utf-8", "replace")
         if old is None:
-            lines.append(f"  新窗口：{label}（{new}）")
+            line = f"  新窗口：{label}（{new}）"
+            (violations if new[0] else notes).append(line)
         elif new is None:
-            lines.append(f"  窗口消失：{label}（{old}）")
+            line = f"  窗口消失：{label}（{old}）"
+            (violations if old[0] else notes).append(line)
         else:
-            lines.append(f"  窗口状态变化：{label} {old} → {new}")
-    return lines
+            restored = (old[1] and not new[1] and new[0]) or (not old[0] and new[0])
+            line = f"  窗口状态变化：{label} {old} → {new}"
+            (violations if restored else notes).append(line)
+    return violations, notes
 
 
 def make_front_window() -> tk.Tk | None:
@@ -170,9 +185,50 @@ def main() -> int:
     pump(front)
     ping_done = time.time()
 
+    # 1b. 消息自消费：脚本第一句就把 Message.txt 换成空操作。这样队列里残留的
+    # WM_APP 醒来时什么都没得执行，不会把下一条指令再执行一遍（guide.md §8.5）。
+    message_file = sendpraat.message_file_path()
+    if mode == sendpraat.WINDOW_MODE and message_file is not None:
+        after_send = message_file.read_text(encoding="utf-8", errors="replace")
+        if "runScript" in after_send:
+            problems.append(
+                f"投递之后消息文件里还有 runScript（自消费没生效）：{message_file}"
+            )
+        elif sendpraat.CONSUMED_NOTE not in after_send:
+            problems.append(f"消息文件不是「已消费」的内容：{message_file}")
+        else:
+            print(f"· 消息文件已自消费：{message_file}")
+    # 本次请求的脚本文件（带请求编号），脚本内容原样留在磁盘上方便排查。
+    commands = sorted((chat.runtime_dir() / "commands").glob("chat_command_*.praat"))
+    if commands:
+        print(f"· 本条指令的脚本文件：{commands[-1].name}")
+
     # 2. 有对象的话，再送一条真正的只读查询指令。
     queried = ""
     rows = tools.parse_object_context(chat.object_context())
+    created: list[int] = []
+    if not rows and started is not None:
+        # 这次是验证脚本自己开的 Praat（没有去动用户的会话），那就造一个对象，
+        # 让「查询」这条路径也真的被验到；用完删掉。
+        context = tools.ToolContext(
+            objects=[],
+            result_path=chat.result_path(),
+            state_path=chat.state_path(),
+        )
+        ok, output = chat._send_script(
+            executable,
+            tools.render(
+                "create_sound",
+                {"duration": 0.2, "frequency": 220, "name": "no-popup-probe"},
+                context,
+            ),
+        )
+        if not ok:
+            problems.append(f"建验证用对象失败：{output}")
+        else:
+            rows = tools.parse_object_context(chat.object_context())
+            created = [row.id for row in rows if row.name.endswith("no-popup-probe")]
+            print(f"· 造了一个验证用对象（用完会删）：{created}")
     if rows:
         row = next((item for item in rows if item.selected), rows[-1])
         context = tools.ToolContext(
@@ -202,15 +258,27 @@ def main() -> int:
         print("· （验证窗口没能抢到前台，这次只比窗口状态）")
     if queried:
         print(f"· 查询结果：{queried}")
+    if created:
+        context = tools.ToolContext(
+            objects=tools.parse_object_context(chat.object_context()),
+            result_path=chat.result_path(),
+            state_path=chat.state_path(),
+        )
+        for object_id in created:
+            chat._send_script(
+                executable,
+                tools.render("remove_object", {"object": object_id}, context),
+            )
+        print(f"· 已删除验证用对象：{created}")
     print(
-        f"· 对象列表文件：{context_path}（内容没变时 Praat 不会重写，mtime "
+        f"· 对象列表文件：{context_path}（每条 app 消息之后 Praat 都会重写一次，mtime "
         f"{context_path.stat().st_mtime if context_path.is_file() else '缺失'}；"
         "脚本确实跑完了看上面的查询结果和 chat_state.txt）"
     )
     if ping_done - started_at > chat.EXECUTION_TIMEOUT_SEC:
         problems.append("刷新对象列表花的时间超过了执行超时，Praat 可能没在响应")
 
-    changes = diff(before, after)
+    violations, notes = diff(before, after)
     stole_focus = (
         front is not None
         and front_is_foreground
@@ -218,20 +286,26 @@ def main() -> int:
         and foreground_after != FRONT_WINDOW_TITLE
     )
 
-    if changes:
-        print("· 窗口变化：")
-        for line in changes:
+    if violations:
+        print("· 窗口变化（违规）：")
+        for line in violations:
             print(line)
+    elif notes:
+        print("· 窗口变化：可见/最小化状态都没动")
     else:
         print("· 窗口变化：无（可见/最小化状态都没动）")
+    if notes:
+        print("· 启用了新的隐藏窗口（不算弹窗，Praat 的命令对话框本来就常驻一个）：")
+        for line in notes:
+            print(line)
 
     if legacy:
-        if changes or stole_focus:
+        if violations or stole_focus:
             print("√ 老路径（--send）确实会动窗口 / 抢前台，和用户报的现象一致")
         else:
             print("？ 这次 --send 没动窗口：Praat 的窗口当时可能都不是最小化，现象不稳定")
     else:
-        for line in changes:
+        for line in violations:
             problems.append(f"发指令动了 Praat 窗口：{line.strip()}")
         if stole_focus:
             problems.append(

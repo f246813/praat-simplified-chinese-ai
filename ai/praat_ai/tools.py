@@ -44,18 +44,32 @@ PYTHON_SCRIPT_PATTERNS = re.compile(
 )
 
 # 会弹出「Praat Info」窗口的输出命令。脚本是交给 GUI 版 Praat 执行的，这些命令
-# 走 gui_information()，于是每执行一次就把 Info 窗口顶到前面（用户报的 bug，
-# 见 guide.md §8.5）。自定义脚本里一律改写：
-#   - 行式的 appendInfoLine / writeInfoLine 直接换成 appendFileLine 写结果文件，
-#     模型想回给用户的那句话不会丢；
-#   - 其余（appendInfo / writeInfo / print* / echo / clearinfo）只是输出，注释掉
-#     不会影响脚本的计算结果。
+# 走 MelderInfo_* → gui_information()，于是每执行一次就把 Info 窗口顶到前面
+# （用户报的 bug，见 guide.md §8.5）。自定义脚本里一律**改写成写结果文件**，
+# 模型想让用户看到的内容一句都不许丢（参考 PraatPlugin 的 ADR-006：宁可原样带
+# 过去，也不要静默丢输出）：
+#   - 带值列表的 appendInfoLine / writeInfoLine / appendInfo / writeInfo 直接换成
+#     appendFileLine，参数原样带过去；
+#   - printline / print / echo 在 Praat 里是把这一行剩下的**字面文字**写给 Info
+#     窗口（不参与表达式求值，见 sys/praat_script.cpp），所以整段抄成一个字符串
+#     参数；
+#   - printtab 只写一个制表符、clearinfo 只管清空 Info 窗口，这两条没有可保留的
+#     内容，改成注释说明。
 INFO_LINE_PATTERN = re.compile(
     r"^(\s*)(appendInfoLine|writeInfoLine)\s*:(.*)$", re.IGNORECASE
+)
+INFO_VALUE_PATTERN = re.compile(
+    r"^(\s*)(appendInfo|writeInfo)\s*:(.*)$", re.IGNORECASE
+)
+INFO_LITERAL_PATTERN = re.compile(
+    r"^(\s*)(printline|print|echo)\b(.*)$", re.IGNORECASE
 )
 INFO_OTHER_PATTERN = re.compile(
     r"^\s*(?:appendInfo|writeInfo|printline|printtab|print|echo|clearinfo)\b[^\n]*$",
     re.IGNORECASE,
+)
+INFO_NOISE_PATTERN = re.compile(
+    r"^\s*(?:printtab|clearinfo)\b[^\n]*$", re.IGNORECASE
 )
 
 TEMPORARY_OBJECT_NAME = "ai-chat-temp"
@@ -1741,20 +1755,40 @@ def _build_vot_auto(arguments: Mapping[str, Any], context: ToolContext) -> str:
 
 
 def _build_vot(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    """给了爆破/浊音两个时刻就相减，否则在大概范围里自动估计。"""
+    """给了爆破/浊音两个时刻就相减，否则在大概范围里自动估计。
 
-    has_burst = arguments.get("burst", None) not in (None, "")
-    has_voicing = (
-        arguments.get("voicing", arguments.get("onset", None)) not in (None, "")
-    )
-    if has_burst and has_voicing:
+    ``burst`` / ``voicing`` 是可选字段，但模型（尤其走原生 tool calling 之后）会把
+    可选字段"填满"，给两个 ``0``。两条都是 0 的 VOT 本来就没有意义，所以这里把它
+    当成"没给"，继续走自动估计——比拿它报「浊音起始必须晚于爆破时刻」更贴近用户
+    的意图（实测「提取这段语音的 vot」就是这么被卡住的）。
+    """
+
+    burst = _vot_time(arguments, "burst")
+    voicing = _vot_time(arguments, "voicing", alias="onset")
+    if burst == 0.0 and voicing == 0.0:
+        burst = voicing = None
+    if burst is not None and voicing is not None:
         return _build_vot_explicit(arguments, context)
-    if has_burst or has_voicing:
+    if burst is not None or voicing is not None:
         raise ToolError(
             "VOT 需要同时给出 burst（爆破）和 voicing（浊音起始）两个时刻；"
             "只想自动估计的话两个都不填，改用 from/to 给出大概范围。"
         )
     return _build_vot_auto(arguments, context)
+
+
+def _vot_time(
+    arguments: Mapping[str, Any], key: str, alias: str = ""
+) -> float | None:
+    """读一个可选的时刻参数；没给返回 ``None``，给了不是数字就报中文错。"""
+
+    raw = arguments.get(key, arguments.get(alias, None) if alias else None)
+    if raw in (None, ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        raise ToolError(f"参数 {key} 必须是数字（秒），收到：{raw!r}") from None
 
 
 def _build_select(arguments: Mapping[str, Any], context: ToolContext) -> str:
@@ -1937,6 +1971,48 @@ def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> s
                 "rangeNote$",
             ],
         ),
+    ]
+    return _assemble(lines, context)
+
+
+def _build_read_file(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """把磁盘上的文件读进 Praat 变成一个对象（``save_sound`` 的反方向）。
+
+    为什么要单独一个工具（2026-09-20）：换到原生 function calling 之后，模型手里
+    有 ``save_sound``（「另存为 WAV」）却没有「读入文件」，于是「读取 D:/x.wav」
+    被它理解成保存 WAV（方向反了，还跑得"成功"）。按 guide.md §8.4 的约定——
+    加工具比加提示词管用——这里把「读文件」也做成一个工具。
+
+    文件在不在由**脚本里**的 ``fileReadable()`` 判断，不在 Python 侧拦：同一条指令
+    里的前一个动作完全可能刚刚写出这个文件（渲染时它还不存在），那种情况不该拦。
+    """
+
+    raw = str(arguments.get("path", "") or arguments.get("file", "") or "").strip()
+    raw = raw.strip('"')
+    if not raw:
+        raise ToolError("需要给出要读取的文件路径（path），例如 D:/in/a.wav。")
+    path = praat_path(Path(raw))
+    lines = [
+        f"if not fileReadable ({quote(path)})",
+        _write_result(
+            context,
+            [quote("找不到要读取的文件："), quote(path), quote("（请检查路径是否存在）")],
+        ),
+        "else",
+        f"readAiObject__ = Read from file: {quote(path)}",
+        "selectObject: readAiObject__",
+        "readAiName$ = selected$ ()",
+        _write_result(
+            context,
+            [
+                quote("已读入文件："),
+                "readAiName$",
+                quote("（"),
+                quote(path),
+                quote("）"),
+            ],
+        ),
+        "endif",
     ]
     return _assemble(lines, context)
 
@@ -2164,6 +2240,15 @@ TOOLS: tuple[Tool, ...] = (
         build=_build_save_sound,
     ),
     Tool(
+        name="read_file",
+        summary=(
+            "把磁盘上的文件读进 Praat 变成一个对象（wav / TextGrid / Pitch 等）；"
+            "要和「另存为文件」区分开：这个是**读进来**。"
+        ),
+        signature="path（完整路径，例如 D:/in/a.wav）",
+        build=_build_read_file,
+    ),
+    Tool(
         name="resample_sound",
         summary="改变采样率，生成一个新的 Sound 对象。",
         signature="rate（Hz，常用 16000/22050/44100）、object（可选）",
@@ -2178,6 +2263,400 @@ TOOLS: tuple[Tool, ...] = (
 )
 
 TOOL_MAP: dict[str, Tool] = {tool.name: tool for tool in TOOLS}
+
+
+#: 没有参数的工具（或没登记 schema 的工具）用这个。
+EMPTY_PARAMETERS: dict[str, Any] = {"type": "object", "properties": {}, "required": []}
+
+
+def _object_arg(description: str = "对象 id 或名称；不填就用当前选中的对象") -> dict[str, Any]:
+    return {"type": ["integer", "string"], "description": description}
+
+
+def _seconds_arg(description: str) -> dict[str, Any]:
+    """一个时刻或一段时长（秒）。只允许数字：以前允许字符串时模型会把说明文字
+    当成值填进来（例如把「默认按 Praat 自动」写进 time_step）。"""
+
+    return {"type": "number", "description": description}
+
+
+def _times_arg(description: str) -> dict[str, Any]:
+    """可以一次给多个时刻的 ``time``：数字或 ``"0.25,0.75"`` 这样的文本。"""
+
+    return {"type": ["number", "string"], "description": description}
+
+
+def _number_arg(description: str) -> dict[str, Any]:
+    return {"type": "number", "description": description}
+
+
+def _integer_arg(description: str) -> dict[str, Any]:
+    return {"type": "integer", "description": description}
+
+
+def _text_arg(description: str) -> dict[str, Any]:
+    return {"type": "string", "description": description}
+
+
+def _unit_arg() -> dict[str, Any]:
+    return {
+        "type": "string",
+        "enum": ["hertz", "Bark"],
+        "description": "单位，默认 hertz",
+    }
+
+
+#: 每个工具的 JSON Schema（原生 function calling 用）。
+#:
+#: 集中定义在这里，而不是塞进 26 个 ``Tool(...)`` 里，是为了能一眼比对各工具的参数
+#: 和必填项；``ai/tests/test_chat_tools.py`` 守着「每个工具都有 schema」和
+#: 「schema 里的参数名都出现在 ``Tool.signature`` 里」两条，改动不会悄悄跑偏。
+#: 秒数和编号允许字符串（``time`` 可以写 ``"0.25,0.75"``），因为模板本来就接受这种
+#: 写法，模型也常这么填。
+TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
+    "object_info": {
+        "type": "object",
+        "properties": {"object": _object_arg()},
+        "required": [],
+    },
+    "duration": {
+        "type": "object",
+        "properties": {"object": _object_arg()},
+        "required": [],
+    },
+    "formant_bandwidth": {
+        "type": "object",
+        "properties": {
+            "formant": _integer_arg('第几共振峰，可写 2 或 "1,2"（最多 6 条）'),
+            "time": _times_arg("秒，默认对象中点"),
+            "unit": _unit_arg(),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "formant_frequency": {
+        "type": "object",
+        "properties": {
+            "formant": _integer_arg('第几共振峰，可写 2 或 "1,2"（最多 6 条）'),
+            "time": _times_arg('秒，可写多个时刻，如 "0.25,0.75"'),
+            "unit": _unit_arg(),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "formant_statistics": {
+        "type": "object",
+        "properties": {
+            "formant": _integer_arg('第几共振峰，可写 1 或 "1,2"'),
+            "from": _seconds_arg("起点（秒），不填就是整个对象"),
+            "to": _seconds_arg("终点（秒），不填就是整个对象"),
+            "unit": _unit_arg(),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "pitch": {
+        "type": "object",
+        "properties": {
+            "time": _times_arg('秒，可写多个时刻，如 "0.25,0.75"'),
+            "pitch_floor": _number_arg("基频下限 Hz，默认 75"),
+            "pitch_ceiling": _number_arg("基频上限 Hz，默认 600"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "pitch_statistics": {
+        "type": "object",
+        "properties": {
+            "from": _seconds_arg("起点（秒），不填就是整个对象"),
+            "to": _seconds_arg("终点（秒），不填就是整个对象"),
+            "pitch_floor": _number_arg("基频下限 Hz，默认 75"),
+            "pitch_ceiling": _number_arg("基频上限 Hz，默认 600"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "intensity": {
+        "type": "object",
+        "properties": {
+            "time": _times_arg('秒，可写多个时刻，如 "0.25,0.75"'),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "intensity_statistics": {
+        "type": "object",
+        "properties": {
+            "from": _seconds_arg("起点（秒），不填就是整个对象"),
+            "to": _seconds_arg("终点（秒），不填就是整个对象"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "harmonicity_statistics": {
+        "type": "object",
+        "properties": {
+            "from": _seconds_arg("起点（秒），不填就是整个对象"),
+            "to": _seconds_arg("终点（秒），不填就是整个对象"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "spectrogram": {
+        "type": "object",
+        "properties": {
+            "window_length": _seconds_arg("窗长（秒），默认 0.005"),
+            "max_frequency": _number_arg("最高频率 Hz，默认 5000"),
+            "time_step": _seconds_arg("时间步长（秒）；不填就用 Praat 的默认值"),
+            "frequency_step": _number_arg("频率步长 Hz；不填就用 Praat 的默认值"),
+            "name": _text_arg("新对象的名字"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "textgrid_info": {
+        "type": "object",
+        "properties": {
+            "maximum_intervals": _integer_arg("每层最多列几个区间，默认 12"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "textgrid_set_interval": {
+        "type": "object",
+        "properties": {
+            "start": _seconds_arg("区间起点（秒）"),
+            "end": _seconds_arg("区间终点（秒）"),
+            "label": _text_arg("要写入的文字（空字符串表示清空）"),
+            "tier": _integer_arg("层号，默认 1"),
+            "object": _object_arg("TextGrid 对象"),
+        },
+        "required": ["start", "end", "label"],
+    },
+    "textgrid_insert_boundary": {
+        "type": "object",
+        "properties": {
+            "time": _seconds_arg("插入时刻（秒）"),
+            "tier": _integer_arg("层号，默认 1"),
+            "object": _object_arg("TextGrid 对象"),
+        },
+        "required": ["time"],
+    },
+    "vot": {
+        "type": "object",
+        "properties": {
+            "burst": _seconds_arg(
+                "爆破时刻（秒）；只有用户明确说出爆破时刻时才填，两个都要给，"
+                "不要填 0 或凭猜测填"
+            ),
+            "voicing": _seconds_arg(
+                "浊音起始时刻（秒）；只有用户明确说出这个时刻时才填，不要填 0"
+            ),
+            "from": _seconds_arg("自动估计的搜索起点（秒）；用户给了范围才填"),
+            "to": _seconds_arg("自动估计的搜索终点（秒）；用户给了范围才填"),
+            "burst_db": _number_arg("爆破最小升幅 dB，默认 6"),
+            "pitch_floor": _number_arg("基频下限 Hz，默认 75"),
+            "tier": _integer_arg("TextGrid 层号，默认 1"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    "select_object": {
+        "type": "object",
+        "properties": {"object": _object_arg("要选中的对象 id 或名称")},
+        "required": ["object"],
+    },
+    "view_edit": {
+        "type": "object",
+        "properties": {"object": _object_arg()},
+        "required": [],
+    },
+    "play": {
+        "type": "object",
+        "properties": {"object": _object_arg("要播放的 Sound（必须是 Sound）")},
+        "required": [],
+    },
+    "rename_object": {
+        "type": "object",
+        "properties": {
+            "new_name": _text_arg("新名字"),
+            "object": _object_arg(),
+        },
+        "required": ["new_name"],
+    },
+    "remove_object": {
+        "type": "object",
+        "properties": {"object": _object_arg()},
+        "required": [],
+    },
+    "create_sound": {
+        "type": "object",
+        "properties": {
+            "duration": _seconds_arg("时长（秒），默认 1"),
+            "frequency": _number_arg("频率 Hz；填 0 生成静音，默认 220"),
+            "amplitude": _number_arg("振幅 0–1，默认 0.5"),
+            "name": _text_arg("新对象的名字"),
+        },
+        "required": [],
+    },
+    "concatenate_sounds": {
+        "type": "object",
+        "properties": {
+            "object": _object_arg("第一个声音"),
+            "object2": _object_arg("第二个声音"),
+            "name": _text_arg("结果对象的名字"),
+        },
+        "required": ["object", "object2"],
+    },
+    "extract_part": {
+        "type": "object",
+        "properties": {
+            "start": _seconds_arg("起点（秒）"),
+            "end": _seconds_arg("终点（秒）"),
+            "name": _text_arg("片段对象的名字"),
+            "object": _object_arg(),
+        },
+        "required": ["start", "end"],
+    },
+    "save_sound": {
+        "type": "object",
+        "properties": {
+            "path": _text_arg("完整路径，例如 D:/out/a.wav"),
+            "object": _object_arg(),
+        },
+        "required": ["path"],
+    },
+    "read_file": {
+        "type": "object",
+        "properties": {
+            "path": _text_arg("要读入的文件完整路径，例如 D:/in/a.wav"),
+        },
+        "required": ["path"],
+    },
+    "resample_sound": {
+        "type": "object",
+        "properties": {
+            "rate": _integer_arg("采样率 Hz，常用 16000 / 22050 / 44100"),
+            "object": _object_arg(),
+        },
+        "required": ["rate"],
+    },
+    "duplicate_object": {
+        "type": "object",
+        "properties": {
+            "name": _text_arg("副本的新名字"),
+            "object": _object_arg(),
+        },
+        "required": [],
+    },
+    CUSTOM_SCRIPT_TOOL: {
+        "type": "object",
+        "properties": {
+            "script": _text_arg(
+                "完整 Praat 英文脚本；只有其它工具都做不到时才用它。"
+                "字符串用双引号；要输出就写 appendFileLine。"
+            )
+        },
+        "required": ["script"],
+    },
+}
+
+
+def tool_parameters(name: str) -> dict[str, Any]:
+    """取一个工具的 JSON Schema（没登记就用空参数表）。"""
+
+    return TOOL_PARAMETERS.get(name, EMPTY_PARAMETERS)
+
+
+def tool_schemas() -> list[dict[str, Any]]:
+    """OpenAI 风格的 ``tools`` 参数，交给 llama-server 的原生 function calling。
+
+    对比「把十几条规则和工具清单写进提示词、让模型自己拼 JSON」：schema 里带了
+    类型、枚举和必填项，模型编不出不存在的工具名，``unit`` 这种只在两个值里选的
+    参数也不会写错（见 guide.md §8.4 与 ai/docs/adr/ADR-003）。
+    """
+
+    schemas: list[dict[str, Any]] = [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.summary,
+                "parameters": tool_parameters(tool.name),
+            },
+        }
+        for tool in TOOLS
+    ]
+    schemas.append(
+        {
+            "type": "function",
+            "function": {
+                "name": CUSTOM_SCRIPT_TOOL,
+                "description": (
+                    "只有在上面所有工具都无法完成请求时才使用；"
+                    "这时把完整 Praat 英文脚本写进 script 字段。"
+                ),
+                "parameters": tool_parameters(CUSTOM_SCRIPT_TOOL),
+            },
+        }
+    )
+    return schemas
+
+
+#: 一次请求最多执行几个动作。模型会为「0.25 秒和 0.75 秒的基频」这类请求
+#: 一次给多个工具调用（实测 Qwen3.5-2B 就会这么做），它们按顺序拼进同一条脚本里
+#: 执行；给个上限是怕模型一口气列十几个，把一次投递变成一串没人看过的操作。
+MAX_ACTIONS_PER_REQUEST = 3
+
+
+def tool_labels() -> dict[str, str]:
+    """``工具名 -> 一句中文说明``，规划层用它给「模型只想执行、没写回话」兜底。"""
+
+    labels = {tool.name: tool.summary for tool in TOOLS}
+    labels[CUSTOM_SCRIPT_TOOL] = "执行模型给出的自定义 Praat 脚本。"
+    return labels
+
+
+def plan_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """把规划结果整理成有序的动作列表。
+
+    两种规划接口都认：原生 function calling 给的 ``actions``（可能多个），以及
+    老的 JSON 规划给的单个 ``tool`` / ``arguments`` / ``script``。
+    """
+
+    actions: list[dict[str, Any]] = []
+
+    def add(item: Mapping[str, Any]) -> None:
+        name = str(item.get("tool", "") or "").strip()
+        if not name:
+            return
+        raw = item.get("arguments")
+        actions.append(
+            {
+                "tool": name,
+                "arguments": dict(raw) if isinstance(raw, Mapping) else {},
+                "script": str(item.get("script", "") or ""),
+            }
+        )
+
+    raw_actions = plan.get("actions")
+    if isinstance(raw_actions, Sequence) and not isinstance(raw_actions, (str, bytes)):
+        for item in raw_actions:
+            if isinstance(item, Mapping):
+                add(item)
+    if not actions:
+        add(plan)
+    if not actions:
+        script = str(plan.get("script", "") or "")
+        if script.strip():
+            actions.append(
+                {
+                    "tool": CUSTOM_SCRIPT_TOOL,
+                    "arguments": {"script": script},
+                    "script": "",
+                }
+            )
+    return actions[:MAX_ACTIONS_PER_REQUEST]
 
 
 def catalog_text() -> str:
@@ -2227,29 +2706,41 @@ def validate_script(script: str, *, maximum_length: int = 6000) -> str:
     return normalized
 
 
-def neutralize_info_commands(script: str, result_path: Path | str) -> str:
-    """把自定义脚本里会弹出 Info 窗口的输出命令改写成写结果文件。
+def praat_literal(text: str) -> str:
+    """把一段字面文字变成 Praat 字符串字面量（双引号写成两个）。"""
 
-    前端把脚本送到 GUI 版 Praat 里跑，``appendInfoLine`` / ``writeInfoLine``
-    / ``print`` / ``echo`` 这些都会走 ``gui_information()`` 把「Praat Info」
-    窗口弹出来（用户报的 bug）。模型偶尔会在自定义脚本里写这些命令，所以这里
-    在脚本层面兜底：行式的两条改成 ``appendFileLine``（内容照样回传到对话窗口），
-    其余只是输出的命令改成注释，不影响脚本的计算部分。
+    return '"' + text.replace('"', '""') + '"'
+
+
+def neutralize_info_commands(script: str, result_path: Path | str) -> str:
+    """把自定义脚本里会弹出 Info 窗口的输出命令改写成写结果文件，内容不丢。
+
+    前端把脚本送到 GUI 版 Praat 里跑，``appendInfoLine`` / ``writeInfoLine`` /
+    ``print`` / ``echo`` 这些都会走 ``gui_information()`` 把「Praat Info」窗口
+    弹出来（用户报的 bug）。所以这里在脚本层面兜底，把每一条都翻译成
+    ``appendFileLine``：模型想给用户看的那句话照样回到对话窗口，而不是被注释掉
+    之后凭空消失（以前 ``print`` / ``echo`` 就是这么丢的）。
     """
 
     target = quote(str(result_path))
     lines: list[str] = []
     for line in script.splitlines():
-        match = INFO_LINE_PATTERN.match(line)
+        match = INFO_LINE_PATTERN.match(line) or INFO_VALUE_PATTERN.match(line)
         if match:
             indent, _command, arguments = match.groups()
             payload = arguments.strip() or '""'
             lines.append(f"{indent}appendFileLine: {target}, {payload}")
             continue
-        if INFO_OTHER_PATTERN.match(line):
+        literal_match = INFO_LITERAL_PATTERN.match(line)
+        if literal_match:
+            indent, _command, rest = literal_match.groups()
+            # Praat 这几条命令把关键字后面那**一个**空格当作分隔，再往后的都是内容。
+            text = rest[1:] if rest.startswith(" ") else rest
+            lines.append(f"{indent}appendFileLine: {target}, {praat_literal(text)}")
+            continue
+        if INFO_NOISE_PATTERN.match(line):
             lines.append(
-                "# praat-ai: 已省略会弹出 Praat Info 窗口的输出命令："
-                f"{line.strip()}"
+                "# praat-ai: 已省略只影响 Info 窗口的命令：" f"{line.strip()}"
             )
             continue
         lines.append(line)

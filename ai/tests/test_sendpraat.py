@@ -38,7 +38,7 @@ def make_window(handle: int, pid: int, title: str, class_name: str = "PraatChild
 
 
 class MessageTests(unittest.TestCase):
-    def test_message_matches_what_send_writes(self) -> None:
+    def test_message_starts_with_the_trust_marker_and_the_script(self) -> None:
         message = sendpraat.build_message(
             Path("D:/Praat-work/praat-simplified-chinese/ai"),
             Path("D:/Praat-work/praat-simplified-chinese/ai/runtime/chat_command.praat"),
@@ -52,6 +52,36 @@ class MessageTests(unittest.TestCase):
             'runScript: "D:/Praat-work/praat-simplified-chinese/ai/runtime/chat_command.praat"',
             message,
         )
+
+    def test_message_consumes_itself_before_running_the_script(self) -> None:
+        """消息第一句就要把 Message.txt 换成空操作（重复执行的根治办法）。"""
+
+        message_path = Path("C:/roaming/Praat/Message.txt")
+        with patch.object(sendpraat, "message_file_path", return_value=message_path):
+            message = sendpraat.build_message(Path("C:/ai"), Path("C:/ai/runtime/x.praat"))
+        consume = message.index("writeFileLine:")
+        self.assertLess(consume, message.index("runScript:"))
+        self.assertLess(consume, message.index("setWorkingDirectory:"))
+        self.assertIn(sendpraat.CONSUMED_NOTE, message)
+        # 覆盖的是消息文件本身，而且写回的内容和 noop_message() 一致。
+        self.assertIn(f'"{message_path.as_posix()}"', message)
+
+    def test_consume_can_be_turned_off_for_comparison(self) -> None:
+        """``consume=False`` 时和 ``--send`` 自己写的内容一致（只用于对照/排障）。"""
+
+        message = sendpraat.build_message(
+            Path("C:/ai"), Path("C:/ai/runtime/x.praat"), consume=False
+        )
+        self.assertEqual(
+            message,
+            "\n# --FULL-TRUST\n"
+            'setWorkingDirectory: "C:/ai"\n'
+            'runScript: "C:/ai/runtime/x.praat"\n',
+        )
+
+    def test_consume_statement_is_empty_without_a_message_file(self) -> None:
+        with patch.object(sendpraat, "message_file_path", return_value=None):
+            self.assertEqual(sendpraat.consume_statement(), "")
 
     def test_backslashes_and_quotes_are_escaped(self) -> None:
         message = sendpraat.build_message(Path(r"C:\a\b"), Path(r'C:\a"b\c.praat'))
@@ -203,7 +233,12 @@ class ChatIntegrationTests(unittest.TestCase):
         self.assertFalse(ok)   # 没人写状态文件 → 超时
         fake.assert_called_once()
         self.assertEqual(fake.call_args.args[0], chat.ai_directory())
-        self.assertEqual(fake.call_args.args[1], chat.script_path())
+        # 每条指令一个自己的脚本文件（带请求编号），不再共用一个 chat_command.praat。
+        delivered = Path(fake.call_args.args[1])
+        self.assertEqual(delivered.parent, chat.runtime_dir() / "commands")
+        self.assertRegex(delivered.name, r"^chat_command_[0-9a-f]{12}\.praat$")
+        # 脚本开头是这次请求的编号（完成标记靠它认身份）。
+        self.assertIn(f"# praat-ai 请求 {chat.request_id_from_path(delivered)}", delivered.read_text(encoding="utf-8"))
         # 超时后要把排队中的消息换成空脚本，免得它去执行下一条指令。
         self.cancelled.assert_called_once()
 

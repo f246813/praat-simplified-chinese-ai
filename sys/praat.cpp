@@ -1546,6 +1546,18 @@ void praat_dontUsePictureWindow () { praatP.dontUsePictureWindow = true; }
 		} catch (MelderError) {
 			Melder_flushError (Melder_upperCaseAppName(), U": message not completely handled.");
 		}
+		/*
+			对话窗口的脚本跑完了：把当前对象列表重新写给它（PraatAiControl 的
+			refreshChatContext）。
+
+			为什么必须在这里补一刀（2026-09-20 实测）：对象列表文件以前只在
+			「对象被创建/删除」或者用户在列表里改选中时才会重写，而 app 发过来的
+			脚本常常两条都不占（例如只写文件的空脚本）。于是对话窗口会拿着**上一个
+			Praat 实例**留下的旧列表去规划（例如挑一个早就不存在的 9 号对象），
+			Praat 弹一句英文错误框还挡住后面的消息。这里在每条 app 消息之后都重新
+			导出一次，前端的对象列表就跟正在跑的 Praat 对得上了。
+		*/
+		PraatAiControl_refreshChatContext (true);   // 强制写一次：前端的规划完全依赖这份列表
 		return 0;
 	}
 	#if 0

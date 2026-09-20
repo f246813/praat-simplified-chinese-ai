@@ -18,12 +18,18 @@
 脚本照跑（``cb_userMessage()`` → ``praat_executeScript_noGUI()``），窗口一个都不动，
 还省掉一次 Praat 进程启动。
 
-注意两件事：
+注意三件事：
 
 - 消息文件是**全局唯一**的（Praat 只认 ``Message.txt`` 这个文件名），所以同一时刻
   只能有一条指令在飞；前端逐条同步执行正好满足这个前提。超时之后必须调用
   :func:`cancel_pending()`——否则 Praat 稍后腾出消息循环时，会把下一条指令的
   消息文件当成这条旧消息再执行一遍。
+- 更糟的是**同一个消息会被执行多次**：``cb_userMessage()`` 每收到一条 ``WM_APP``
+  都重新读一次 ``Message.txt``（``sys/praat.cpp``），而
+  ``praat_executeScript_noGUI()`` 执行完并不删它。所以排队中的两条 ``WM_APP``
+  会让同一个脚本跑两遍（「删除」就删两次）。所以投递的消息开头自己先把
+  ``Message.txt`` 换成空操作（:func:`consume_statement()`），残留消息醒来时只会
+  读到一个什么都不做的脚本。
 - 消息文件里那行 ``# --FULL-TRUST`` 不能省：脚本要写 ``runtime/`` 和用户指定路径
   之外的文件（``appendFileLine`` / ``Save as WAV file``），全靠它拿到完全信任。
 """
@@ -62,6 +68,9 @@ PRAAT_OBJECTS_TITLE = "Praat Objects"
 
 #: 消息文件开头的完全信任标记；``praat_executeScript_noGUI()`` 靠这一行判断。
 FULL_TRUST_MARKER = "\n# --FULL-TRUST\n"
+
+#: 自消费之后写回消息文件的内容（除了注释什么都不做）。
+CONSUMED_NOTE = "# praat-ai: 这条消息已经消费过"
 
 
 @dataclass(frozen=True)
@@ -139,22 +148,59 @@ def _handle_value(handle) -> int:
     return int(value or 0)
 
 
-def build_message(directory: Path, script: Path) -> str:
+def consume_statement(message_path: Path | None = None) -> str:
+    """返回「把消息文件换成空操作」的那几句 Praat 语句（消息自消费）。
+
+    为什么必须这么做：``sys/praat.cpp`` 的 ``cb_userMessage()`` 每收到一条
+    ``WM_APP`` 都会 ``MelderFile_exists`` + 重新 ``praat_executeScript_noGUI()``
+    那个 ``Message.txt``，而 ``praat_executeScript_noGUI()``（``sys/praat_script.cpp``）
+    读完就执行、**不删**消息文件。于是排队中的每条 ``WM_APP`` 都会拿*当前*的
+    文件内容跑一遍：上一条超时还排在队里时，它醒来执行的就是用户新发的指令，
+    接着那条指令自己的 ``WM_APP`` 又执行一次——「删除」执行两遍就是这么来的。
+
+    投递的消息**第一句**就把文件覆写成空操作，队列里剩下的消息醒来只会读到这个
+    占位内容。用 ``writeFileLine`` 覆写（会新建/截断），再用 ``appendFileLine``
+    补两行，正好和 :func:`noop_message()` 的内容一致；文件位置在脚本目录之外，
+    所以依赖消息里那行 ``# --FULL-TRUST``。
+
+    找不到消息文件位置（非 Windows）时返回空字符串，调用方原样投递。
+    """
+
+    path = message_path or message_file_path()
+    if path is None:
+        return ""
+    target = _quote(str(path))
+    return (
+        f'writeFileLine: "{target}", ""\n'
+        f'appendFileLine: "{target}", "# --FULL-TRUST"\n'
+        f'appendFileLine: "{target}", "{CONSUMED_NOTE}"\n'
+    )
+
+
+def build_message(directory: Path, script: Path, *, consume: bool = True) -> str:
     """拼出 ``--send`` 会写进``Message.txt`` 的那段文本。
 
     真实内容长这样（实测 ``%APPDATA%\\Praat\\Message.txt``）::
 
         <空行>
         # --FULL-TRUST
+        writeFileLine: "…/Message.txt", ""
+        appendFileLine: "…/Message.txt", "# --FULL-TRUST"
+        appendFileLine: "…/Message.txt", "# praat-ai: 这条消息已经消费过"
         setWorkingDirectory: "D:/Praat-work/praat-simplified-chinese/ai"
         runScript: "D:/…/ai/runtime/chat_command.praat"
+
+    前三行是 :func:`consume_statement()` 加的自消费语句（见那里的说明）；
+    ``consume=False`` 时和 ``--send`` 自己写的内容一致，只用于对照和排障。
 
     Praat 读文件时会先 ``Melder_killReturns_inplace()`` 去掉 ``\\r``，所以
     ``\\n`` / ``\\r\\n`` 都行，这里统一写 ``\\n``。
     """
 
+    preamble = consume_statement() if consume else ""
     return (
         FULL_TRUST_MARKER
+        + preamble
         + f'setWorkingDirectory: "{_quote(str(directory))}"\n'
         + f'runScript: "{_quote(str(script))}"\n'
     )

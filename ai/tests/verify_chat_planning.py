@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from praat_ai import tools   # noqa: E402
+from praat_ai import chat, tools   # noqa: E402
 from praat_ai.config import load_config   # noqa: E402
 from praat_ai.qwen import QwenClient   # noqa: E402
 
@@ -136,6 +136,8 @@ def main() -> int:
                     CONTEXT,
                     [],
                     tool_catalog=tools.catalog_text(),
+                    tool_schemas=tools.tool_schemas(),
+                    tool_labels=tools.tool_labels(),
                     result_path="@RESULT@",
                     state_path="@STATE@",
                 )
@@ -143,7 +145,9 @@ def main() -> int:
                 print(f"FAIL 规划失败：{text} -> {error}")
                 failures += 1
                 continue
-            tool_name = str(plan.get("tool", "")).strip()
+            actions = tools.plan_actions(plan)
+            tool_names = "/".join(action["tool"] for action in actions)
+            tool_name = actions[0]["tool"] if actions else ""
             custom = str(plan.get("script", "") or "")
             if not tool_name and custom.strip():
                 tool_name = tools.CUSTOM_SCRIPT_TOOL
@@ -167,23 +171,27 @@ def main() -> int:
                 directory / f"{name}.state",
             )
             try:
-                script = tools.render(
-                    tool_name,
-                    plan.get("arguments") or {},
-                    context,
-                    custom_script=custom,
-                )
+                # 一条请求可能规划出多个动作（例如「0.25 秒和 0.75 秒的基频」会给两个
+                # pitch 调用），按顺序拼成同一条脚本，和对话窗口里的做法完全一致。
+                parts: list[str] = []
+                for action in actions:
+                    part, note = chat.render_action(action, context)
+                    if note:
+                        print(f"     ! {note}")
+                    parts.append(part)
+                script = "\n".join(parts)
             except tools.ToolError as error:
-                print(f"WARN {text} -> {tool_name}：{error}")
+                print(f"WARN {text} -> {tool_names}：{error}")
                 warnings += 1
                 continue
             ok, detail = run_script(script, directory, name, GRID)
             elapsed = time.monotonic() - started
             tag = "OK  " if ok else "FAIL"
-            kind = "自编脚本" if tool_name == tools.CUSTOM_SCRIPT_TOOL else tool_name
+            kind = "自编脚本" if tool_name == tools.CUSTOM_SCRIPT_TOOL else tool_names
             print(f"{tag} {text}")
             print(
-                f"     {kind} {json.dumps(plan.get('arguments') or {}, ensure_ascii=False)} "
+                f"     {kind} "
+                f"{json.dumps([action['arguments'] for action in actions], ensure_ascii=False)} "
                 f"({elapsed:.1f}s) -> {detail[:160]}"
             )
             if not ok:
