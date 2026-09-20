@@ -296,8 +296,10 @@ Praat 里自己点运行。
   不会一直挂着（超时后前端会把排队中的消息换成空脚本，免得它稍后执行下一条指令）。
 - 同时开着多个 Praat 时，脚本只会交给最新打开的那个窗口；窗口检测到多实例会提醒你
   关掉多余的 Praat。
-- 脚本执行失败时 Praat 还是会自己弹出错误对话框（那些文字前端读不到），关掉它再
-  发一次即可。
+- 脚本执行失败时不会再弹 Praat 的错误对话框：Praat 把错误原文写进
+  `ai/runtime/chat_failure.txt` 和结果文件，对话窗口**立刻**把这一条标成失败并把
+  原文显示出来（以前会白等 25 秒，错误还看不到）。注意你自己的操作（不是对话窗口
+  发的指令）出错时，Praat 照旧弹它自己的错误框。
 - 排障用的退路：设环境变量 `PRAAT_AI_SEND_MODE=argv` 可以退回老的
   `Praat.exe --send`（会激活 Praat 的一个窗口，而且没有「自消费」保护，平时不要开）。
 - 修改 `ai/` 下的 Python 代码后，要重新从菜单启动前端，对话窗口才会加载新代码。
@@ -316,6 +318,7 @@ python ai/tests/verify_chat_live.py             # 对话窗口链路（会临时
 python ai/tests/verify_chat_no_popup.py         # 发指令时 Praat 的窗口一个都不许动（会收进任务栏）
 python ai/tests/verify_plugin.py                # 原生插件（B2）：菜单注册 + 33 个参数在真 Praat 里算一遍
 python ai/tests/verify_external_script.py       # 现成社区脚本当批处理跑（C3）：表单默认值、输出、报错
+python ai/tests/verify_error_dialog.py          # 脚本报错不弹模态框、不挡后面的消息（会临时起一个 GUI Praat）
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
 ```
 

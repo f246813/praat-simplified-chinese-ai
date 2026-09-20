@@ -127,6 +127,17 @@ def started_marker_path() -> Path:
     return runtime_dir() / "chat_started.txt"
 
 
+def failure_path() -> Path:
+    """Praat 报错时写下的原始错误（见 ``PraatAiControl_reportChatScriptFailure``）。
+
+    脚本自己报错时 Praat **不再弹模态错误框**（那会挡住后面所有消息），而是把错误
+    写到这里 + 结果文件里，并补一句完成标记；前端看到这个文件就把这一条当失败，
+    而不是把错误行当成正常结果。
+    """
+
+    return runtime_dir() / "chat_failure.txt"
+
+
 def script_preamble(request_id: str) -> str:
     """脚本开头那句「我这条指令开始执行了」。
 
@@ -236,7 +247,7 @@ def _clean_send_output(text: str) -> str:
 def _clear_result_files() -> None:
     """每次投递前清掉上一次的结果和完成标记（等待时只看新的那个）。"""
 
-    for path in (result_path(), state_path(), started_marker_path()):
+    for path in (result_path(), state_path(), started_marker_path(), failure_path()):
         try:
             path.unlink()
         except FileNotFoundError:
@@ -669,6 +680,9 @@ def _run_agent_turn(
                 outcome.results.extend(step.results)
             else:
                 outcome.failure = step.observation
+                # 失败也可能带回结果行：脚本在 Praat 里报错时，Praat 会把错误原文
+                # 写进结果文件（不再弹模态框），那一行要显示给用户看。
+                outcome.results.extend(step.results)
             if step.note:
                 outcome.notes.append(step.note)
             planner.observe(action, step.observation)
@@ -940,6 +954,18 @@ def _read_results() -> list[str]:
     except OSError:
         return []
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _read_failure() -> str:
+    """Praat 写下的脚本错误（没有就返回空串）。"""
+
+    path = failure_path()
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
 
 
 def praat_process_ids(executable: str = "Praat.exe") -> list[int] | None:
@@ -1414,6 +1440,11 @@ class ChatWindow:
             ok, output = _send_script(executable, script)
             if not ok:
                 return False, [], output or _blocked_reason()
+            failure = _read_failure()
+            if failure:
+                # 脚本在 Praat 里报错了：Praat 把原文写进了 chat_failure.txt
+                # （不再弹模态框），这里按「失败」回灌给模型。
+                return False, _read_results(), failure
             return True, _read_results(), ""
 
         # 本地工具（跑现成 .praat 脚本那种）需要：往开着的 Praat 投递脚本、
@@ -1484,9 +1515,10 @@ class ChatWindow:
                 return
 
             message = (
-                f"{outcome.reply}\n执行未完成：Praat 没有返回结果，"
-                "请查看 Praat 主窗口弹出的错误提示（脚本执行失败时 Praat "
-                "会自己弹出提示，对话窗口拿不到那些文字）。"
+                f"{outcome.reply}\n执行未完成：Praat 没有返回结果。"
+                "常见原因是 Praat 里还开着别的模态窗口（错误提示、正在播放的窗口、"
+                "没关掉的对话框）挡住了消息；关掉它们再发一次即可。"
+                "脚本自己报错时 Praat 会把原文写回这里（见下面那行）。"
             )
             if outcome.failure:
                 message += f"\n{outcome.failure}"

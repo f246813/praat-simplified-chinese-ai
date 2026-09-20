@@ -243,6 +243,33 @@ class ObservationTests(unittest.TestCase):
         self.assertIn("执行失败", observation)
         self.assertIn("对话框", outcome.reply)
 
+    def test_script_error_still_shows_its_result_line(self) -> None:
+        """脚本在 Praat 里报错时，Praat 写回来的那行错误说明要显示给用户。"""
+
+        client = FakeClient(
+            [
+                tool_call("pitch", {"time": 0.5}),
+                answer("这条脚本在 Praat 里报错了。"),
+            ]
+        )
+        execute = Recorder(
+            [
+                (
+                    False,
+                    ["脚本没跑完（Praat 报错，后面的消息不会被它挡住）：Unknown function"],
+                    'Unknown function «nosuchcommand» in 公式.',
+                )
+            ]
+        )
+        outcome = run(client, execute)
+
+        self.assertIn("nosuchcommand", outcome.failure)
+        self.assertEqual(
+            outcome.results,
+            ["脚本没跑完（Praat 报错，后面的消息不会被它挡住）：Unknown function"],
+        )
+        self.assertEqual([step.ok for step in outcome.steps], [False])
+
     def test_render_error_uses_the_model_script_and_notes_it(self) -> None:
         """工具拒绝、但模型同时给了脚本时，用脚本兜底并把这件事说给用户。"""
 

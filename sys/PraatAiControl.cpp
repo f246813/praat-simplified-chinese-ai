@@ -429,6 +429,67 @@ void PraatAiControl_refreshChatContext (bool force) {
 	writeChatContext (force);   // 默认内容没变化时不重复写盘
 }
 
+void PraatAiControl_reportChatScriptFailure (conststring32 message) {
+	/*
+		app 发来的脚本报错时走这里（sys/praat.cpp 的 cb_userMessage）。
+
+		为什么不直接 Melder_flushError：Windows 上那会开一个
+		MessageBox (MB_OK | MB_TOPMOST)，它自带消息循环。用户不点掉它，
+		对话窗口就看不到「这一条为什么失败」——只会一条条等到 25 秒超时，
+		而且错误原文（英文）还留在那个框里，前端读不到（guide.md §8.5、§8.9）。
+
+		这里改成：错误写进对话窗口读的结果文件（一行，前端直接显示），
+		再补一句完成标记，让前端立刻结束等待而不是干等超时。
+	*/
+	const std::filesystem::path runtimeDirectory = projectDirectoryPath() / "runtime";
+	std::error_code error;
+	std::filesystem::create_directories (runtimeDirectory, error);
+	autostring8 message8 = Melder_32to8 (message ? message : U"");
+	const std::string raw = message8 ? message8. get() : "";
+	/*
+		结果文件一行一条结果，所以把多行错误压成一行：去掉空行、每行首尾空白，
+		用 " | " 连起来（Praat 的错误里通常有「命令原文 / 第几行 / 脚本名」三段）。
+	*/
+	std::string text = "脚本没跑完（Praat 报错，后面的消息不会被它挡住）：";
+	std::istringstream lines (raw);
+	std::string line;
+	bool first = true;
+	while (std::getline (lines, line)) {
+		const size_t begin = line. find_first_not_of (" \t\r");
+		if (begin == std::string::npos)
+			continue;
+		const size_t end = line. find_last_not_of (" \t\r");
+		if (! first)
+			text += " | ";
+		text += line. substr (begin, end - begin + 1);
+		first = false;
+	}
+	if (first)   // 一个字符都没有（理论上不会）
+		text += "（Praat 没有给出错误文字）";
+	{
+		std::ofstream result (runtimeDirectory / "chat_result.tsv", std::ios::binary | std::ios::app);
+		if (result. is_open()) {
+			result << text << "\n";
+		}
+	}
+	{
+		std::ofstream state (runtimeDirectory / "chat_state.txt", std::ios::binary | std::ios::app);
+		if (state. is_open()) {
+			state << "done\n";
+		}
+	}
+	{
+		/*
+			另写一份原始错误给前端读：前端看到这个文件就知道「这一条是失败的」，
+			而不是把错误行当成正常结果（chat.py 的 _read_failure）。
+		*/
+		std::ofstream failure (runtimeDirectory / "chat_failure.txt", std::ios::binary | std::ios::trunc);
+		if (failure. is_open()) {
+			failure << raw << "\n";
+		}
+	}
+}
+
 void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end) {
 	if (Melder_batch)
 		return;

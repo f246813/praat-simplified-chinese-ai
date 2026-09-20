@@ -715,8 +715,11 @@ AI 纠音实验代码位于 `ai/`：
   `ai/tests/verify_chat_templates.py` 的 `custom_script-info-rewrite` 与
   `custom_script-literal-output` 用例在真 Praat 里守着这条。
 - 想退回老路径：`PRAAT_AI_SEND_MODE=argv`（只排障用，会激活 Praat 的子窗口）。
-- 脚本执行失败时 Praat 仍然会自己弹错误对话框（`Melder_flushError`），对话窗口
-  读不到那些文字，还是按「请查看 Praat 弹出的错误提示」提示用户。
+- 脚本执行失败时**不再**弹错误对话框（2026-09-21 改的，见 §8.9）：对话窗口用自己的
+  消息投递，Praat 那边的 `cb_userMessage()` 认出是前端发来的消息后把错误原文写进
+  `runtime/chat_failure.txt` + 结果文件，并补一句完成标记；前端立刻把这条当失败，
+  **一次都不再等 25 秒**，错误原文也显示在对话里。别人的 `--send` 消息保持原样
+  （照样弹对话框），免得把第三方脚本的报错吞掉。
 - 回归：`ai/tests/test_sendpraat.py`（纯单测）+
   `python ai/tests/verify_chat_no_popup.py`（真机，会先把 Praat 的窗口收进
   任务栏、置前一个 Tk 窗口，再检查窗口状态和前台焦点都没变；
@@ -839,3 +842,38 @@ Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COM
 社区脚本 + 无表单 + 脚本报错 + 认不出的字段类型），单测
 `ai/tests/test_external_script.py`（表单解析、参数、包装脚本、工具注册、对话窗口
 那条分流）。
+
+### 8.9 脚本报错的模态框会挡住后面所有消息
+
+用户报的现象：某条指令让脚本报错之后，**后面每条消息都要等满 25 秒才超时**，而且
+错误原文在哪都看不到。
+
+根因（先复现再改，`ai/tests/verify_error_dialog.py` 就是那个复现）：
+
+1. 前端投递的脚本由 Praat 的 `cb_userMessage()`（`sys/praat.cpp`）执行；
+2. 脚本报错时它 catch 里调 `Melder_flushError()`，Windows 上（`gui_error`，
+   `sys/Gui_messages.cpp`）开的是 `MessageBox (nullptr, msg, L"Message",
+   MB_OK | MB_TOPMOST | MB_ICONWARNING)`——**模态框 + 自带消息循环**；
+3. 于是：这一条脚本没写完成标记（脚本半路就停了）→ 前端只能等满 25 秒；错误原文
+   在那个人工点掉的框里，前端读不到。
+   复现实测：报错那一条 `chat_state.txt` 永远不出现（用例里是 `-1.00 秒`），
+   而 Praat 进程里多出一个 `#32770`（标题 `Message`）的模态窗口。
+
+修法（C++，两处）：
+
+- `sys/praat.cpp` 的 `cb_userMessage()`：先读一遍消息文件判断**这条是不是对话前端
+  发来的**（前端的消息一定带 `# praat-ai` 或引用 `runtime/commands/chat_command_*`，
+  见 `praat_ai/sendpraat.py`）。是前端发来的就**不弹框**：把错误拿进变量、
+  `Melder_clearError()`，再交给下一句去写文件；别的程序的 `--send` 消息保持原来的
+  弹框行为（否则会把别人的报错吞掉）。
+- `sys/PraatAiControl.cpp` 的 `PraatAiControl_reportChatScriptFailure()`：把错误
+  压成一行写进 `runtime/chat_result.tsv`（用户看得到），补一句 `done` 到
+  `chat_state.txt`（前端不再干等超时），再写一份原文到
+  `runtime/chat_failure.txt`。
+- 前端 `praat_ai/chat.py`：`failure_path()` / `_read_failure()`；投递完先看这个
+  文件，有就按「失败」回灌给模型（不是把错误行当结果），失败行照样显示给用户；
+  窗口里那句「对话窗口拿不到那些文字」的旧说明也一起改掉了。
+
+回归：`python ai/tests/verify_error_dialog.py`（真机，4 条：准备对象、报错后没有
+模态框、报错 0.x 秒内回到结果文件、报错之后的下一条指令不被挡）。改之前是
+2/4（报错那条永远等满 25 秒）。

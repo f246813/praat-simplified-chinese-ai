@@ -1541,11 +1541,47 @@ void praat_dontUsePictureWindow () { praatP.dontUsePictureWindow = true; }
 		if (! MelderFile_exists (& messageFile))
 			return 0;
 		autoPraatBackground background;
+		/*
+			这条消息是不是对话前端发来的？只有前端的消息才走「报错不弹框、写回结果
+			文件」那条路；别的程序用 --send 发脚本时保持 Praat 原来的行为（弹错误框），
+			免得把别人的报错吞掉。前端的消息一定带 "# praat-ai" 或引用
+			"runtime/commands/chat_command_*.praat"（见 praat_ai/sendpraat.py）。
+		*/
+		bool fromChatFrontend = false;
+		try {
+			autostring32 messageText = MelderFile_readText (& messageFile);
+			fromChatFrontend = messageText && (
+				str32str (messageText. get(), U"praat-ai") != nullptr ||
+				str32str (messageText. get(), U"chat_command_") != nullptr
+			);
+		} catch (MelderError) {
+			Melder_clearError ();   // 读不出来就按「不是前端发来的」处理
+		}
+		bool messageFailed = false;
+		autostring32 failureText;
 		try {
 			praat_executeScript_noGUI (& messageFile, true);   // trust all messages, because they are sent by other apps that have control
 		} catch (MelderError) {
-			Melder_flushError (Melder_upperCaseAppName(), U": message not completely handled.");
+			/*
+				app 发来的脚本报错时**不要** Melder_flushError（2026-09-21，用户报的
+				「Praat 弹错误框会卡住后续消息」）：Windows 上它开的是
+				MessageBox (MB_OK | MB_TOPMOST) + 自己的消息循环，用户不点掉它，
+				对话窗口就只能一条条等到超时，而且错误原文前端读不到。
+
+				改成把错误拿走（clearError 之后不会再弹），交给 PraatAiControl
+				写进对话窗口读的结果文件 + 完成标记：前端立刻拿到「这一条失败了，
+				原因是……」，用户也能在对话里看到那句英文原文。
+			*/
+			if (fromChatFrontend) {
+				failureText = Melder_dup (Melder_getError ());
+				Melder_clearError ();
+				messageFailed = true;
+			} else {
+				Melder_flushError (Melder_upperCaseAppName(), U": message not completely handled.");
+			}
 		}
+		if (messageFailed)
+			PraatAiControl_reportChatScriptFailure (failureText ? failureText. get() : U"");
 		/*
 			对话窗口的脚本跑完了：把当前对象列表重新写给它（PraatAiControl 的
 			refreshChatContext）。

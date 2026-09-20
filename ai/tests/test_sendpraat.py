@@ -38,6 +38,36 @@ def make_window(handle: int, pid: int, title: str, class_name: str = "PraatChild
 
 
 class MessageTests(unittest.TestCase):
+    def test_failure_file_is_part_of_the_delivery_contract(self) -> None:
+        """Praat 报错时写下的 chat_failure.txt：每次投递前要清掉、能读回来。"""
+
+        with tempfile.TemporaryDirectory() as raw:
+            runtime = Path(raw)
+            with patch.object(chat, "runtime_dir", return_value=runtime):
+                failure = chat.failure_path()
+                self.assertEqual(failure.name, "chat_failure.txt")
+                self.assertEqual(chat._read_failure(), "")
+                failure.write_text("Unknown function «nosuchcommand»", encoding="utf-8")
+                self.assertIn("nosuchcommand", chat._read_failure())
+                chat._clear_result_files()
+                self.assertEqual(chat._read_failure(), "")
+                self.assertFalse(chat.state_path().is_file())
+
+    def test_the_message_marks_itself_as_the_frontends(self) -> None:
+        """Praat 那边靠这两个标记认出「是对话前端发来的」（决定要不要弹错误框）。
+
+        `sys/praat.cpp` 的 `cb_userMessage()`：是前端发来的脚本报错时**不弹模态框**
+        （那会挡住后面所有消息），改成把错误写回 runtime/。别人的 `--send` 消息
+        保持原来的弹框行为，所以这两个标记不能改。
+        """
+
+        message = sendpraat.build_message(
+            Path("D:/ai"),
+            Path("D:/ai/runtime/commands/chat_command_abc123.praat"),
+        )
+        self.assertIn("chat_command_", message)
+        self.assertIn("praat-ai", sendpraat.noop_message())
+
     def test_message_starts_with_the_trust_marker_and_the_script(self) -> None:
         message = sendpraat.build_message(
             Path("D:/Praat-work/praat-simplified-chinese/ai"),
