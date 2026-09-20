@@ -88,6 +88,11 @@ foned/FunctionEditor.cpp:2060      FunctionEditor_selectionMarksChanged()
 - **脚本里的 Info 输出命令也要挡住**：`tools.neutralize_info_commands()` 把
   `appendInfoLine` / `writeInfoLine` 改写成 `appendFileLine`（写结果文件），
   `print*` / `echo` / `clearinfo` 改成注释。模型写自定义脚本时会随手用这些命令。
+- **C++ 侧异常不许穿出窗口过程**：AI 菜单回调以前只 `catch (MelderError)`，
+  于是 `praat_runPythonScriptFile()` 里的 `std::filesystem::filesystem_error`
+  会让 libc++abi 直接 `std::terminate` → `abort()`，Praat 无提示闪退。
+  现在导出路径走 `utf8_to_path()`、两个运行器入口有 `guardPythonRunner()` 兜底、
+  菜单回调走 `runAiMenuAction()`。真机回归：`ai/tests/verify_ai_menu_no_crash.py`。
 - `To Harmonicity (cc)` 的 periodsPerWindow 给 0.5 会让 Praat 7.0.02 在
   `Sound_to_Pitch.cpp` 直接断言崩溃，只能 ≥ 1。
 - `minPitch 250`（4 ms 窗口）在 220 Hz 上会判成「全是噪声」，窗口按 1/minPitch 走。

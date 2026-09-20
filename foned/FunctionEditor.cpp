@@ -22,6 +22,7 @@
 #include "GuiP.h"
 #include "FunctionArea.h"
 #include <algorithm>
+#include <exception>
 #include "PraatAiControl.h"
 
 Thing_implement_pureVirtual (FunctionEditor, Editor, 0);
@@ -85,62 +86,85 @@ namespace {
 		return baseFlags | (selected ? GuiMenu_TOGGLE_ON : 0);
 	}
 
+	/*
+		AI 菜单回调是从窗口过程里进来的：只要有一个非 MelderError 的 C++ 异常逃出去
+		（典型是 AI 前端那条链上的 std::filesystem::filesystem_error），libc++abi 就会
+		调 std::terminate → abort()，Praat 直接闪退，用户什么都看不到。
+		2026-09-20 实测：选中名为「あなた」的对象时点「启动前端」就是这样死的
+		（Praat.exe.18460.dmp）。所以这里给每个菜单动作兜底：标准库异常也弹对话框。
+	*/
+	template <typename Action>
+	static void runAiMenuAction (conststring32 actionName, Action &&action) {
+		try {
+			action ();
+		} catch (MelderError) {
+			Melder_flushError ();
+		} catch (const std::exception &error) {
+			Melder_flushError (
+				praat_translate (U"AI 前端操作失败"), U"（", actionName, U"）：",
+				Melder_peek8to32_u (error. what())
+			);
+		} catch (...) {
+			Melder_flushError (
+				praat_translate (U"AI 前端操作失败"), U"（", actionName, U"）：未知的内部错误。"
+			);
+		}
+	}
+
 	static void aiAlignmentAutoCallback (Thing boss, GuiMenuItemEvent /* event */) {
 		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
-		PraatAiControl_setAlignmentMode (U"auto");
-		updateAiToolbarStatus (me);
+		runAiMenuAction (praat_translate (U"Auto alignment"), [me] {
+			PraatAiControl_setAlignmentMode (U"auto");
+			updateAiToolbarStatus (me);
+		});
 	}
 
 	static void aiAlignmentMfaCallback (Thing boss, GuiMenuItemEvent /* event */) {
 		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
-		PraatAiControl_setAlignmentMode (U"mfa");
-		updateAiToolbarStatus (me);
+		runAiMenuAction (praat_translate (U"MFA alignment"), [me] {
+			PraatAiControl_setAlignmentMode (U"mfa");
+			updateAiToolbarStatus (me);
+		});
 	}
 
 	static void aiAlignmentWav2vec2Callback (Thing boss, GuiMenuItemEvent /* event */) {
 		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
-		PraatAiControl_setAlignmentMode (U"wav2vec2");
-		updateAiToolbarStatus (me);
+		runAiMenuAction (praat_translate (U"wav2vec2 alignment"), [me] {
+			PraatAiControl_setAlignmentMode (U"wav2vec2");
+			updateAiToolbarStatus (me);
+		});
 	}
 
 	static void aiFrontendStartCallback (Thing boss, GuiMenuItemEvent /* event */) {
 		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
-		try {
+		runAiMenuAction (praat_translate (U"Start frontend"), [me] {
 			PraatAiControl_startFrontend();
 			updateAiToolbarStatus (me);
-		} catch (MelderError) {
-			Melder_flushError ();
-		}
+		});
 	}
 
 	static void aiFrontendStopCallback (Thing boss, GuiMenuItemEvent /* event */) {
 		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
-		try {
+		runAiMenuAction (praat_translate (U"Stop frontend"), [me] {
 			PraatAiControl_stopFrontend();
 			updateAiToolbarStatus (me);
-		} catch (MelderError) {
-			Melder_flushError ();
-		}
+		});
 	}
 
 	static void aiFrontendAddModelCallback (Thing boss, GuiMenuItemEvent /* event */) {
 		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
-		try {
+		runAiMenuAction (praat_translate (U"Add model path"), [me] {
 			PraatAiControl_chooseFrontendModel();
 			updateAiToolbarStatus (me);
-		} catch (MelderError) {
-			Melder_flushError ();
-		}
+		});
 	}
 
 	static void aiRunCallback (Thing boss, GuiMenuItemEvent /* event */) {
 		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
-		try {
+		runAiMenuAction (praat_translate (U"Run AI tutor"), [me] {
 			PraatAiControl_runAnalysis ();
 			updateAiToolbarStatus (me);
-		} catch (MelderError) {
-			Melder_flushError ();
-		}
+		});
 	}
 
 	void aiStatusTimerCallback (XtPointer closure, XtIntervalId * /* id */) {

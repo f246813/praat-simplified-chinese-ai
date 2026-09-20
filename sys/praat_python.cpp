@@ -19,6 +19,7 @@
 #include <string>
 #include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <sstream>
 #include <iomanip>
 
@@ -644,7 +645,7 @@ static void ensure_helper_module (const std::filesystem::path& tempDir) {
 	}
 }
 
-void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWorkingDir) {
+static void praat_runPythonScriptFile_impl (conststring32 filePath, conststring32 optionalWorkingDir) {
 	if (! filePath || filePath [0] == U'\0')
 		Melder_throw (U"No Python script file specified.");
 
@@ -703,7 +704,19 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 			autoMelderString objFileName;
 			MelderString_append (& objFileName, iobj, U"_", sanitizedBaseName, ext);
 			autostring8 objFileName8 = Melder_32to8 (objFileName.string);
-			std::filesystem::path objPath = tempDir / (objFileName8 ? objFileName8.get() : "obj");
+			/*
+				对象名一律按 UTF-8 走 utf8_to_path()。
+
+				以前这里是 `tempDir / objFileName8.get()`：std::filesystem::path 收窄
+				字符串时按系统 ANSI 代码页解释（中文 Windows 上是 936/GBK），于是
+					- 名字是「思い出す」时变成乱码文件名（1_Sound_鎬濄亜鍑恒仚.wav）；
+					- 名字是「あなた」这类 UTF-8 字节不是合法 GBK 序列的名字时，
+					  libc++ 直接抛 std::filesystem::filesystem_error。
+				两个后果都实测过：后者会让「启动前端」带着未捕获异常逃出窗口过程，
+				libc++abi 调 std::terminate → abort()，Praat 无提示闪退
+				（2026-09-20，Praat.exe.18460.dmp / .2312.dmp / .22172.dmp）。
+			*/
+			std::filesystem::path objPath = tempDir / utf8_to_path (objFileName8 ? objFileName8.get() : "obj");
 			std::string objPathStr = path_to_utf8 (objPath);
 
 			if (isSound) {
@@ -1054,7 +1067,7 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 	} catch (...) {}
 }
 
-void praat_runPythonScriptText (conststring32 scriptText, conststring32 optionalScriptDirectory) {
+static void praat_runPythonScriptText_impl (conststring32 scriptText, conststring32 optionalScriptDirectory) {
 	if (! scriptText || scriptText [0] == U'\0')
 		Melder_throw (U"Python script text is empty.");
 
@@ -1074,7 +1087,42 @@ void praat_runPythonScriptText (conststring32 scriptText, conststring32 optional
 
 	std::string scriptPathStr = path_to_utf8 (scriptPath);
 	autostring32 scriptPath32 = Melder_8to32_e (scriptPathStr.c_str());
-	praat_runPythonScriptFile (scriptPath32.get(), optionalScriptDirectory);
+	praat_runPythonScriptFile (scriptPath32.get(), optionalScriptDirectory);   // 走带兜底的那一层
+}
+
+/*
+	Python 运行器是直接从窗口过程里被调进来的（AI 前端菜单 aiFrontendStartCallback 等、
+	Python 脚本窗口的「运行」按钮）。任何 C++ 异常一旦逃出窗口过程，libc++abi 就会调
+	std::terminate → abort()，Praat 会**没有任何提示地闪退**——菜单回调只 catch
+	MelderError，抓不到 std::filesystem::filesystem_error 这类标准库异常。
+	2026-09-20 实测：选中名为「あなた」的对象、点「启动前端」，就是死在这条路上
+	（Praat.exe.18460.dmp，praat_context.json 停在 28 字节）。
+	所以这两个入口统一兜一层：标准库异常转成 Melder 错误，用户能看到对话框。
+*/
+template <typename Callback>
+static void guardPythonRunner (conststring32 action, Callback &&callback) {
+	try {
+		callback ();
+	} catch (MelderError) {
+		throw;   // Melder 错误原样交给上层（菜单回调会弹对话框）
+	} catch (const std::exception &error) {
+		Melder_throw (U"运行 Python 脚本时发生内部错误（", action, U"）：",
+				Melder_peek8to32_u (error. what()));
+	} catch (...) {
+		Melder_throw (U"运行 Python 脚本时发生未知的内部错误（", action, U"）。");
+	}
+}
+
+void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWorkingDir) {
+	guardPythonRunner (U"运行脚本文件", [&] () {
+		praat_runPythonScriptFile_impl (filePath, optionalWorkingDir);
+	});
+}
+
+void praat_runPythonScriptText (conststring32 scriptText, conststring32 optionalScriptDirectory) {
+	guardPythonRunner (U"运行脚本内容", [&] () {
+		praat_runPythonScriptText_impl (scriptText, optionalScriptDirectory);
+	});
 }
 
 autostring32 praat_python_generateAgentPrompt () {

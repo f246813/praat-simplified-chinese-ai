@@ -601,3 +601,50 @@ AI 纠音实验代码位于 `ai/`：
   `python ai/tests/verify_chat_no_popup.py`（真机，会先把 Praat 的窗口收进
   任务栏、置前一个 Tk 窗口，再检查窗口状态和前台焦点都没变；
   `--legacy` 是反证，用老路径跑同一条链路，应当看到窗口被拽出来/前台被抢）。
+
+### 8.6 点「启动前端」闪退：Python 运行器里的 std::filesystem 异常
+
+现象（2026-09-20 用户报的）：选中一个日文名字的声音，在编辑器里点
+「前端 → 启动前端」，Praat **没有任何提示就消失**（闪退）。
+
+根因链（真机复现 + 转储分析）：
+
+1. `PraatAiControl_startFrontend()` → `runControlCommand()` →
+   `praat_runPythonScriptFile()`（`sys/praat_python.cpp`）会先把**选中的对象**
+   导出到 `%TEMP%\praat_py_workspace_<pid>\`，文件名是 `<id>_<类名>_<对象名>.wav`；
+2. 旧代码是 `std::filesystem::path objPath = tempDir / objFileName8.get();`：
+   `std::filesystem::path` 收窄字符串按**系统 ANSI 代码页**解释（中文 Windows 是
+   936/GBK）。UTF-8 字节恰好是合法 GBK 序列时只是文件名变乱码
+   （实测 `1_Sound_鎬濄亜鍑恒仚.wav`）；不是合法 GBK 序列时（例如 `あなた`、
+   `音频`、`ソ`、`能`）libc++ 直接抛 `std::filesystem::filesystem_error`；
+3. 菜单回调只 `catch (MelderError)`，而 `runControlCommand()` 的 `catch (...)`
+   只是 `throw;`，于是异常穿出窗口过程 → libc++abi `std::terminate` → `abort()`
+   （崩溃地址就是 `ucrtbase!abort+0x46` 的 `int 0x29`）→ 进程当场结束，
+   连错误对话框都来不及弹。
+
+怎么认这条崩溃（排查下次再遇到时照这个走）：
+
+- `%LOCALAPPDATA%\CrashDumps\Praat.exe.<pid>.dmp` 在，事件日志 `Application Error`
+  写的是 `ucrtbase.dll` / `0xc0000409`（WER 里的 BEX64）；
+- 用 `.pdata` 展开转储里崩溃线程（主 UI 线程）的栈，会看到
+  `ucrtbase!abort` ← libc++abi 的 terminate 帧 ← `__cxa_rethrow`（`runControlCommand`
+  的 `catch (...)` 重新抛出）← `PraatAiControl_startFrontend`；
+- 栈顶指针指向 `NSt3__14__fs10filesystem16filesystem_errorE`（类型名在
+  Praat.exe 的 .rdata 里），也就是「未捕获的 filesystem_error」；
+- `%TEMP%\praat_py_workspace_<pid>\praat_context.json` 停在 28 字节
+  （只写出 `{ "selected_objects": [`, 导出对象时就断了），目录里没有导出的 wav。
+
+修法（三处，缺一不可）：
+
+- `sys/praat_python.cpp`：导出路径改用现成的 `utf8_to_path()`（按 CP_UTF8 转宽
+  字符），非 ASCII 对象名不再抛异常，临时文件名也不再是乱码；
+- 同一文件：`praat_runPythonScriptFile()` / `praat_runPythonScriptText()` 拆成
+  `*_impl()` + 一层 `guardPythonRunner()`，标准库异常统一转成 `Melder_throw`
+  （用户看到对话框，而不是进程消失）；
+- `foned/FunctionEditor.cpp`：AI 菜单回调统一走 `runAiMenuAction()`，除了
+  `MelderError` 还接住 `std::exception` 和 `...`——**任何异常都不允许穿出窗口过程**。
+
+回归：`python ai/tests/verify_ai_menu_no_crash.py`（真机、不用鼠标：开一个临时
+Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COMMAND` 触发
+「启动前端」的真实回调 → 检查进程还在、没有新转储、`praat_context.json` 完整、
+导出文件名不是乱码）。修这条 bug 之前，同一个流程必崩并留下转储。
