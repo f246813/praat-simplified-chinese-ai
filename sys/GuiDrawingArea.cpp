@@ -720,9 +720,10 @@ GuiDrawingArea GuiDrawingArea_create (GuiForm parent, int left, int right, int t
 	#elif motif
 		my d_widget = _Gui_initializeWidget (xmDrawingAreaWidgetClass, parent -> d_widget, U"drawingArea");
 		_GuiObject_setUserData (my d_widget, me.get());
-		my d_widget -> window = CreateWindowEx (0, Melder_peek32toW (_GuiWin_getDrawingAreaClassName ()), L"drawingArea",
+		SetLastError (0);
+		my d_widget -> window = CreateWindowExW (0, _GuiWin_getDrawingAreaClassNameW (), L"drawingArea",
 			WS_CHILD | WS_BORDER | WS_CLIPSIBLINGS,
-			my d_widget -> x, my d_widget -> y, my d_widget -> width, my d_widget -> height, my d_widget -> parent -> window, nullptr, theGui.instance, nullptr);
+			my d_widget -> x, my d_widget -> y, my d_widget -> width, my d_widget -> height, my d_widget -> parent -> window, nullptr, GetModuleHandleW (nullptr), nullptr);
 		SetWindowLongPtr (my d_widget -> window, GWLP_USERDATA, (LONG_PTR) my d_widget);
 		my v_positionInForm (my d_widget, left, right, top, bottom, parent);
 		if (! my d_widget -> shell -> textFocus)
@@ -802,9 +803,9 @@ GuiDrawingArea GuiDrawingArea_create (GuiScrolledWindow parent, int width, int h
 	#elif motif
 		my d_widget = _Gui_initializeWidget (xmDrawingAreaWidgetClass, parent -> d_widget, U"drawingArea");
 		_GuiObject_setUserData (my d_widget, me.get());
-		my d_widget -> window = CreateWindowEx (0, Melder_peek32toW (_GuiWin_getDrawingAreaClassName ()), L"drawingArea",
+		my d_widget -> window = CreateWindowExW (0, _GuiWin_getDrawingAreaClassNameW (), L"drawingArea",
 			WS_CHILD | WS_BORDER | WS_CLIPSIBLINGS,
-			0, 0, my d_widget -> width, my d_widget -> height, my d_widget -> parent -> window, nullptr, theGui.instance, nullptr);
+			0, 0, my d_widget -> width, my d_widget -> height, my d_widget -> parent -> window, nullptr, GetModuleHandleW (nullptr), nullptr);
 		SetWindowLongPtr (my d_widget -> window, GWLP_USERDATA, (LONG_PTR) my d_widget);
 		my v_positionInScrolledWindow (my d_widget, width, height, parent);
 		if (! my d_widget -> shell -> textFocus)

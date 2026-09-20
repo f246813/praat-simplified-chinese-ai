@@ -134,6 +134,11 @@ Thing_define (FunctionEditor, Editor) {
 	GuiScrollBar scrollBar;
 	GuiCheckButton groupButton;
 	GuiObject bottomArea;
+	GuiLabel aiFrontendStatusLabel, aiVramStatusLabel;
+	GuiButton aiStartButton, aiStopButton, aiRunButton;
+	GuiRadioButton aiAutoAlignmentButton, aiMfaAlignmentButton, aiWav2vec2AlignmentButton;
+	integer aiStatusTimer = 0;
+	bool aiVramIsLow = false;
 	bool group, enableUpdates;
 	int nrect;
 	struct { double left, right, bottom, top; } rect [8];
@@ -187,6 +192,7 @@ Thing_define (FunctionEditor, Editor) {
 				dispatches to a function area.
 		*/
 	virtual bool v_hasSelectionViewer () { return false; }
+	virtual bool v_hasAiToolbar () { return false; }
 	virtual void v_drawSelectionViewer () { }
 	virtual void v_drawRealTimeSelectionViewer (double /* time */) { }
 	virtual conststring32 v_domainName () { return U"time"; }

@@ -44,6 +44,7 @@
 #include "NotebookEditor.h"
 #include "Strings_.h"
 #include "praat_python.h"
+#include "PraatAiControl.h"
 #include "../kar/UnicodeData.h"
 #include "InfoEditor.h"
 #include "praat_translate.h"
@@ -1665,6 +1666,7 @@ static void installPraatShellPreferences () {
 		Preferences_addInt (U"Praat.dpiMode", & g_dpi_mode, 0);
 	#endif
 	praat_python_initPreferences ();
+	PraatAiControl_initPreferences ();
 }
 
 extern "C" void praatlib_init () {

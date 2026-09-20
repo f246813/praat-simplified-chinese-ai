@@ -44,6 +44,7 @@ __pycache__/
 .pytest_cache/
 ai/logs/
 ai/ai_config.json
+ai/runtime/
 
 # Local zip packages/releases
 *.zip

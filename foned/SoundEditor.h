@@ -34,6 +34,7 @@ Thing_define (SoundEditor, FunctionEditor) {
 	}
 	void v_createMenuItems_help (EditorMenu menu)
 		override;
+	bool v_hasAiToolbar () override { return true; }
 	void v_distributeAreas () override {
 		if (our soundAnalysisArea() -> hasContentToShow ()) {
 			our soundArea() -> setGlobalYRange_fraction (0.5, 1.0);

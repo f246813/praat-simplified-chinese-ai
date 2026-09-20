@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -98,7 +99,13 @@ def run_tutor(
     request_path: str | Path | None = None,
     user_text: str | None = None,
     request: AnalysisRequest | None = None,
+    progress: Callable[[float, str], None] | None = None,
 ) -> TutorOutputs:
+    def report(fraction: float, message: str) -> None:
+        if progress:
+            progress(fraction, message)
+
+    report(0.08, "读取请求和 Praat 选中对象")
     config = load_config(config_path)
     bridge = PraatBridge.from_praat()
     if request is None:
@@ -130,11 +137,14 @@ def run_tutor(
     try:
         if request.qwen_explain or request.qwen_vision:
             try:
+                report(0.18, "启动前端模型")
                 server_started = server.ensure_started()
             except QwenServerError as error:
                 server_error = str(error)
 
+        report(0.32, "音素对齐与声学特征提取")
         result = analyze_pronunciation(request, config.alignment)
+        report(0.68, "生成偏差评分")
         output_dir = bridge.output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         prefix = request.output_prefix
@@ -146,6 +156,7 @@ def run_tutor(
             client = QwenClient(config.qwen)
             if client.available():
                 try:
+                    report(0.76, "生成前端解释")
                     result.explanation = client.explain_errors(
                         request_payload,
                         result.to_dict(),
@@ -155,6 +166,7 @@ def run_tutor(
             elif server_error:
                 result.explanation = f"Qwen 解释不可用：{server_error}"
 
+        report(0.86, "生成 TextGrid、JSON 和叠加图")
         write_textgrid(result, textgrid_path)
         write_json(result, json_path)
         rendered = write_overlay_png(result, overlay_path)
@@ -163,6 +175,7 @@ def run_tutor(
             client = QwenClient(config.qwen)
             if client.available():
                 try:
+                    report(0.94, "生成视觉解释")
                     vision_explanation = client.vision_explain(
                         overlay_path,
                         request_payload,
@@ -176,6 +189,7 @@ def run_tutor(
                 except QwenError:
                     pass
 
+        report(1.0, "分析完成")
         return TutorOutputs(
             json_path=json_path,
             textgrid_path=textgrid_path,

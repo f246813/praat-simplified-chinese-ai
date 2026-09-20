@@ -114,7 +114,10 @@ void _Gui_callCallbacks (GuiObject w, XtCallbackList *callbacks, XtPointer call)
 #define MAXIMUM_NUMBER_OF_MENUS  4000
 static GuiObject theMenus [1+MAXIMUM_NUMBER_OF_MENUS];   // we can freely use and reuse these menu ids
 static char32 theWindowClassName [100], theDrawingAreaClassName [100], theApplicationClassName [100];
+static wchar_t theWindowClassNameW [100], theApplicationClassNameW [100];
+static const wchar_t theDrawingAreaClassNameW [] = L"PraatDrawingArea1 Praat";
 char32 * _GuiWin_getDrawingAreaClassName () { return theDrawingAreaClassName; }
+conststringW _GuiWin_getDrawingAreaClassNameW () { return theDrawingAreaClassNameW; }
 static int (*theUserMessageCallback) ();
 #define MINIMUM_MENU_ITEM_ID  (MAXIMUM_NUMBER_OF_MENUS + 1)
 #define MAXIMUM_MENU_ITEM_ID  32767
@@ -1827,7 +1830,7 @@ void XtRemoveWorkProc (XtWorkProcId id) {
 	theNumberOfWorkProcs --;
 }
 
-XtIntervalId XtAddTimeOut (double interval, XtTimerCallbackProc proc, XtPointer closure) {
+XtIntervalId XtAddTimeOut (uinteger interval, XtTimerCallbackProc proc, XtPointer closure) {
 	integer i = 1;
 	while (i < 10 && theTimeOutProcs [i])
 		i ++;
@@ -2258,6 +2261,8 @@ void * GuiWin_initialize1 (conststring32 name)
 }
 void GuiWin_initialize2 (unsigned int argc, char **argv)
 {
+	if (! theGui.instance)
+		theGui.instance = GetModuleHandleW (nullptr);
 	WNDCLASSEX windowClass;
 	windowClass. cbSize = sizeof (WNDCLASSEX);
 	windowClass. style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS |
@@ -2271,13 +2276,15 @@ void GuiWin_initialize2 (unsigned int argc, char **argv)
 	windowClass. hCursor = LoadCursor (NULL, IDC_ARROW);
 	windowClass. hbrBackground = theWinGuiBackgroundBrush ();
 	windowClass. lpszMenuName = NULL;
-	windowClass. lpszClassName = Melder_32toW (theWindowClassName).transfer();
+	wcsncpy (theWindowClassNameW, Melder_peek32toW (theWindowClassName), 99);
+	wcsncpy (theApplicationClassNameW, Melder_peek32toW (theApplicationClassName), 99);
+	windowClass. lpszClassName = theWindowClassNameW;
 	windowClass. hIconSm = NULL;
 	RegisterClassEx (& windowClass);
 	windowClass. hbrBackground = theWinGuiBackgroundBrush ();
-	windowClass. lpszClassName = Melder_32toW (theDrawingAreaClassName).transfer();
+	windowClass. lpszClassName = theDrawingAreaClassNameW;
 	RegisterClassEx (& windowClass);
-	windowClass. lpszClassName = Melder_32toW (theApplicationClassName).transfer();
+	windowClass. lpszClassName = theApplicationClassNameW;
 	RegisterClassEx (& windowClass);
 	INITCOMMONCONTROLSEX icex;
 	icex.dwSize = sizeof (INITCOMMONCONTROLSEX);
