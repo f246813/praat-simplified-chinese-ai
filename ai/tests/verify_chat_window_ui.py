@@ -4,22 +4,79 @@
 
     python ai/tests/verify_chat_window_ui.py                  # 只建窗口、跑一轮事件循环
     python ai/tests/verify_chat_window_ui.py --switch-presets # 再走一遍「应用预设」（会重启模型服务）
+    python ai/tests/verify_chat_window_ui.py --ask            # 在真窗口里发一条请求并等结果
 
 第一种用来确认改过布局、下拉框或状态栏之后窗口没在初始化时抛异常；第二种会真的点
 一次「应用预设」，验证窗口 → control.apply_preset → 重启 llama-server → 刷新状态
-这条链路，跑完会把预设切回原来的那个。
+这条链路（跑完切回原来的预设）；第三种会走完「输入 → 规划 → 送脚本 → 读结果 →
+上屏」整条路径，需要 Praat 和本地模型都在（会临时开一个 Praat 并关掉）。
 """
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from praat_ai import chat   # noqa: E402
 from praat_ai.chat import ChatWindow   # noqa: E402
 from praat_ai.server import running_model   # noqa: E402
+
+
+CREATE_SOUND = (
+    'Create Sound from formula: "tone", 1, 0, 1, 44100, '
+    '~ 0.5 * sin (2*pi*220*x)\n'
+)
+
+
+def ensure_praat(problems: list[str]) -> subprocess.Popen[bytes] | None:
+    executable = chat.praat_executable()
+    if not executable:
+        problems.append("没有找到 Praat 可执行文件")
+        return None
+    if chat.praat_process_running(executable):
+        return None
+    process = subprocess.Popen([executable])
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if chat.praat_process_running(executable):
+            time.sleep(6)
+            return process
+        time.sleep(0.5)
+    problems.append("Praat 启动超时")
+    return process
+
+
+def ask_through_window(window: ChatWindow, problems: list[str]) -> None:
+    """走一遍「用户输入 → 规划 → 执行 → 结果显示」的真实路径。"""
+
+    executable = chat.praat_executable()
+    ok, output = chat._send_script(
+        executable,
+        CREATE_SOUND
+        + f'appendFileLine: {chat.tools.quote(chat.state_path())}, "done"\n',
+    )
+    if not ok:
+        problems.append(f"建测试声音失败：{output}")
+        return
+    chat.refresh_object_context(executable)
+    window.context_label.set(chat.selected_object_label())
+
+    window.entry.delete("1.0", "end")
+    window.entry.insert("1.0", "这个声音的总时长是多少")
+    window.submit()
+    pump(window, 120)
+    transcript = window.transcript.get("1.0", "end")
+    tail = "\n".join(line for line in transcript.splitlines()[-8:] if line.strip())
+    print("· 窗口里的最后几行：")
+    print(tail)
+    if "总时长" not in transcript:
+        problems.append("对话窗口没有把结果写回界面")
+    if window.busy:
+        problems.append("请求结束后窗口仍是忙碌状态")
 
 
 def pump(window: ChatWindow, seconds: float, until_idle: bool = True) -> None:
@@ -48,8 +105,10 @@ def switch_preset(window: ChatWindow, label: str, problems: list[str]) -> None:
 
 def main() -> int:
     switch = "--switch-presets" in sys.argv[1:]
+    ask = "--ask" in sys.argv[1:]
     window = ChatWindow()
     problems: list[str] = []
+    started: subprocess.Popen[bytes] | None = None
     try:
         pump(window, 2)
         labels = list(window.preset_box.cget("values"))
@@ -73,7 +132,19 @@ def main() -> int:
             pump(window, 2)
         elif switch:
             problems.append("预设少于两个，无法验证切换")
+
+        if ask:
+            started = ensure_praat(problems)
+            if not problems:
+                ask_through_window(window, problems)
     finally:
+        if started is not None:
+            print("· 关闭本次启动的 Praat")
+            subprocess.run(
+                ["taskkill", "/PID", str(started.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+            )
         window.root.destroy()
     for problem in problems:
         print(f"!! {problem}")
