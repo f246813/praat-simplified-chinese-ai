@@ -8,6 +8,24 @@ from unittest.mock import patch
 
 from praat_ai import chat
 from praat_ai.config import AppConfig
+from praat_ai.qwen import _selected_object_hint
+
+
+class SelectedObjectHintTests(unittest.TestCase):
+    """规划提示里要单独写清「当前选中哪个对象」，否则模型爱挑 1 号。"""
+
+    def test_hint_names_the_selected_object(self) -> None:
+        context = (
+            "id\tclass\tname\tselected\n"
+            "1\tTextGrid\tTextGrid grid\t0\n"
+            "2\tSound\tSound tone\t1\n"
+        )
+        self.assertEqual(_selected_object_hint(context), "当前选中：id 2（Sound Sound tone）")
+
+    def test_hint_when_nothing_is_selected(self) -> None:
+        context = "id\tclass\tname\tselected\n1\tSound\tSound tone\t0\n"
+        self.assertIn("没有选中", _selected_object_hint(context))
+        self.assertIn("没有选中", _selected_object_hint(""))
 
 
 class PraatProcessTests(unittest.TestCase):

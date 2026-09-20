@@ -147,6 +147,8 @@ def main() -> int:
             "把当前对象改名为 测试音",
             "查询 0.5 秒处的基频",
             "把这个声音截取 0.2 到 0.5 秒",
+            "打开当前声音的编辑器",
+            "播放当前声音",
         ]
         for text in cases:
             reply, script = ask(client, text)

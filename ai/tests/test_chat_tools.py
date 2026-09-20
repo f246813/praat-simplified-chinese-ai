@@ -103,7 +103,7 @@ class ScriptRenderingTests(unittest.TestCase):
         extra: dict[str, dict[str, object]] = {
             "rename_object": {"new_name": "测试"},
             "extract_part": {"start": 0.1, "end": 0.4},
-            "save_sound": {"path": "D:/tmp/ai-chat.wav"},
+            "save_sound": {"path": str(base / "ai-chat.wav")},
             "concatenate_sounds": {"object": 1, "object2": 2},
         }
         for tool in tools.TOOLS:
@@ -287,7 +287,10 @@ class NewToolTests(unittest.TestCase):
         )
         self.assertIn('Get value at time: 1, time, "hertz", "linear"', script)
         self.assertIn('Get value at time: 2, time, "hertz", "linear"', script)
-        self.assertIn("第 2 共振峰频率", script)
+        # 「频率和带宽」一次问完，不再需要两个工具。
+        self.assertIn('Get bandwidth at time: 2, time, "hertz", "linear"', script)
+        self.assertIn("第 2 共振峰（", script)
+        self.assertIn("：频率 ", script)
 
     def test_invalid_formant_number_message_is_chinese(self) -> None:
         with self.assertRaises(tools.ToolError) as caught:
@@ -346,18 +349,33 @@ class NewToolTests(unittest.TestCase):
             tools.render("extract_part", {"start": 0.5, "end": 0.2}, self.context)
 
     def test_save_sound_requires_absolute_wav_path(self) -> None:
+        target = self.base / "out" / "a"
         script = tools.render(
             "save_sound",
-            {"object": 1, "path": "D:\\out\\a"},
+            {"object": 1, "path": str(target)},
             self.context,
         )
-        self.assertIn('Save as WAV file: "D:/out/a.wav"', script)
+        self.assertIn(f'Save as WAV file: "{target.as_posix()}.wav"', script)
         with self.assertRaises(tools.ToolError):
             tools.render("save_sound", {"object": 1}, self.context)
         with self.assertRaises(tools.ToolError):
             tools.render("save_sound", {"object": 1, "path": "a.wav"}, self.context)
         with self.assertRaises(tools.ToolError):
-            tools.render("save_sound", {"object": 3, "path": "D:/out/a.wav"}, self.context)
+            tools.render(
+                "save_sound",
+                {"object": 3, "path": str(self.base / "a.wav")},
+                self.context,
+            )
+
+    def test_save_sound_creates_missing_folder(self) -> None:
+        target = self.base / "新建目录" / "更深" / "out.wav"
+        script = tools.render(
+            "save_sound",
+            {"object": 1, "path": str(target)},
+            self.context,
+        )
+        self.assertTrue(target.parent.is_dir())
+        self.assertIn("Save as WAV file", script)
 
     def test_resample_requires_integer_rate(self) -> None:
         script = tools.render("resample_sound", {"rate": 16000}, self.context)
@@ -384,6 +402,52 @@ class NewToolTests(unittest.TestCase):
     def test_intensity_statistics_uses_energy_mean(self) -> None:
         script = tools.render("intensity_statistics", {"object": 1}, self.context)
         self.assertIn('Get mean: tmin, tmax, "energy"', script)
+
+    def test_point_queries_accept_several_times(self) -> None:
+        for name in ("pitch", "intensity", "formant_frequency"):
+            script = tools.render(name, {"time": "0.25,0.75"}, self.context)
+            self.assertIn("time = 0.250000", script, name)
+            self.assertIn("time = 0.750000", script, name)
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("pitch", {"time": "abc"}, self.context)
+        self.assertIn("时间只能是", str(caught.exception))
+        with self.assertRaises(tools.ToolError):
+            tools.render("pitch", {"time": ",".join(str(i / 10) for i in range(12))}, self.context)
+
+    def test_formant_statistics_reports_each_formant_separately(self) -> None:
+        script = tools.render("formant_statistics", {"formant": "1,2"}, self.context)
+        self.assertIn('Get mean: 1, tmin, tmax, "hertz"', script)
+        self.assertIn('Get mean: 2, tmin, tmax, "hertz"', script)
+        # 每条共振峰都要有自己的结果行，不能共用被覆盖的变量。
+        self.assertEqual(script.count("第 1 共振峰平均"), 1)
+        self.assertEqual(script.count("第 2 共振峰平均"), 1)
+
+    def test_harmonicity_statistics_uses_harmonicity_analysis(self) -> None:
+        script = tools.render("harmonicity_statistics", {}, self.context)
+        self.assertIn("To Harmonicity (cc): 0.01, 75, 0.1, 1", script)
+        self.assertIn("Get mean: tmin, tmax", script)
+        self.assertIn("谐噪比 HNR", script)
+
+    def test_spectrogram_requires_sound(self) -> None:
+        script = tools.render("spectrogram", {}, self.context)
+        self.assertIn('To Spectrogram: 0.005000, 5000.000000, 0.002000, 20.000000, "Gaussian"', script)
+        self.assertIn("Get number of frames", script)
+        with self.assertRaises(tools.ToolError):
+            tools.render("spectrogram", {"object": 3}, self.context)
+
+    def test_spectrogram_name_does_not_shadow_the_source_object(self) -> None:
+        # 2 号对象的简称是 tone，模型可能把这个名字当成新名字传进来。
+        script = tools.render(
+            "spectrogram",
+            {"object": 2, "name": "tone"},
+            self.context,
+        )
+        self.assertIn('Rename: "tone 频谱图"', script)
+
+    def test_pitch_statistics_reports_time_of_maximum(self) -> None:
+        script = tools.render("pitch_statistics", {}, self.context)
+        self.assertIn('Get time of maximum: tmin, tmax, "Hertz", "Parabolic"', script)
+        self.assertIn("最高点出现在", script)
 
 
 class PythonScriptRejectionTests(unittest.TestCase):

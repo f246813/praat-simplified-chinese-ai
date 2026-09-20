@@ -160,10 +160,13 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 | 类别 | 工具 |
 | --- | --- |
 | 查看 | `object_info`、`duration` |
-| 声学查询 | `formant_frequency`（可一次查 1,2…）、`formant_bandwidth`、`pitch`、`pitch_statistics`、`intensity`、`intensity_statistics` |
+| 声学查询 | `formant_frequency`（同时给带宽，可一次查 1,2…）、`formant_bandwidth`、`formant_statistics`、`pitch`、`pitch_statistics`、`intensity`、`intensity_statistics`、`harmonicity_statistics`（HNR） |
 | 编辑 | `select_object`、`rename_object`、`duplicate_object`、`remove_object`、`resample_sound` |
-| 生成与导出 | `create_sound`（纯音/静音）、`extract_part`、`concatenate_sounds`、`save_sound`（WAV） |
+| 生成与导出 | `create_sound`（纯音/静音）、`extract_part`、`concatenate_sounds`、`spectrogram`、`save_sound`（WAV，缺目录会先建好） |
 | 交互 | `view_edit`、`play` |
+
+一次问多个时刻也支持：`time` 可以写 `0.25,0.75`，「查询 0.25 秒和 0.75 秒的基频」
+会一次返回两行结果；`formant` 同样可以写 `1,2`。
 
 模板覆盖不到的请求会退回 `custom_script`，此时脚本必须通过安全检查：单引号自动改成
 双引号、禁止 `runSystem`、`deleteFile`、`exit` 等命令，并且**必须是 Praat 脚本**——
@@ -196,9 +199,10 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 $env:PYTHONPATH = 'ai'
 python -m unittest discover -s ai/tests -v      # 单元测试
 python ai/tests/verify_chat_templates.py        # 每个工具模板在真 Praat 批处理里跑一遍
+python ai/tests/verify_chat_planning.py         # 真机模型规划一批请求并真跑一遍（准确率）
 python ai/tests/verify_chat_window_ui.py        # 对话窗口能不能正常建起来（会闪一下窗口）
 python ai/tests/verify_chat_live.py             # 对话窗口链路（会临时开一个 Praat）
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
 ```
 
-后三条需要本机装好模型、并且在没有沙箱限制的终端里执行。
+后四条需要本机装好模型、并且在没有沙箱限制的终端里执行。

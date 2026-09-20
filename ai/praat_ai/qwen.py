@@ -16,6 +16,16 @@ class QwenError(RuntimeError):
     pass
 
 
+def _selected_object_hint(object_context: str) -> str:
+    """把「当前选中哪个对象」单独写一句，模型不会误挑同名列表里的第一条。"""
+
+    for line in (object_context or "").splitlines():
+        parts = [part.strip() for part in line.split("\t")]
+        if len(parts) >= 4 and parts[0].isdigit() and parts[3] == "1":
+            return f"当前选中：id {parts[0]}（{parts[1]} {parts[2]}）"
+    return "当前没有选中任何对象。"
+
+
 class QwenClient:
     def __init__(self, config: QwenConfig):
         self.config = config
@@ -152,6 +162,7 @@ JSON 结构：
 9. 常见需求都已经有对应工具（新建声音、截取片段、拼接声音、另存 WAV、重采样、复制对象、统计基频/强度、一次查询多条共振峰），优先用工具而不是自己写脚本。
 10. 用户在句子里明确说了对象编号（例如「3 号对象」「第二个声音」）时，必须在 arguments 里用 object / object2 指出那个对象，不能留空。
 11. 只有用户给出了新名字时才填 name / new_name；「复制一份」这类请求不要抄原来的名字。
+12. 用户说「这个声音」「当前对象」时指的就是下面标着「当前选中」的那一个；它往往不是 1 号对象，别习惯性写 1。
 """.strip()
         examples = """
 示例：
@@ -182,6 +193,8 @@ JSON 结构：
                 "",
                 "可用工具：",
                 tool_catalog,
+                "",
+                _selected_object_hint(object_context),
                 "",
                 "当前 Praat 对象列表（id、类、名称、是否选中）：",
                 object_context,

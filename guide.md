@@ -470,6 +470,15 @@ AI 纠音实验代码位于 `ai/`：
 - **对象名写法不一致**：Praat 里有的对象名自带类名前缀（`Sound 思い出す`），
   有的没有。`ToolContext.resolve_object()` 用 `name_variants()` 做容错匹配，
   唯一命中才接受，多个候选/完全找不到时给中文错误。
+- **规划提示要单独写「当前选中」**：只给 TSV 列表时，模型会习惯性挑 1 号对象
+  （列表里可能是 TextGrid）。`qwen._selected_object_hint()` 把选中项写成一句话，
+  并配一条「说『这个声音』时指它」的规则。
+- **查询类命令可用范围有限**（都在真机批处理里试过）：`Play part` / `Play: 参数`
+  对 Sound 不存在，只有整体 `Play`；Spectrogram 没有「最低/最高频率」查询，
+  只能 `Get number of frames`；`View & Edit` / `Edit` 在批处理里必然失败
+  （`Cannot edit a Sound from batch`），只能在 GUI 里验证。
+- **字符串结果可以现场拼**：`bwText$ = "，带宽 " + fixed$ (bw, 3) + " Hz"` 有效，
+  所以「频率和带宽」能在一次查询里输出一行；带宽是 `undefined` 时把它置空即可。
 - 回归用例：`ai/tests/test_chat_tools.py`、`ai/tests/test_chat_window.py`；
   真机链路用 `python ai/tests/verify_chat_live.py`（临时开一个 Praat，
   验证建对象、改名后对象列表会刷新、基频查询和截取片段）。

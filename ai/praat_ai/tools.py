@@ -241,37 +241,73 @@ def _integer(
     return rounded
 
 
-def _time_lines(
+def _query_times(
     arguments: Mapping[str, Any],
     *,
     fallback: str,
-    suffix_variable: str = "note$",
+    maximum: int = 8,
 ) -> list[str]:
-    """把查询时间夹进对象时长，并返回“被截断”时的中文后缀变量。
+    """``time`` 可以是数字、列表或 "0.25,0.75" 这类文本，返回 Praat 时间表达式。
+
+    用户常一次问多个时刻（「0.25 秒和 0.75 秒的基频」），所以这里统一成列表，
+    由模板逐个时刻写一行结果。
+    """
+
+    raw = arguments.get("time", arguments.get("times", None))
+    if raw is None or raw == "":
+        return [fallback]
+    items = raw if isinstance(raw, (list, tuple)) else re.split(r"[,，、;；\s]+", str(raw))
+    values: list[str] = []
+    for item in items:
+        if str(item).strip() == "":
+            continue
+        try:
+            number = _number({"value": item}, "value", 0.0, 0.0, 36000.0)
+        except ToolError as error:
+            raise ToolError(f"时间只能是 0–36000 之间的秒数，收到：{item!r}") from error
+        values.append(f"{number:.6f}")
+    if not values:
+        return [fallback]
+    if len(values) > maximum:
+        raise ToolError(f"一次最多查询 {maximum} 个时刻。")
+    return values
+
+
+def _clamp_time_lines(suffix_variable: str = "note$") -> list[str]:
+    """把 ``time`` 夹进对象时长，并说明是否被截断。
 
     时间超出对象范围时 Praat 不会报错，而是返回 ``--undefined--``；
     这里先夹到有效区间，再让模板把 ``--undefined--`` 换成中文说明。
     """
 
-    value = arguments.get("time", None)
-    if value is None or value == "":
-        lines = [f"time = {fallback}"]
-    else:
-        lines = [f"time = {_number(arguments, 'time', 0.0, 0.0, 36000.0):.6f}"]
-    lines.extend(
-        [
-            f'{suffix_variable} = ""',
-            "if time < 0",
-            "    time = 0",
-            f'    {suffix_variable} = "（已按对象时长截断）"',
-            "endif",
-            "if time > duration",
-            "    time = duration",
-            f'    {suffix_variable} = "（已按对象时长截断）"',
-            "endif",
-        ]
-    )
-    return lines
+    return [
+        f'{suffix_variable} = ""',
+        "if time < 0",
+        "    time = 0",
+        f'    {suffix_variable} = "（已按对象时长截断）"',
+        "endif",
+        "if time > duration",
+        "    time = duration",
+        f'    {suffix_variable} = "（已按对象时长截断）"',
+        "endif",
+    ]
+
+
+def _clamp_range_lines() -> list[str]:
+    """把 ``tmin`` / ``tmax`` 夹进对象时长（Praat 的 from/to/end 是保留字）。"""
+
+    return [
+        "if tmin < 0",
+        "    tmin = 0",
+        "endif",
+        "if tmax > duration",
+        "    tmax = duration",
+        "endif",
+        "if tmin > tmax",
+        "    tmin = 0",
+        "    tmax = duration",
+        "endif",
+    ]
 
 
 def _unit_literal(arguments: Mapping[str, Any], default: str) -> str:
@@ -335,14 +371,15 @@ def _formant_lines(
     *,
     command: str,
     label: str,
+    with_bandwidth: bool = False,
 ) -> list[str]:
     row = context.resolve_object(arguments.get("object"))
     formatns = _formant_numbers(arguments)
     unit = _unit_literal(arguments, "hertz")
     unit_text = _unit_display(arguments, "hertz")
+    times = _query_times(arguments, fallback="duration / 2")
     temporary = row.class_name != "Formant"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
-    lines.extend(_time_lines(arguments, fallback="duration / 2"))
     if temporary:
         lines.extend(
             [
@@ -350,35 +387,66 @@ def _formant_lines(
                 f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
             ]
         )
-    for formant in formatns:
-        lines.extend(
-            [
-                f'value = {command}: {formant}, time, {unit}, "linear"',
-                "if value = undefined",
-                _write_result(
-                    context,
+    for time_expression in times:
+        lines.append(f"time = {time_expression}")
+        lines.extend(_clamp_time_lines())
+        for formant in formatns:
+            lines.append(f'value = {command}: {formant}, time, {unit}, "linear"')
+            if with_bandwidth:
+                # 「F1 的频率和带宽」一次问完：带宽缺失时只省略带宽那半句。
+                lines.append(
+                    f'bandwidth = Get bandwidth at time: {formant}, time, {unit}, "linear"'
+                )
+                lines.append(
+                    f'bandwidthText$ = "，带宽 " + fixed$ (bandwidth, 3) + "{unit_text}"'
+                )
+                lines.extend(
                     [
-                        quote(f"第 {formant} 共振峰{label}（"),
-                        "fixed$ (time, 3)",
-                        quote(" 秒处）无法计算：该时刻没有可用的共振峰数据"),
-                        "note$",
-                    ],
-                ),
-                "else",
-                _write_result(
-                    context,
-                    [
-                        quote(f"第 {formant} 共振峰{label}（"),
-                        "fixed$ (time, 3)",
-                        quote(" 秒处）= "),
-                        "fixed$ (value, 3)",
-                        quote(unit_text),
-                        "note$",
-                    ],
-                ),
-                "endif",
-            ]
-        )
+                        "if bandwidth = undefined",
+                        '    bandwidthText$ = ""',
+                        "endif",
+                    ]
+                )
+            measured = "频率" if with_bandwidth else label
+            lines.extend(
+                [
+                    "if value = undefined",
+                    _write_result(
+                        context,
+                        [
+                            quote(f"第 {formant} 共振峰{measured}（"),
+                            "fixed$ (time, 3)",
+                            quote(" 秒处）无法计算：该时刻没有可用的共振峰数据"),
+                            "note$",
+                        ],
+                    ),
+                    "else",
+                    _write_result(
+                        context,
+                        (
+                            [
+                                quote(f"第 {formant} 共振峰（"),
+                                "fixed$ (time, 3)",
+                                quote(" 秒处）：频率 "),
+                                "fixed$ (value, 3)",
+                                quote(unit_text),
+                                "bandwidthText$",
+                                "note$",
+                            ]
+                            if with_bandwidth
+                            else [
+                                quote(f"第 {formant} 共振峰{label}（"),
+                                "fixed$ (time, 3)",
+                                quote(" 秒处）= "),
+                                "fixed$ (value, 3)",
+                                quote(unit_text),
+                                "note$",
+                            ]
+                        ),
+                    ),
+                    "endif",
+                ]
+            )
     if temporary:
         lines.extend(["Remove", f"selectObject: {row.id}"])
     return lines
@@ -407,7 +475,13 @@ def _build_formant_bandwidth(arguments: Mapping[str, Any], context: ToolContext)
 
 def _build_formant_frequency(arguments: Mapping[str, Any], context: ToolContext) -> str:
     return _assemble(
-        _formant_lines(arguments, context, command="Get value at time", label="频率"),
+        _formant_lines(
+            arguments,
+            context,
+            command="Get value at time",
+            label="频率",
+            with_bandwidth=True,
+        ),
         context,
     )
 
@@ -417,7 +491,6 @@ def _build_pitch(arguments: Mapping[str, Any], context: ToolContext) -> str:
     context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做基频分析")
     temporary = row.class_name != "Pitch"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
-    lines.extend(_time_lines(arguments, fallback="duration / 2"))
     if temporary:
         floor = _number(arguments, "pitch_floor", 75.0, 20.0, 1000.0)
         ceiling = _number(arguments, "pitch_ceiling", 600.0, 50.0, 2000.0)
@@ -427,36 +500,17 @@ def _build_pitch(arguments: Mapping[str, Any], context: ToolContext) -> str:
                 f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
             ]
         )
-    lines.append('value = Get value at time: time, "Hertz", "linear"')
     lines.extend(
-        [
-            "if value = undefined",
-            _write_result(
-                context,
-                [
-                    quote("基频（"),
-                    "fixed$ (time, 3)",
-                    quote(
-                        " 秒处）无法计算：该时刻没有周期性声源"
-                        "（可能是无声段或清音）"
-                    ),
-                    "note$",
-                ],
+        _point_query_lines(
+            arguments,
+            context,
+            command='Get value at time: time, "Hertz", "linear"',
+            label="基频",
+            unit_text=" Hz",
+            undefined_message=(
+                " 秒处）无法计算：该时刻没有周期性声源（可能是无声段或清音）"
             ),
-            "else",
-            _write_result(
-                context,
-                [
-                    quote("基频（"),
-                    "fixed$ (time, 3)",
-                    quote(" 秒处）= "),
-                    "fixed$ (value, 3)",
-                    quote(" Hz"),
-                    "note$",
-                ],
-            ),
-            "endif",
-        ]
+        )
     )
     if temporary:
         lines.extend(["Remove", f"selectObject: {row.id}"])
@@ -470,35 +524,9 @@ def _build_pitch_statistics(
     row = context.resolve_object(arguments.get("object"))
     context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做基频分析")
     temporary = row.class_name != "Pitch"
-    lines = [
-        f"selectObject: {row.id}",
-        "duration = Get total duration",
-        # 注意：Praat 里 from / to / end 都是保留字，变量名只能用 tmin / tmax。
-        "tmin = 0",
-        "tmax = duration",
-    ]
-    from_value = arguments.get("from", arguments.get("start", None))
-    if from_value not in (None, ""):
-        lines.append(
-            f"tmin = {_number(arguments, 'from', 0.0, 0.0, 36000.0):.6f}"
-        )
-    to_value = arguments.get("to", arguments.get("end", None))
-    if to_value not in (None, ""):
-        lines.append(f"tmax = {_number(arguments, 'to', 0.0, 0.0, 36000.0):.6f}")
-    lines.extend(
-        [
-            "if tmin < 0",
-            "    tmin = 0",
-            "endif",
-            "if tmax > duration",
-            "    tmax = duration",
-            "endif",
-            "if tmin > tmax",
-            "    tmin = 0",
-            "    tmax = duration",
-            "endif",
-        ]
-    )
+    # 注意：Praat 里 from / to / end 都是保留字，变量名只能用 tmin / tmax。
+    lines = [f"selectObject: {row.id}", "duration = Get total duration"]
+    lines.extend(_range_lines(arguments))
     if temporary:
         floor = _number(arguments, "pitch_floor", 75.0, 20.0, 1000.0)
         ceiling = _number(arguments, "pitch_ceiling", 600.0, 50.0, 2000.0)
@@ -513,6 +541,7 @@ def _build_pitch_statistics(
             'mean = Get mean: tmin, tmax, "Hertz"',
             'minimum = Get minimum: tmin, tmax, "Hertz", "Parabolic"',
             'maximum = Get maximum: tmin, tmax, "Hertz", "Parabolic"',
+            'maxtime = Get time of maximum: tmin, tmax, "Hertz", "Parabolic"',
             "if mean = undefined",
             _write_result(
                 context,
@@ -538,7 +567,9 @@ def _build_pitch_statistics(
                     "fixed$ (minimum, 3)",
                     quote(" Hz，最高 "),
                     "fixed$ (maximum, 3)",
-                    quote(" Hz"),
+                    quote(" Hz，最高点出现在 "),
+                    "fixed$ (maxtime, 3)",
+                    quote(" 秒"),
                 ],
             ),
             "endif",
@@ -554,7 +585,6 @@ def _build_intensity(arguments: Mapping[str, Any], context: ToolContext) -> str:
     context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做强度分析")
     temporary = row.class_name != "Intensity"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
-    lines.extend(_time_lines(arguments, fallback="duration / 2"))
     if temporary:
         lines.extend(
             [
@@ -562,33 +592,15 @@ def _build_intensity(arguments: Mapping[str, Any], context: ToolContext) -> str:
                 f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
             ]
         )
-    lines.append('value = Get value at time: time, "cubic"')
     lines.extend(
-        [
-            "if value = undefined",
-            _write_result(
-                context,
-                [
-                    quote("强度（"),
-                    "fixed$ (time, 3)",
-                    quote(" 秒处）无法计算：该时刻没有强度数据"),
-                    "note$",
-                ],
-            ),
-            "else",
-            _write_result(
-                context,
-                [
-                    quote("强度（"),
-                    "fixed$ (time, 3)",
-                    quote(" 秒处）= "),
-                    "fixed$ (value, 3)",
-                    quote(" dB"),
-                    "note$",
-                ],
-            ),
-            "endif",
-        ]
+        _point_query_lines(
+            arguments,
+            context,
+            command='Get value at time: time, "cubic"',
+            label="强度",
+            unit_text=" dB",
+            undefined_message=" 秒处）无法计算：该时刻没有强度数据",
+        )
     )
     if temporary:
         lines.extend(["Remove", f"selectObject: {row.id}"])
@@ -602,34 +614,8 @@ def _build_intensity_statistics(
     row = context.resolve_object(arguments.get("object"))
     context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做强度分析")
     temporary = row.class_name != "Intensity"
-    lines = [
-        f"selectObject: {row.id}",
-        "duration = Get total duration",
-        "tmin = 0",
-        "tmax = duration",
-    ]
-    from_value = arguments.get("from", arguments.get("start", None))
-    if from_value not in (None, ""):
-        lines.append(
-            f"tmin = {_number(arguments, 'from', 0.0, 0.0, 36000.0):.6f}"
-        )
-    to_value = arguments.get("to", arguments.get("end", None))
-    if to_value not in (None, ""):
-        lines.append(f"tmax = {_number(arguments, 'to', 0.0, 0.0, 36000.0):.6f}")
-    lines.extend(
-        [
-            "if tmin < 0",
-            "    tmin = 0",
-            "endif",
-            "if tmax > duration",
-            "    tmax = duration",
-            "endif",
-            "if tmin > tmax",
-            "    tmin = 0",
-            "    tmax = duration",
-            "endif",
-        ]
-    )
+    lines = [f"selectObject: {row.id}", "duration = Get total duration"]
+    lines.extend(_range_lines(arguments))
     if temporary:
         lines.extend(
             [
@@ -687,6 +673,204 @@ def _build_object_info(arguments: Mapping[str, Any], context: ToolContext) -> st
     if not has_duration:
         fragments.append(quote("：这类对象没有时长信息"))
     lines.append(_write_result(context, fragments))
+    return _assemble(lines, context)
+
+
+def _point_query_lines(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+    *,
+    command: str,
+    label: str,
+    unit_text: str,
+    undefined_message: str,
+) -> list[str]:
+    """按 ``time``（可以是多个时刻）写若干行「某时刻 = 数值」的结果。"""
+
+    lines: list[str] = []
+    for expression in _query_times(arguments, fallback="duration / 2"):
+        lines.append(f"time = {expression}")
+        lines.extend(_clamp_time_lines())
+        lines.extend(
+            [
+                f"value = {command}",
+                "if value = undefined",
+                _write_result(
+                    context,
+                    [
+                        quote(f"{label}（"),
+                        "fixed$ (time, 3)",
+                        quote(undefined_message),
+                        "note$",
+                    ],
+                ),
+                "else",
+                _write_result(
+                    context,
+                    [
+                        quote(f"{label}（"),
+                        "fixed$ (time, 3)",
+                        quote(" 秒处）= "),
+                        "fixed$ (value, 3)",
+                        quote(unit_text),
+                        "note$",
+                    ],
+                ),
+                "endif",
+            ]
+        )
+    return lines
+
+
+def _range_lines(arguments: Mapping[str, Any]) -> list[str]:
+    """设置 ``tmin`` / ``tmax``（默认整个对象）并夹进对象时长。"""
+
+    lines = ["tmin = 0", "tmax = duration"]
+    if arguments.get("from", arguments.get("start", None)) not in (None, ""):
+        lines.append(
+            f"tmin = {_number(arguments, 'from', 0.0, 0.0, 36000.0):.6f}"
+        )
+    if arguments.get("to", arguments.get("end", None)) not in (None, ""):
+        lines.append(f"tmax = {_number(arguments, 'to', 0.0, 0.0, 36000.0):.6f}")
+    lines.extend(_clamp_range_lines())
+    return lines
+
+
+def _build_formant_statistics(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+) -> str:
+    """一段时间内的共振峰平均值与标准差（「共振峰平均是多少」用这个）。"""
+
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做共振峰分析")
+    formatns = _formant_numbers(arguments)
+    unit = _unit_literal(arguments, "hertz")
+    unit_text = _unit_display(arguments, "hertz")
+    temporary = row.class_name != "Formant"
+    lines = [f"selectObject: {row.id}", "duration = Get total duration"]
+    lines.extend(_range_lines(arguments))
+    if temporary:
+        lines.extend(
+            [
+                "To Formant (burg): 0, 5, 5500, 0.025, 50",
+                f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
+            ]
+        )
+    for formant in formatns:
+        # 每条共振峰各写一行：脚本里 mean/std 会被覆盖，不能等循环结束再统一写。
+        lines.append(f"mean = Get mean: {formant}, tmin, tmax, {unit}")
+        lines.append(f"std = Get standard deviation: {formant}, tmin, tmax, {unit}")
+        lines.append(
+            _write_result(
+                context,
+                [
+                    quote(f"第 {formant} 共振峰平均（"),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒）= "),
+                    "fixed$ (mean, 1)",
+                    quote(unit_text),
+                    quote("（标准差 "),
+                    "fixed$ (std, 1)",
+                    quote("）"),
+                ],
+            )
+        )
+    if temporary:
+        lines.extend(["Remove", f"selectObject: {row.id}"])
+    return _assemble(lines, context)
+
+
+def _build_harmonicity_statistics(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+) -> str:
+    """谐噪比 HNR（Praat 的 Harmonicity，单位 dB）。"""
+
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做谐噪比分析")
+    temporary = row.class_name != "Harmonicity"
+    lines = [f"selectObject: {row.id}", "duration = Get total duration"]
+    lines.extend(_range_lines(arguments))
+    if temporary:
+        lines.extend(
+            [
+                "To Harmonicity (cc): 0.01, 75, 0.1, 1",
+                f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
+            ]
+        )
+    lines.extend(
+        [
+            "mean = Get mean: tmin, tmax",
+            'maximum = Get maximum: tmin, tmax, "Parabolic"',
+            "if mean = undefined",
+            _write_result(
+                context,
+                [
+                    quote("谐噪比 HNR（"),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒）无法计算：该区间没有周期性声源"),
+                ],
+            ),
+            "else",
+            _write_result(
+                context,
+                [
+                    quote("谐噪比 HNR（"),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒）：平均 "),
+                    "fixed$ (mean, 2)",
+                    quote(" dB，最高 "),
+                    "fixed$ (maximum, 2)",
+                    quote(" dB"),
+                ],
+            ),
+            "endif",
+        ]
+    )
+    if temporary:
+        lines.extend(["Remove", f"selectObject: {row.id}"])
+    return _assemble(lines, context)
+
+
+def _build_spectrogram(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """从 Sound 生成频谱图对象（「做成频谱图」用这个）。"""
+
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, SOUND_CLASSES, "只有声音对象可以做频谱图")
+    window_length = _number(arguments, "window_length", 0.005, 0.0001, 1.0)
+    maximum_frequency = _number(arguments, "max_frequency", 5000.0, 100.0, 96000.0)
+    time_step = _number(arguments, "time_step", 0.002, 0.0001, 1.0)
+    frequency_step = _number(arguments, "frequency_step", 20.0, 1.0, 1000.0)
+    name = _new_name(arguments, "频谱图")
+    # 模型有时会把源对象的名字当新名字传进来，那样对象列表里会出现两个同名对象。
+    if _normalize_text(name) in row.name_variants():
+        name = f"{name} 频谱图"
+    lines = [
+        f"selectObject: {row.id}",
+        f"To Spectrogram: {window_length:.6f}, {maximum_frequency:.6f}, "
+        f"{time_step:.6f}, {frequency_step:.6f}, \"Gaussian\"",
+        f"Rename: {quote(name)}",
+        "frames = Get number of frames",
+        _write_result(
+            context,
+            [
+                quote("已生成频谱图："),
+                quote(name),
+                quote(f"，分析窗口 {window_length * 1000:.1f} ms，最高频率 "),
+                f"fixed$ ({maximum_frequency:.6f}, 0)",
+                quote(" Hz，共 "),
+                "fixed$ (frames, 0)",
+                quote(" 帧（可用 Praat 的「绘制」菜单画到 Picture 窗口）"),
+            ],
+        ),
+    ]
     return _assemble(lines, context)
 
 
@@ -874,6 +1058,15 @@ def _build_save_sound(arguments: Mapping[str, Any], context: ToolContext) -> str
         raise ToolError(f"保存路径必须是完整路径，收到：{path}")
     if not path.lower().endswith(".wav"):
         path += ".wav"
+    # Praat 的「Save as WAV file」不会自己建文件夹，缺目录时只会报一句英文。
+    # 这里先把目标文件夹建好，用户说「另存到 D:/out/a.wav」就直接能用。
+    target = Path(path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ToolError(
+            f"保存路径的文件夹无法创建：{target.parent}（{error}）"
+        ) from error
     lines = [
         f"selectObject: {row.id}",
         f"Save as WAV file: {quote(path)}",
@@ -943,32 +1136,38 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="formant_bandwidth",
-        summary="查询第 n 共振峰在某一时刻的带宽；对象是 Sound 时自动先做共振峰分析。",
+        summary="只查第 n 共振峰在某一时刻的带宽（不含频率）；对象是 Sound 时自动先做共振峰分析。",
         signature="formant（默认 2，可写 1,2 查多条）、time（秒，默认中点）、unit（hertz/Bark）、object（可选）",
         build=_build_formant_bandwidth,
     ),
     Tool(
         name="formant_frequency",
-        summary="查询第 n 共振峰在某一时刻的频率；对象是 Sound 时自动先做共振峰分析。查 F1、F2 时用 formant: \"1,2\"。",
-        signature="formant（默认 2，可写 1,2 查多条）、time（秒，默认中点）、unit（hertz/Bark）、object（可选）",
+        summary="查询第 n 共振峰在某一时刻的频率，并同时给出带宽；要「F1/F2 的频率」「频率和带宽」都用这个。",
+        signature="formant（默认 2，可写 1,2 查多条）、time（秒，默认中点，可写 0.25,0.75 查多个时刻）、unit（hertz/Bark）、object（可选）",
         build=_build_formant_frequency,
+    ),
+    Tool(
+        name="formant_statistics",
+        summary="统计一段时间的共振峰平均值和标准差。要「共振峰平均/F1 平均」时用这个。",
+        signature="formant（默认 1，可写 1,2）、from、to（秒，默认整个对象）、unit（hertz/Bark）、object（可选）",
+        build=_build_formant_statistics,
     ),
     Tool(
         name="pitch",
         summary="查询某一时刻的基频（Hz）。",
-        signature="time（秒，默认中点）、pitch_floor、pitch_ceiling、object（可选）",
+        signature="time（秒，默认中点，可写 0.25,0.75 查多个时刻）、pitch_floor、pitch_ceiling、object（可选）",
         build=_build_pitch,
     ),
     Tool(
         name="pitch_statistics",
-        summary="统计一段时间的基频：平均值、最低值、最高值（Hz）。要「基频平均/最高/范围」时用这个。",
+        summary="统计一段时间的基频：平均值、最低值、最高值和最高点的时刻（Hz）。要「基频平均/最高/范围」时用这个。",
         signature="from、to（秒，默认整个对象）、pitch_floor、pitch_ceiling、object（可选）",
         build=_build_pitch_statistics,
     ),
     Tool(
         name="intensity",
         summary="查询某一时刻的强度（dB）。",
-        signature="time（秒，默认中点）、object（可选）",
+        signature="time（秒，默认中点，可写 0.25,0.75 查多个时刻）、object（可选）",
         build=_build_intensity,
     ),
     Tool(
@@ -976,6 +1175,18 @@ TOOLS: tuple[Tool, ...] = (
         summary="统计一段时间的强度：平均值和最高值（dB）。",
         signature="from、to（秒，默认整个对象）、object（可选）",
         build=_build_intensity_statistics,
+    ),
+    Tool(
+        name="harmonicity_statistics",
+        summary="统计谐噪比 HNR（Harmonicity，dB）：平均值和最高值。要「谐噪比」时用这个。",
+        signature="from、to（秒，默认整个对象）、object（可选）",
+        build=_build_harmonicity_statistics,
+    ),
+    Tool(
+        name="spectrogram",
+        summary="把 Sound 做成频谱图对象（不是图片，画图用 Praat 的绘制菜单）。",
+        signature="window_length（默认 0.005 秒）、max_frequency（默认 5000 Hz）、time_step、frequency_step、name、object（可选）",
+        build=_build_spectrogram,
     ),
     Tool(
         name="select_object",
