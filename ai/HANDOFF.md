@@ -8,13 +8,16 @@
 
 - 分支 `modern`，工作区干净。本次改动已提交：`9b7afe6f`（C++ 上报编辑器选区）、
   `33db92b5`（AI 侧：VOT 两步检测 + 选区接入各工具 + 测试文档）。**未 push**。
+  再往后还提交了投递方式的修改（`sendpraat.py`：自己写 `Message.txt` + 发
+  `WM_APP`，不再用 `Praat.exe --send`，见 guide.md §8.5）。
 - 验证命令（必须用项目自带的 Python，PATH 里的 `python` 缺依赖）：
 
   ```powershell
   cd D:\Praat-work\praat-simplified-chinese
   $env:PYTHONPATH='ai'; $env:PYTHONIOENCODING='utf-8'; $env:PYTHONDONTWRITEBYTECODE='1'
-  & D:\Praat-work\venv-ai\Scripts\python.exe -m unittest discover -s ai/tests    # 164 个，约 52 秒
+  & D:\Praat-work\venv-ai\Scripts\python.exe -m unittest discover -s ai/tests    # 185 个，约 53 秒
   & D:\Praat-work\venv-ai\Scripts\python.exe ai/tests/verify_chat_templates.py  # 43 个，真 Praat，约 4 秒
+  & D:\Praat-work\venv-ai\Scripts\python.exe ai/tests/verify_chat_no_popup.py   # 真机：发指令不许动窗口
   ```
 
   第二种会反复启动 `Praat.exe`（每个用例一个新进程），会写 `ai/runtime/`；
@@ -76,6 +79,12 @@ foned/FunctionEditor.cpp:2060      FunctionEditor_selectionMarksChanged()
 
 ## 3. 真机确认过的坑（别重踩）
 
+- **投递脚本不许用 `Praat.exe --send`**：它会 `FindWindow("PraatChildWindow1 Praat")`
+  （z 序最上面的子窗口，通常是 Info 窗口或声音编辑器）再做
+  `ShowWindow(SW_RESTORE) + SetForegroundWindow`，于是每发一条指令都会弹
+  「Praat Info」、把声音编辑器顶到对话窗口前面。前端现在自己写
+  `%APPDATA%\Praat\Message.txt` 再对对象窗口发 `WM_APP`。细节和取证见
+  guide.md §8.5；`verify_chat_no_popup.py --legacy` 是反证。
 - `To Harmonicity (cc)` 的 periodsPerWindow 给 0.5 会让 Praat 7.0.02 在
   `Sound_to_Pitch.cpp` 直接断言崩溃，只能 ≥ 1。
 - `minPitch 250`（4 ms 窗口）在 220 Hz 上会判成「全是噪声」，窗口按 1/minPitch 走。

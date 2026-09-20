@@ -1,0 +1,347 @@
+"""把 Praat 脚本交给已经打开的 Praat，并且不激活它的任何窗口。
+
+背景（2026-09-20 实测复现，见 guide.md §8.5）：前端原来用
+``Praat.exe --FULL-TRUST --send`` 投递脚本，而 ``--send`` 在 Windows 上的实现是
+
+1. ``GuiWin_initialize1()`` 里 ``FindWindow ("PraatChildWindow… Praat", NULL)``，
+   拿到的是 **z 序最上面那个 Praat 子窗口**（实测常常是「Praat Info」或声音编辑器）；
+2. 紧接着 ``if (IsIconic (winWindow)) ShowWindow (winWindow, SW_RESTORE);
+   SetForegroundWindow (winWindow);``（``sys/praat.cpp`` 的
+   ``tryToSwitchToRunningPraat()``）。
+
+于是每发一条指令，Praat Info 窗口会自己从任务栏里弹出来，声音编辑器窗口也会跳到
+前面盖住对话窗口。接收端其实很无辜：``motifEmulator.cpp`` 的 ``WM_APP`` 分支里
+那两行激活代码本来就是注释掉的。
+
+所以这里自己投递：按 Praat 自己的 ``sendpraat`` 协议写好
+``%APPDATA%\\Praat\\Message.txt``，再给目标进程的 Praat 窗口发一条 ``WM_APP``。
+脚本照跑（``cb_userMessage()`` → ``praat_executeScript_noGUI()``），窗口一个都不动，
+还省掉一次 Praat 进程启动。
+
+注意两件事：
+
+- 消息文件是**全局唯一**的（Praat 只认 ``Message.txt`` 这个文件名），所以同一时刻
+  只能有一条指令在飞；前端逐条同步执行正好满足这个前提。超时之后必须调用
+  :func:`cancel_pending()`——否则 Praat 稍后腾出消息循环时，会把下一条指令的
+  消息文件当成这条旧消息再执行一遍。
+- 消息文件里那行 ``# --FULL-TRUST`` 不能省：脚本要写 ``runtime/`` 和用户指定路径
+  之外的文件（``appendFileLine`` / ``Save as WAV file``），全靠它拿到完全信任。
+"""
+
+from __future__ import annotations
+
+import ctypes
+import os
+from ctypes import wintypes
+from dataclasses import dataclass
+from pathlib import Path
+
+
+WINDOW_MODE = "window"
+ARGV_MODE = "argv"
+SEND_MODE_ENV = "PRAAT_AI_SEND_MODE"
+
+#: ``ctypes.wintypes`` 没有这个类型别名，自己按 Win32 原型补一个
+#: （``BOOL CALLBACK EnumWindowsProc (HWND, LPARAM)``）。
+WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+#: Praat 的接收端在 ``motifEmulator.cpp`` 里同时处理 ``WM_USER`` 和 ``WM_APP``。
+WM_APP = 0x8000
+WM_USER = 0x0400
+
+#: ``ShowWindow`` 的常用取值（验证脚本把窗口收进任务栏时用）。
+SW_MINIMIZE = 6
+
+#: Praat 给所有顶层窗口注册的窗口类都长这样：``PraatChildWindow1 Praat`` /
+#: ``PraatShell1 Praat``（数字是 PRAAT_WINDOW_CLASS_NUMBER）。用前缀匹配，
+#: 免得跟着 PRAAT_WINDOW_CLASS_NUMBER 或程序名的变化一起改。
+PRAAT_WINDOW_CLASS_PREFIX = "praat"
+
+#: 对象窗口一直在，拿它当投递目标最稳（关掉编辑器、Info 窗口都不影响）。
+PRAAT_OBJECTS_TITLE = "Praat Objects"
+
+#: 消息文件开头的完全信任标记；``praat_executeScript_noGUI()`` 靠这一行判断。
+FULL_TRUST_MARKER = "\n# --FULL-TRUST\n"
+
+
+@dataclass(frozen=True)
+class WindowInfo:
+    """一个顶层窗口（只用到投递和验证需要的字段）。"""
+
+    handle: int
+    process_id: int
+    class_name: str
+    title: str
+    visible: bool
+    minimized: bool
+
+    @property
+    def is_praat_window(self) -> bool:
+        return self.class_name.casefold().startswith(PRAAT_WINDOW_CLASS_PREFIX)
+
+    @property
+    def state(self) -> tuple[bool, bool]:
+        """窗口的可见/最小化状态；窗口被激活或还原时这个会变。"""
+
+        return (self.visible, self.minimized)
+
+
+def send_mode() -> str:
+    """投递方式：默认 ``window``（自己发 WM_APP，不动窗口）。
+
+    - ``window``：本模块的投递方式，不激活任何 Praat 窗口（默认）。
+    - ``argv``：退回 ``Praat.exe --send``（会激活一个 Praat 子窗口，只用于排障）。
+
+    用环境变量 ``PRAAT_AI_SEND_MODE`` 切换，取值 ``window`` / ``argv``。
+    非 Windows 上没有 ``%APPDATA%\\Praat\\Message.txt`` + ``WM_APP`` 这套东西，
+    直接走 ``argv``（macOS/Linux 上 ``--send`` 靠 pid 文件发信号，本来也不激活窗口）。
+    """
+
+    if os.name != "nt":
+        return ARGV_MODE
+    value = os.getenv(SEND_MODE_ENV, "").strip().casefold()
+    if value in {"argv", "send", "praat.exe", "sendpraat"}:
+        return ARGV_MODE
+    return WINDOW_MODE
+
+
+def message_file_path() -> Path | None:
+    """Praat 读消息的文件：Windows 上是 ``%APPDATA%\\Praat\\Message.txt``。
+
+    与 ``melder_files.cpp`` 的 ``Melder_preferencesFolder7()`` 对应
+    （``Melder_getHomeDir() + "\\AppData\\Roaming\\" + 程序名``）。查不到位置时
+    返回 ``None``，调用方应该退回 ``--send``。
+    """
+
+    if os.name != "nt":
+        return None
+    appdata = os.getenv("APPDATA", "").strip()
+    if appdata:
+        return Path(appdata) / "Praat" / "Message.txt"
+    home = os.getenv("USERPROFILE", "").strip()
+    if home:
+        return Path(home) / "AppData" / "Roaming" / "Praat" / "Message.txt"
+    return None
+
+
+def _quote(value: str) -> str:
+    """Praat 字符串里的双引号写成两个双引号，反斜杠一律换成斜杠。"""
+
+    return value.replace("\\", "/").replace('"', '""')
+
+
+def _handle_value(handle) -> int:
+    """窗口句柄统一成整数：回调里拿到的是 ``int``，API 返回值是 ``c_void_p``。"""
+
+    if isinstance(handle, int):
+        return handle
+    value = getattr(handle, "value", None)
+    return int(value or 0)
+
+
+def build_message(directory: Path, script: Path) -> str:
+    """拼出 ``--send`` 会写进``Message.txt`` 的那段文本。
+
+    真实内容长这样（实测 ``%APPDATA%\\Praat\\Message.txt``）::
+
+        <空行>
+        # --FULL-TRUST
+        setWorkingDirectory: "D:/Praat-work/praat-simplified-chinese/ai"
+        runScript: "D:/…/ai/runtime/chat_command.praat"
+
+    Praat 读文件时会先 ``Melder_killReturns_inplace()`` 去掉 ``\\r``，所以
+    ``\\n`` / ``\\r\\n`` 都行，这里统一写 ``\\n``。
+    """
+
+    return (
+        FULL_TRUST_MARKER
+        + f'setWorkingDirectory: "{_quote(str(directory))}"\n'
+        + f'runScript: "{_quote(str(script))}"\n'
+    )
+
+
+def noop_message() -> str:
+    """超时之后用来顶掉待执行消息的空脚本（只有注释，什么都不做）。"""
+
+    return FULL_TRUST_MARKER + "# praat-ai: 上一条指令已超时取消，这条消息不做事\n"
+
+
+def _user32():
+    if os.name != "nt":
+        return None
+    try:
+        user32 = ctypes.windll.user32
+    except OSError:   # pragma: no cover - 只在异常环境里发生
+        return None
+    user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetClassNameW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.IsIconic.restype = wintypes.BOOL
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.PostMessageW.argtypes = [
+        wintypes.HWND,
+        ctypes.c_uint,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    user32.PostMessageW.restype = wintypes.BOOL
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    return user32
+
+
+def list_windows() -> list[WindowInfo]:
+    """按 z 序（最上面的在前）列出所有顶层窗口。非 Windows 返回空表。"""
+
+    user32 = _user32()
+    if user32 is None:
+        return []
+    windows: list[WindowInfo] = []
+
+    @WNDENUMPROC
+    def visit(handle, _param):   # type: ignore[no-untyped-def]
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(handle, ctypes.byref(owner))
+        class_buffer = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(handle, class_buffer, 256)
+        length = user32.GetWindowTextLengthW(handle)
+        title_buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(handle, title_buffer, length + 1)
+        windows.append(
+            WindowInfo(
+                handle=_handle_value(handle),
+                process_id=int(owner.value),
+                class_name=class_buffer.value,
+                title=title_buffer.value,
+                visible=bool(user32.IsWindowVisible(handle)),
+                minimized=bool(user32.IsIconic(handle)),
+            )
+        )
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return windows
+
+
+def praat_windows() -> list[WindowInfo]:
+    """所有 Praat 的顶层窗口（按 z 序）。"""
+
+    return [window for window in list_windows() if window.is_praat_window]
+
+
+def choose_window(
+    windows: list[WindowInfo], process_id: int | None = None
+) -> WindowInfo | None:
+    """挑一个投递目标：默认挑窗口号最大的那个 Praat（和 ``--send`` 的目标一致）。
+
+    同一个进程里优先用对象窗口：它一直开着，不会因为用户关掉编辑器或 Info
+    窗口而消失。
+    """
+
+    if not windows:
+        return None
+    if process_id is None:
+        process_id = max(window.process_id for window in windows)
+    candidates = [window for window in windows if window.process_id == process_id]
+    if not candidates:
+        return None
+    for window in candidates:
+        if window.title == PRAAT_OBJECTS_TITLE:
+            return window
+    return candidates[0]
+
+
+def deliver(
+    directory: Path,
+    script: Path,
+    *,
+    process_id: int | None = None,
+) -> tuple[bool, str]:
+    """把 ``script`` 交给正在运行的 Praat 执行，返回 ``(是否投递成功, 说明)``。
+
+    这个函数只负责「投出去」，不等结果；调用方还是像以前那样轮询
+    ``runtime/chat_state.txt``。
+    """
+
+    user32 = _user32()
+    if user32 is None:
+        return False, "当前系统不支持这种投递方式（非 Windows）。"
+    path = message_file_path()
+    if path is None:
+        return False, "找不到 Praat 的消息文件位置（%APPDATA% 不可用）。"
+    window = choose_window(praat_windows(), process_id)
+    if window is None:
+        return False, "没有找到正在运行的 Praat 窗口，请先打开 Praat。"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            build_message(directory, script), encoding="utf-8", newline=""
+        )
+    except OSError as error:
+        return False, f"无法写入 Praat 消息文件（{path}）：{error}"
+    if not user32.PostMessageW(window.handle, WM_APP, 0, 0):
+        return False, "给 Praat 发消息失败（窗口可能刚被关掉），请重试一次。"
+    return True, ""
+
+
+def cancel_pending(directory: Path | None = None) -> bool:
+    """超时之后把消息文件换成空脚本，免得它被 Praat 稍后当成新指令执行。
+
+    超时意味着 ``WM_APP`` 还排在 Praat 的消息队列里；如果不管它，前端下一条
+    指令会覆盖 ``Message.txt``，那条老消息醒来时执行的就成了**别人的脚本**。
+    """
+
+    path = message_file_path()
+    if path is None or not path.is_file():
+        return False
+    try:
+        path.write_text(noop_message(), encoding="utf-8", newline="")
+    except OSError:
+        return False
+    return True
+
+
+def foreground_window_title() -> str:
+    """当前前台窗口的标题（验证脚本用来确认前端没有被 Praat 抢走焦点）。"""
+
+    user32 = _user32()
+    if user32 is None:
+        return ""
+    handle = user32.GetForegroundWindow()
+    if not handle:
+        return ""
+    length = user32.GetWindowTextLengthW(handle)
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(handle, buffer, length + 1)
+    return buffer.value
+
+
+def window_state_map() -> dict[tuple[int, str], tuple[bool, bool]]:
+    """``(进程号, 标题) -> (可见, 最小化)``，用来前后对比窗口有没有被动过。"""
+
+    return {
+        (window.process_id, window.title): window.state
+        for window in praat_windows()
+    }
+
+
+def minimize_window(handle: int) -> bool:
+    """把窗口收进任务栏；验证脚本用它复现用户看到的那种「Praat 窗口都最小化」。"""
+
+    user32 = _user32()
+    if user32 is None:
+        return False
+    return bool(user32.ShowWindow(handle, SW_MINIMIZE))

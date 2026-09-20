@@ -153,7 +153,13 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
    在波形上手动拖出来的选区（只点了光标就是空的，不算选区）。
 2. 对话窗口把用户请求交给本地 Qwen3.5-0.8B；模型只负责选择工具并填写参数。
 3. Praat 脚本由 `ai/praat_ai/tools.py` 的固定模板渲染，不直接执行模型自由文本。
-4. 脚本通过 `Praat.exe --FULL-TRUST --send` 送到正在运行的 Praat 里执行。
+4. 脚本由 `ai/praat_ai/sendpraat.py` 自己投递：写好 Praat 的消息文件
+   `%APPDATA%\Praat\Message.txt`，再给对象窗口发一条 `WM_APP`。**不启动
+   `Praat.exe`、也不激活 Praat 的任何窗口**——所以发指令时「Praat Info」不会
+   弹出来，声音编辑器也不会跳到对话窗口前面（老实现用的是
+   `Praat.exe --send`，它会对 `FindWindow("PraatChildWindow…")` 找到的那个窗口
+   做 `ShowWindow(SW_RESTORE) + SetForegroundWindow`，这就是那两个毛病的根因，
+   详见 guide.md §8.5）。
 5. 脚本把数值结果写入 `ai/runtime/chat_result.tsv`，最后写完成标记
    `ai/runtime/chat_state.txt`；窗口轮询到标记后把结果显示在对话里。
 
@@ -193,15 +199,17 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
   静音段或清音段查基频时结果会写「该时刻没有周期性声源」，不会再出现
   `--undefined--` 这种没意义的输出。
 - 共振峰查询会临时创建一个 `ai-chat-temp` 对象，脚本结束前自动删除并恢复原选中对象。
-- `An instance of Praat that is not me is already running.` 是 `--send` 的常规提示，
-  不是错误，窗口会过滤掉。
 - 每次执行前窗口会先送一条空脚本刷新对象列表，所以 Praat 重启过、对象改过名字之后
   仍然按最新列表规划，不会拿着旧 id 去操作。
 - 每次发送最多等 25 秒。如果 Praat 里有没关掉的错误对话框或模态窗口，脚本会卡在
-  发送上，窗口会明确提示「Praat 在 25 秒内没有执行这个脚本」并告诉你关掉那些窗口，
-  不会一直挂着。
-- 同时开着多个 Praat 时，`--send` 只会把脚本交给最新打开的窗口；窗口检测到多实例
-  会提醒你关掉多余的 Praat。
+  队列里，窗口会明确提示「Praat 在 25 秒内没有执行这个脚本」并告诉你关掉那些窗口，
+  不会一直挂着（超时后前端会把排队中的消息换成空脚本，免得它稍后执行下一条指令）。
+- 同时开着多个 Praat 时，脚本只会交给最新打开的那个窗口；窗口检测到多实例会提醒你
+  关掉多余的 Praat。
+- 脚本执行失败时 Praat 还是会自己弹出错误对话框（那些文字前端读不到），关掉它再
+  发一次即可。
+- 排障用的退路：设环境变量 `PRAAT_AI_SEND_MODE=argv` 可以退回老的
+  `Praat.exe --send`（会激活 Praat 的一个窗口，平时不要开）。
 - 修改 `ai/` 下的 Python 代码后，要重新从菜单启动前端，对话窗口才会加载新代码。
 
 ## 手工回归
@@ -215,7 +223,9 @@ python ai/tests/verify_chat_templates.py        # 每个工具模板在真 Praat
 python ai/tests/verify_chat_planning.py         # 真机模型规划一批请求并真跑一遍（准确率）
 python ai/tests/verify_chat_window_ui.py        # 对话窗口能不能正常建起来（会闪一下窗口）
 python ai/tests/verify_chat_live.py             # 对话窗口链路（会临时开一个 Praat）
+python ai/tests/verify_chat_no_popup.py         # 发指令时 Praat 的窗口一个都不许动（会收进任务栏）
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
 ```
 
-后四条需要本机装好模型、并且在没有沙箱限制的终端里执行。
+后五条需要本机装好模型、并且在没有沙箱限制的终端里执行；
+`verify_chat_no_popup.py --legacy` 是反证（用老路径跑，应当看到窗口被拽出来）。

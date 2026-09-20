@@ -186,17 +186,39 @@ class SendScriptTests(unittest.TestCase):
         self.runtime = Path(self._temp.name)
         self.patch_runtime = patch.object(chat, "runtime_dir", return_value=self.runtime)
         self.patch_runtime.start()
+        self.delivered: list[tuple[Path, Path]] = []
 
     def tearDown(self) -> None:
         self.patch_runtime.stop()
         self._temp.cleanup()
 
-    def test_state_file_means_success(self) -> None:
-        fake = FakeSendProcess(state_path=chat.state_path(), write_state=True)
-        with patch.object(chat.subprocess, "Popen", fake):
+    def _deliver(self, directory, script, **_kwargs) -> tuple[bool, str]:
+        """假投递：记下参数，并像 Praat 那样写完成标记。"""
+
+        self.delivered.append((Path(directory), Path(script)))
+        chat.state_path().write_text("done\n", encoding="utf-8")
+        return True, ""
+
+    def test_window_delivery_means_success(self) -> None:
+        with patch.object(chat.sendpraat, "deliver", self._deliver):
             ok, output = chat._send_script("Praat.exe", "selectObject: 1\n")
         self.assertTrue(ok)
         self.assertEqual(output, "")
+        # 投出去的是刚写好的脚本文件，工作目录是前端自己的目录。
+        self.assertEqual(self.delivered, [(chat.ai_directory(), chat.script_path())])
+        self.assertEqual(
+            chat.script_path().read_text(encoding="utf-8"), "selectObject: 1\n"
+        )
+
+    def test_window_delivery_failure_is_reported(self) -> None:
+        with patch.object(
+            chat.sendpraat,
+            "deliver",
+            return_value=(False, "没有找到正在运行的 Praat 窗口，请先打开 Praat。"),
+        ):
+            ok, output = chat._send_script("Praat.exe", "selectObject: 1\n")
+        self.assertFalse(ok)
+        self.assertIn("没有找到正在运行的 Praat 窗口", output)
 
     def test_context_ping_script_marks_state(self) -> None:
         script = chat.context_ping_script()
@@ -204,12 +226,35 @@ class SendScriptTests(unittest.TestCase):
         self.assertIn('"done"', script)
         # 刷新用的是空脚本，不能碰任何对象。
         self.assertNotIn("selectObject", script)
+        # 也不能写 Info 窗口：那就是「发送指令弹出 Praat Info」的根源。
+        for command in ("appendInfoLine", "writeInfoLine", "writeInfo", "echo"):
+            self.assertNotIn(command, script)
 
     def test_praat_that_never_answers_is_reported_in_chinese(self) -> None:
-        fake = FakeSendProcess(state_path=chat.state_path(), exit_code=None)
-        with patch.object(chat.subprocess, "Popen", fake), patch.object(
-            chat, "EXECUTION_TIMEOUT_SEC", 0.2
+        cancelled: list[bool] = []
+        with patch.object(chat.sendpraat, "deliver", return_value=(True, "")), patch.object(
+            chat.sendpraat, "cancel_pending", lambda *_a, **_k: cancelled.append(True)
+        ), patch.object(chat, "EXECUTION_TIMEOUT_SEC", 0.2):
+            ok, output = chat._send_script("Praat.exe", "selectObject: 1\n")
+        self.assertFalse(ok)
+        self.assertIn("没有执行这个脚本", output)
+        # 超时后必须把待执行的消息换成空脚本，免得它执行下一条指令。
+        self.assertEqual(cancelled, [True])
+
+    def test_argv_mode_keeps_the_send_process_path(self) -> None:
+        fake = FakeSendProcess(state_path=chat.state_path(), write_state=True)
+        with patch.object(chat.sendpraat, "send_mode", return_value="argv"), patch.object(
+            chat.subprocess, "Popen", fake
         ):
+            ok, output = chat._send_script("Praat.exe", "selectObject: 1\n")
+        self.assertTrue(ok)
+        self.assertEqual(output, "")
+
+    def test_argv_timeout_kills_the_send_process(self) -> None:
+        fake = FakeSendProcess(state_path=chat.state_path(), exit_code=None)
+        with patch.object(chat.sendpraat, "send_mode", return_value="argv"), patch.object(
+            chat.subprocess, "Popen", fake
+        ), patch.object(chat, "EXECUTION_TIMEOUT_SEC", 0.2):
             ok, output = chat._send_script("Praat.exe", "selectObject: 1\n")
         self.assertFalse(ok)
         self.assertIn("没有执行这个脚本", output)
@@ -221,9 +266,9 @@ class SendScriptTests(unittest.TestCase):
             log_text="Error: Command “播放” not available for current selection.",
             exit_code=1,
         )
-        with patch.object(chat.subprocess, "Popen", fake), patch.object(
-            chat, "EXECUTION_TIMEOUT_SEC", 0.2
-        ):
+        with patch.object(chat.sendpraat, "send_mode", return_value="argv"), patch.object(
+            chat.subprocess, "Popen", fake
+        ), patch.object(chat, "EXECUTION_TIMEOUT_SEC", 0.2):
             ok, output = chat._send_script("Praat.exe", "selectObject: 1\nPlay\n")
         self.assertFalse(ok)
         self.assertIn("not available for current selection", output)

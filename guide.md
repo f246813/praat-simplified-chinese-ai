@@ -449,19 +449,23 @@ AI 纠音实验代码位于 `ai/`：
 
 ### 8.4 对话链路的行为约定（都踩过坑）
 
-- **发送脚本不能阻塞等 60 秒。** `Praat.exe --send` 在 Praat 弹出错误对话框或
-  被模态窗口挡住时会一直阻塞（实测 > 60 秒），脚本其实已经排队。所以
-  `chat._send_script()` 现在是「后台 Popen + 输出重定向到 `runtime/chat_send.log`
-  + 轮询 `chat_state.txt`」；超过 25 秒且发送进程还活着就杀掉它并提示用户关掉
-  Praat 里的对话框。不要再改回 `subprocess.run(timeout=60)`。
+- **投递脚本不许激活 Praat 的窗口**（见 §8.5）。`chat._send_script()` 默认走
+  `praat_ai/sendpraat.py`：自己写 `%APPDATA%\Praat\Message.txt` 再发一条
+  `WM_APP`，不启动 `Praat.exe`。老的 `Praat.exe --send` 只在
+  `PRAAT_AI_SEND_MODE=argv` 时用来排障，那条路仍然用「后台 Popen + 输出重定向
+  到 `runtime/chat_send.log` + 轮询 `chat_state.txt`」，不要改回
+  `subprocess.run(timeout=60)`（它在 Praat 弹出对话框时会一直阻塞，实测 > 60 秒）。
 - **每次执行前先刷新对象列表。** `chat.refresh_object_context()` 送一条
-  `appendInfoLine` + 状态标记的空脚本：Praat 每执行完一条脚本命令都会走
+  只写状态标记的空脚本：Praat 每执行完一条脚本命令都会走
   `praat_updateSelection()`，从而重写 `runtime/chat_context.tsv`。这样 Praat
   重启过、对象改名过之后不会拿着旧 id 去规划（旧 id 会让 Praat 报
   「没有编号为 1」）。注意批处理（`--run`）下 `PraatAiControl_refreshChatContext()`
   直接返回，所以**批处理验证不了上下文回传**，只能验模板语法。
-- **多实例**：`--send` 只能把脚本交给最新打开的那个 Praat。`chat.py` 会数
-  `tasklist` 里的 Praat 进程，多于一个就提醒用户关掉多余的窗口。
+  这条空脚本只能写文件：`appendInfoLine` 之类的命令会走 `gui_information()`，
+  把「Praat Info」窗口弹出来（§8.5 的 bug 就是这么来的）。
+- **多实例**：投递只能送给最新打开的那个 Praat（`sendpraat.choose_window()`
+  取窗口号最大的进程，和 `--send` 一致）。`chat.py` 会数 `tasklist` 里的
+  Praat 进程，多于一个就提醒用户关掉多余的窗口。
 - **Praat 脚本保留字**：`from`、`to`、`end` 不能当变量名，会报
   `Symbol misplaced`；时间区间统一用 `tmin` / `tmax` / `t1` / `t2`。
   另外这个版本**不支持 `try` / `catch`**（`Unknown variable: try`），所以命令是否
@@ -538,3 +542,56 @@ AI 纠音实验代码位于 `ai/`：
 - 回归用例：`ai/tests/test_chat_tools.py`、`ai/tests/test_chat_window.py`；
   真机链路用 `python ai/tests/verify_chat_live.py`（临时开一个 Praat，
   验证建对象、改名后对象列表会刷新、基频查询和截取片段）。
+
+### 8.5 投递脚本时不许动 Praat 的窗口（用户报的 bug）
+
+现象（2026-09-20 用户报的）：从对话窗口发指令时
+
+1. 「Praat Info」窗口自己弹出来；
+2. 声音编辑器（Sound 窗口）从任务栏跳出来盖住对话窗口。
+
+**根因是老的投递方式 `Praat.exe --send`**，不是脚本内容。`sys/praat.cpp` 的
+`tryToSwitchToRunningPraat()` 在 Windows 上做两件事：
+
+1. `GuiWin_initialize1()` → `FindWindow ("PraatChildWindow1 Praat", NULL)`，
+   拿回来的是 **z 序最上面那个 Praat 子窗口**——实测就是「Praat Info」或者声音
+   编辑器（对象窗口的类是 `PraatShell1 Praat`，反而不会被选中）；
+2. `if (IsIconic (winWindow)) ShowWindow (winWindow, SW_RESTORE);
+   SetForegroundWindow (winWindow);`
+
+于是每发一条指令（包括每次请求前那条刷新对象列表的空脚本），那个窗口都会被
+`SW_RESTORE` 拽出来并抢走前台。接收端完全无辜：`sys/motifEmulator.cpp` 的
+`WM_APP` 分支里那两行激活代码是注释掉的。
+
+真机取证（同一台机器，先让 Praat 的窗口最小化、把另一个窗口置前，再发同一条
+查询指令）：
+
+| 投递方式 | 窗口状态变化 | 前台窗口 |
+| --- | --- | --- |
+| `Praat.exe --send` | `Praat Info` 最小化 → 还原 | 「对话窗口」→ `Praat Info` |
+| 自己写 `Message.txt` + `WM_APP` | 无 | 不变 |
+
+修法是 `ai/praat_ai/sendpraat.py`：按 Praat 自己的 sendpraat 协议把消息写进
+`%APPDATA%\Praat\Message.txt`（内容就是 `--send` 会写的那两行
+`setWorkingDirectory:` / `runScript:`，前面必须带 `# --FULL-TRUST`，
+否则脚本写不了 `runtime/` 之外的路径），再给对象窗口发一条 `WM_APP`
+（`motifEmulator.cpp` 里 `WM_USER` / `WM_APP` 走同一个
+`cb_userMessage()` → `praat_executeScript_noGUI()`）。
+
+几条不能踩坏的约定：
+
+- **消息文件是全局唯一的**（Praat 只认 `Message.txt` 这个名字），所以同一时刻
+  只能有一条指令在飞。前端逐条同步执行刚好满足；**一旦超时必须调用
+  `sendpraat.cancel_pending()`**，把消息文件换成只有注释的空脚本，否则那条排队
+  中的 `WM_APP` 醒来时会执行**下一条指令**的脚本（可能把「删除」执行两遍）。
+- 投递目标优先选对象窗口（`Praat Objects`，类名 `PraatShell…`）：它一直在，
+  不会因为用户关掉编辑器或 Info 窗口而消失。
+- 窗口类名按前缀匹配 `praat`（`PraatChildWindow1 Praat` / `PraatShell1 Praat`），
+  别写死类名里的数字和程序名。
+- 想退回老路径：`PRAAT_AI_SEND_MODE=argv`（只排障用，会激活 Praat 的子窗口）。
+- 脚本执行失败时 Praat 仍然会自己弹错误对话框（`Melder_flushError`），对话窗口
+  读不到那些文字，还是按「请查看 Praat 弹出的错误提示」提示用户。
+- 回归：`ai/tests/test_sendpraat.py`（纯单测）+
+  `python ai/tests/verify_chat_no_popup.py`（真机，会先把 Praat 的窗口收进
+  任务栏、置前一个 Tk 窗口，再检查窗口状态和前台焦点都没变；
+  `--legacy` 是反证，用老路径跑同一条链路，应当看到窗口被拽出来/前台被抢）。

@@ -4,7 +4,8 @@
 
 1. 读取 Praat 写出的对象列表（``runtime/chat_context.tsv``）。
 2. Qwen 只负责选择工具并填参数，脚本由 :mod:`praat_ai.tools` 用固定模板生成。
-3. 脚本通过 ``Praat.exe --FULL-TRUST --send`` 送到正在运行的 Praat 里执行。
+3. 脚本通过 :mod:`praat_ai.sendpraat` 送到正在运行的 Praat 里执行（自己写
+   ``Message.txt`` 再发 ``WM_APP``，不激活 Praat 的任何窗口）。
 4. 脚本把数值结果写进 ``runtime/chat_result.tsv``，执行完成写
    ``runtime/chat_state.txt``；对话窗口轮询到完成标记后把结果读回来显示。
 
@@ -23,7 +24,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
-from . import tools
+from . import sendpraat, tools
 from .config import load_config
 from .presets import PresetError, active_preset, list_presets
 from .qwen import QwenClient, QwenError
@@ -40,12 +41,18 @@ EXECUTION_TIMEOUT_SEC = 25.0
 def context_ping_script() -> str:
     """一条不需要任何对象的脚本：Praat 每执行完一条命令都会刷新对象列表文件，
     所以用它既能确认 Praat 还在响应，又能把 ``chat_context.tsv`` 更新到最新。
+
+    只能写文件：``appendInfoLine`` 这类命令会走 ``gui_information()``，把
+    「Praat Info」窗口弹出来（这就是用户报的那个 bug，见 guide.md §8.5）。
     """
 
-    return (
-        'appendInfoLine: "praat-ai context ping"\n'
-        f'appendFileLine: {tools.quote(state_path())}, "done"\n'
-    )
+    return f'appendFileLine: {tools.quote(state_path())}, "done"\n'
+
+
+def ai_directory() -> Path:
+    """前端自己的目录（Praat 消息里的工作目录，相对路径按它解析）。"""
+
+    return Path(__file__).resolve().parents[1]
 
 
 def runtime_dir() -> Path:
@@ -128,27 +135,81 @@ def _clean_send_output(text: str) -> str:
     return "\n".join(lines)
 
 
-def _send_script(executable: str, script: str) -> tuple[bool, str]:
-    """Hand the script to the running Praat and wait for its result files.
+def _clear_result_files() -> None:
+    """每次投递前清掉上一次的结果和完成标记（等待时只看新的那个）。"""
 
-    这里故意不用 ``subprocess.run``：``Praat.exe --send`` 在 Praat 被对话框或
-    编辑器挡住时会一直阻塞在发送上（实测超过 60 秒），此时脚本很可能已经在
-    Praat 里排队，直接判失败会误导用户。所以改成：
-
-    1. 后台启动发送进程，输出重定向到 ``runtime/chat_send.log``（不用管道，
-       免得发送进程被写满的管道卡住）；
-    2. 轮询状态文件，出现就成功，并把已经没用的发送进程收掉；
-    3. 超时且发送进程还活着，就说明 Praat 没在处理消息，杀掉发送进程并给出
-       中文原因；发送进程已经退出则把 Praat 自己的输出交给用户。
-    """
-
-    target = script_path()
-    target.write_text(script, encoding="utf-8")
     for path in (result_path(), state_path()):
         try:
             path.unlink()
         except FileNotFoundError:
             pass
+
+
+def _blocked_reason() -> str:
+    return (
+        f"Praat 在 {EXECUTION_TIMEOUT_SEC:.0f} 秒内没有执行这个脚本。"
+        "常见原因：Praat 里有没关掉的对话框或错误提示、编辑器正在播放/被"
+        "模态窗口挡住。关掉那些窗口后再发一次即可。"
+    )
+
+
+def _wait_for_result(process: subprocess.Popen[bytes] | None) -> tuple[bool, str]:
+    """轮询 ``chat_state.txt``；``process`` 只在那条 ``--send`` 兜底路径里非空。"""
+
+    deadline = time.monotonic() + EXECUTION_TIMEOUT_SEC
+    while time.monotonic() < deadline:
+        if state_path().is_file():
+            if process is not None:
+                _close_send_process(process)
+            return True, ""
+        if process is not None and process.poll() is not None:
+            break
+        time.sleep(0.15)
+
+    output = _clean_send_output(_read_send_log()) if process is not None else ""
+    if state_path().is_file():
+        if process is not None:
+            _close_send_process(process)
+        return True, output
+    if process is None:
+        # 自己投递时没有「发送进程」可看：这条 WM_APP 还排在 Praat 的消息队列里，
+        # 得先把消息文件换成空脚本，否则它醒来时执行的会是下一条指令的脚本。
+        sendpraat.cancel_pending()
+        return False, _blocked_reason()
+    if process.poll() is None:
+        _close_send_process(process)
+        return False, f"{output}\n{_blocked_reason()}".strip()
+    return False, output
+
+
+def _send_script(executable: str, script: str) -> tuple[bool, str]:
+    """Hand the script to the running Praat and wait for its result files.
+
+    默认走 :mod:`praat_ai.sendpraat`：自己写 ``Message.txt`` 再发 ``WM_APP``。
+    这样 Praat 一个窗口都不会被激活——用户报的「弹出 Praat Info」和「声音窗口
+    盖住对话窗口」都是老的 ``Praat.exe --send`` 干的（见 guide.md §8.5）。
+
+    设 ``PRAAT_AI_SEND_MODE=argv`` 可以退回 ``--send`` 排障：那条路会激活一个
+    Praat 子窗口，而且 ``--send`` 在 Praat 被模态窗口挡住时会一直阻塞（实测
+    超过 60 秒，脚本其实已经排队），所以老路径仍然用「后台 Popen + 轮询」，
+    不回到 ``subprocess.run(timeout=60)``。
+    """
+
+    target = script_path()
+    target.write_text(script, encoding="utf-8")
+    _clear_result_files()
+    if sendpraat.send_mode() == sendpraat.ARGV_MODE:
+        return _send_script_via_argv(executable, target)
+    delivered, note = sendpraat.deliver(ai_directory(), target)
+    if not delivered:
+        return False, note
+    return _wait_for_result(None)
+
+
+def _send_script_via_argv(
+    executable: str, target: Path
+) -> tuple[bool, str]:
+    """排障兜底：``Praat.exe --FULL-TRUST --send``（会激活 Praat 的一个子窗口）。"""
 
     creation_flags = 0
     if os.name == "nt":
@@ -162,7 +223,7 @@ def _send_script(executable: str, script: str) -> tuple[bool, str]:
         with log_path.open("wb") as log_handle:
             process = subprocess.Popen(
                 [executable, "--FULL-TRUST", "--send", str(target)],
-                cwd=Path(__file__).resolve().parents[1],
+                cwd=ai_directory(),
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -170,29 +231,7 @@ def _send_script(executable: str, script: str) -> tuple[bool, str]:
             )
     except OSError as error:
         return False, f"调用 Praat 失败：{error}"
-
-    deadline = time.monotonic() + EXECUTION_TIMEOUT_SEC
-    while time.monotonic() < deadline:
-        if state_path().is_file():
-            _close_send_process(process)
-            return True, ""
-        if process.poll() is not None:
-            break
-        time.sleep(0.15)
-
-    output = _clean_send_output(_read_send_log())
-    if state_path().is_file():
-        _close_send_process(process)
-        return True, output
-    if process.poll() is None:
-        _close_send_process(process)
-        reason = (
-            f"Praat 在 {EXECUTION_TIMEOUT_SEC:.0f} 秒内没有执行这个脚本。"
-            "常见原因：Praat 里有没关掉的对话框或错误提示、编辑器正在播放/被"
-            "模态窗口挡住。关掉那些窗口后再发一次即可。"
-        )
-        return False, f"{output}\n{reason}".strip()
-    return False, output
+    return _wait_for_result(process)
 
 
 def _read_send_log() -> str:
