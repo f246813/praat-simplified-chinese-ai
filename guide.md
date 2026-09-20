@@ -804,3 +804,38 @@ Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COM
 - 回归：`python ai/tests/verify_plugin.py`（4 条：菜单注册语法、33 个参数、
   单参数带范围、无声段）+ `ai/tests/test_plugin_build.py`（生成物和表一致、
   菜单指向的文件存在、表单字段数和 `runScript` 参数个数相等）。
+
+### 8.8 跑现成（社区）.praat 脚本（C3）
+
+用户手里那堆社区脚本（声学测量、标注、画图）默认是「在图形界面里对选中对象运行」。
+**不能**把它们直接投给用户开着的 Praat：脚本里的 `form` 会弹模态框、脚本报错会弹
+错误框，两种都会把后面排队的消息全挡住（§8.5）；而且批处理里表单不会自己用默认值，
+直接 `runScript` 会报 `Found 0 arguments but expected more`。
+
+所以 `run_praat_script` 这个工具走**批处理**（实现在
+`ai/praat_ai/external_script.py`）：
+
+1. 先让开着的 Praat 把当前声音（列表里只有一个 TextGrid 时再加上它）另存到
+   `ai/runtime/external/<uuid>/`——用户自己的对象一个都不动；
+2. `external_script.parse_form()` 从脚本文本里读出表单字段，把**默认值**按顺序传进
+   `runScript`（等价于脚本作者点 OK 时那个行为）；
+3. 起 `Praat.exe --FULL-TRUST --run 包装脚本`，读回脚本自己 `writeInfoLine` 的输出、
+   以及它在自己目录里新增/改动的文件；总之**不碰用户开着的那个 Praat**。
+
+约定和坑：
+
+- **批处理里看不到用户当前的对象列表**：脚本拿到的是导出的副本（读回来时会把名字
+  改回原名，脚本按 `select Sound "tone"` 找对象也能找到）。所以「对编辑器圈选段
+  做分析」这种脚本不能这样跑，reply 里要写清楚，让用户在 Praat 里自己点；
+- 表单字段的默认值必须是带引号的字符串；**数值字段的默认值必须是数字**
+  （`real: "Start (s)", "0.0 (= auto)"` 这种带说明的默认值是常见情况，遇到就明确
+  拒绝并说明，不能猜一个数传进去）；
+- 认不出来的字段类型（社区脚本可能有新字段）也**明确拒绝**，不要按错位的参数传；
+- 批处理进程有超时（默认 60 秒），脚本自己弹了对话框也不会把前端挂死；
+- `MAX_AGENT_STEPS` 之类护栏照旧：`run_praat_script` 算「会改动对象」的工具，
+  用户没说「然后再」时不会在第二轮被执行。
+
+回归：`python ai/tests/verify_external_script.py`（真 Praat 批处理，4 条：带表单的
+社区脚本 + 无表单 + 脚本报错 + 认不出的字段类型），单测
+`ai/tests/test_external_script.py`（表单解析、参数、包装脚本、工具注册、对话窗口
+那条分流）。

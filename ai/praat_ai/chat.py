@@ -483,17 +483,27 @@ def _execute_action(
     context: tools.ToolContext,
     execute: Callable[[str], tuple[bool, list[str], str]],
     round_index: int,
+    environment: tools.LocalEnvironment | None = None,
 ) -> AgentStep:
     """执行一个动作，把它变成一条可以回灌给模型的观察结果。
 
     工具自己拒绝请求（参数不合法、对象找不到）时**不再往上抛**：那是一条「这个动作
     没做成，原因是……」的观察结果，模型看到之后可以改参数重试（见 A4 的取舍）。
+
+    ``environment`` 是给**本地工具**（例如 ``tools.RUN_SCRIPT_TOOL``）用的：
+    「渲染脚本 → 投递」那套对它们不适用，它们要自己起批处理进程；没给环境时
+    只回一句「这次没有可用的执行环境」，而不是崩掉（测试里直接调也会走到这）。
     """
 
     tool_name = str(action.get("tool", "") or "").strip()
     arguments = action.get("arguments") or {}
     if not isinstance(arguments, Mapping):
         arguments = {}
+    # 本地工具（跑现成 .praat 脚本那种）不走「渲染脚本 → 投递」，先分流。
+    if tool_name in tools.LOCAL_TOOLS:
+        return _execute_local_action(
+            tool_name, arguments, context, environment, round_index
+        )
     try:
         script, note = render_action(action, context)
     except tools.ToolError as error:
@@ -521,6 +531,51 @@ def _execute_action(
     )
 
 
+def _execute_local_action(
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    context: tools.ToolContext,
+    environment: tools.LocalEnvironment | None,
+    round_index: int,
+) -> AgentStep:
+    """跑一个**本地工具**：它自己在 Python 这边干活（例如起批处理跑现成脚本）。
+
+    和模板工具一样，工具自己拒绝请求时只回一条「没有执行 + 原因」的观察结果；
+    ``environment`` 缺失（有人在测试里直接调这个函数）时说清楚，而不是崩。
+    """
+
+    local = tools.LOCAL_TOOLS[tool_name]
+    if environment is None:
+        observation = (
+            f"工具 {tool_name} 没有执行：它要在对话窗口里跑，这次没有可用的执行环境。"
+        )
+        return AgentStep(round_index, tool_name, dict(arguments), False, observation)
+    try:
+        ok, results, failure = local.run(arguments, context, environment)
+    except tools.ToolError as error:
+        observation = f"工具 {tool_name} 没有执行：{error}"
+        return AgentStep(round_index, tool_name, dict(arguments), False, observation)
+    if ok:
+        detail = "；".join(results) if results else "（工具跑完了，但没有输出结果行）"
+        observation = (
+            f"工具 {tool_name} 执行成功，结果：{detail}\n"
+            "（如果这些结果已经够回答用户，就直接回答，不要再调工具、也不要顺手多做别的操作；"
+            "只有确实还需要下一步时才继续调工具。）"
+        )
+    else:
+        observation = f"工具 {tool_name} 执行失败：{failure}"
+    return AgentStep(
+        round_index,
+        tool_name,
+        dict(arguments),
+        ok,
+        observation,
+        "",
+        results if ok else [],
+        "",
+    )
+
+
 def _run_agent_turn(
     planner,
     *,
@@ -530,6 +585,7 @@ def _run_agent_turn(
     max_rounds: int = MAX_AGENT_ROUNDS,
     max_steps: int = MAX_AGENT_STEPS,
     allow_followup_mutations: bool = False,
+    environment: tools.LocalEnvironment | None = None,
 ) -> TurnOutcome:
     """循环本体：规划 → 执行 → 回灌 → 再规划（planner 负责具体接口）。
 
@@ -602,7 +658,9 @@ def _run_agent_turn(
             if steps_done >= max_steps:
                 stopped_early = True
                 break
-            step = _execute_action(action, context, execute, round_index)
+            step = _execute_action(
+                action, context, execute, round_index, environment
+            )
             steps_done += 1
             executed[signature] = step.observation
             outcome.steps.append(step)
@@ -764,6 +822,7 @@ def run_turn(
     on_progress: Callable[[str], None] | None = None,
     native: bool | None = None,
     max_rounds: int = MAX_AGENT_ROUNDS,
+    environment: tools.LocalEnvironment | None = None,
 ) -> TurnOutcome:
     """跑一轮用户请求：先规划，执行，把结果回灌，再规划（见 ``MAX_AGENT_ROUNDS``）。
 
@@ -790,6 +849,7 @@ def run_turn(
         on_progress=on_progress,
         max_rounds=2 if not use_native else max_rounds,
         allow_followup_mutations=wants_second_step(user_text),
+        environment=environment,
     )
 
 
@@ -1356,6 +1416,14 @@ class ChatWindow:
                 return False, [], output or _blocked_reason()
             return True, _read_results(), ""
 
+        # 本地工具（跑现成 .praat 脚本那种）需要：往开着的 Praat 投递脚本、
+        # 批处理用的 Praat 路径、以及放临时文件的地方。
+        environment = tools.LocalEnvironment(
+            execute=execute,
+            praat_executable=executable,
+            runtime_directory=runtime_dir(),
+        )
+
         return run_turn(
             self.client,
             user_text=text,
@@ -1364,6 +1432,7 @@ class ChatWindow:
             context=context,
             execute=execute,
             on_progress=lambda line: self.messages.put(("hint", line)),
+            environment=environment,
         )
 
     def process_message(self, text: str) -> None:

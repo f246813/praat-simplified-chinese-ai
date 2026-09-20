@@ -174,6 +174,7 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 | TextGrid | `textgrid_info`（层、区间、标签）、`textgrid_set_interval`（标注时间段，自动补边界）、`textgrid_insert_boundary` |
 | 测量 | `vot`：给了 `burst`/`voicing` 两个时刻就直接相减（TextGrid 会补边界）；只给 `from`/`to`（大概范围）就在范围里分两步自动估计——先按 2–8 kHz 带通包络的上升沿定爆破，再按自相关基频定浊音起始，结果里分别写明依据，属于估计值；范围里还包含第二个音素时只报第一个，并提示范围偏大、建议收紧；话里完全没给范围时，直接用在波形上拖出来的选区，并注明「按编辑器圈选」（模型把选区抄成 from/to 时也照样注明） |
 | 交互 | `view_edit`、`play` |
+| 现成脚本 | `run_praat_script`：把社区 `.praat` 脚本当**批处理**跑（输入是当前声音的副本，脚本表单的默认值会自动填进去），脚本自己打印的结果回到对话里；批处理里看不到你当前的对象列表，也不能用编辑器/交互窗口（见下） |
 
 一次问多个时刻也支持：`time` 可以写 `0.25,0.75`，「查询 0.25 秒和 0.75 秒的基频」
 会一次返回两行结果；`formant` 同样可以写 `1,2`。
@@ -235,6 +236,14 @@ python ai\tests\verify_plugin.py                                  # 真机回归
 
 卸载就是删掉 `%APPDATA%\Praat\plugin_praat_ai`；细节和已知边界见
 `ai/plugin/README.zh-CN.md`。
+
+手上有现成的社区脚本时，可以直接说「用 D:/scripts/vot.praat 跑一下这个声音」：
+`run_praat_script` 会先把当前声音（列表里只有一个 TextGrid 时连它一起）导出成副本，
+再让另一个**批处理** Praat 去跑那个脚本——脚本里的表单用它自己的默认值，脚本自己
+打印的结果（以及它在自己目录里新写的文件）会回到对话里。这条路不碰你开着的 Praat，
+所以脚本报错、或者脚本自己弹对话框，都不会把对话卡住。反过来，批处理里**看不到你
+当前的对象列表**，也不能用编辑器：对「编辑器里圈选的那一段」做分析的脚本，还是得在
+Praat 里自己点运行。
 
 模板覆盖不到的请求会退回 `custom_script`，此时脚本必须通过安全检查：单引号自动改成
 双引号、禁止 `runSystem`、`deleteFile`、`exit` 等命令，并且**必须是 Praat 脚本**——
@@ -306,6 +315,7 @@ python ai/tests/verify_chat_window_ui.py        # 对话窗口能不能正常建
 python ai/tests/verify_chat_live.py             # 对话窗口链路（会临时开一个 Praat）
 python ai/tests/verify_chat_no_popup.py         # 发指令时 Praat 的窗口一个都不许动（会收进任务栏）
 python ai/tests/verify_plugin.py                # 原生插件（B2）：菜单注册 + 33 个参数在真 Praat 里算一遍
+python ai/tests/verify_external_script.py       # 现成社区脚本当批处理跑（C3）：表单默认值、输出、报错
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
 ```
 

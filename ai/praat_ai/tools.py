@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from . import measures
+from . import external_script, measures
 
 
 class ToolError(ValueError):
@@ -81,6 +82,10 @@ CUSTOM_SCRIPT_TOOL = "custom_script"
 
 #: 表驱动的测量工具；它的参数表是 ``ai/praat_ai/measures.tsv``。
 MEASURE_TOOL = "measure"
+
+#: 跑现成（社区）.praat 脚本的工具；它不走「渲染脚本 → 投递」那条路，
+#: 见 :class:`LocalTool` 与 ``ai/praat_ai/external_script.py``。
+RUN_SCRIPT_TOOL = "run_praat_script"
 
 # 「有时长概念」的对象类：只有这些类才能用 Get total duration 之类的查询，
 # 否则脚本会在 Praat 里直接报 “Command not available”，用户只看到一句英文错误。
@@ -2839,12 +2844,185 @@ def _build_measure(arguments: Mapping[str, Any], context: ToolContext) -> str:
     return _assemble(lines, context)
 
 
+# ---------------------------------------------------------------------------
+# C3：把现成的（社区）Praat 脚本跑起来。
+#
+# 不走「渲染脚本 → 投递给开着的 Praat」：现成脚本普遍带表单和报错对话框，两条都
+# 会把用户开着的 Praat 卡住（模态框挡住后面所有消息）。所以这里导出对象副本、
+# 在**批处理**里跑（见 external_script.py 的模块说明）。
+# ---------------------------------------------------------------------------
+
+#: 外部脚本的输出最多回灌几行给对话窗口（长报告别把上下文撑爆）。
+EXTERNAL_OUTPUT_LINES = 40
+
+
+def save_textgrid_script(context: ToolContext, row: ObjectRow, path: Path) -> str:
+    """把 TextGrid 另存为文本文件（本地工具导出用；和模板一样带完成标记）。"""
+
+    return _assemble(
+        [f"selectObject: {row.id}", f"Save as text file: {quote(praat_path(path))}"],
+        context,
+    )
+
+
+def _external_textgrid(
+    arguments: Mapping[str, Any], context: ToolContext
+) -> ObjectRow | None:
+    """要一起交给外部脚本的 TextGrid：显式给的优先，否则用列表里唯一那个。"""
+
+    requested = arguments.get("textgrid")
+    if requested not in (None, ""):
+        return context.resolve_by_class(
+            requested, frozenset({"TextGrid"}), "textgrid 要给一个 TextGrid 对象"
+        )
+    candidates = [row for row in context.objects if row.class_name == "TextGrid"]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _run_external_script(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+    environment: LocalEnvironment,
+) -> tuple[bool, list[str], str]:
+    """跑一个现成的 ``.praat`` 脚本，把它的输出读回来。"""
+
+    raw_path = str(arguments.get("path", "") or "").strip()
+    if not raw_path:
+        raise ToolError("要跑哪个脚本？请给出 .praat 文件的完整路径（path）。")
+    timeout = _number(arguments, "timeout", 60.0, 5.0, 900.0)
+    target = Path(raw_path).expanduser()
+    try:
+        source = external_script.read_script(target)
+        fields = external_script.parse_form(source)
+        payload = external_script.run_arguments(fields)
+    except external_script.ExternalScriptError as error:
+        raise ToolError(str(error)) from error
+
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "外部脚本的输入需要声音对象"
+    )
+    work = environment.runtime_directory / "external" / uuid.uuid4().hex
+    work.mkdir(parents=True, exist_ok=True)
+
+    # 1) 让开着的 Praat 存一份声音副本（用户的对象一个都不动）。
+    sound_path = work / "input.wav"
+    ok, _results, failure = environment.execute(
+        render("save_sound", {"path": str(sound_path), "object": row.id}, context)
+    )
+    if not ok or not sound_path.is_file():
+        return False, [], f"没能把当前声音导出成 WAV：{failure or '文件没有生成'}"
+
+    # 2) 有 TextGrid 就一起导出（标注类脚本都要它）。
+    grid = _external_textgrid(arguments, context)
+    grid_path: Path | None = None
+    if grid is not None:
+        candidate = work / "input.TextGrid"
+        ok, _results, failure = environment.execute(
+            save_textgrid_script(context, grid, candidate)
+        )
+        if ok and candidate.is_file():
+            grid_path = candidate
+
+    # 3) 批处理里跑现成脚本。
+    wrapper = work / "wrapper.praat"
+    wrapper.write_text(
+        external_script.wrapper_script(
+            sound_path=sound_path,
+            grid_path=grid_path,
+            target=target,
+            arguments=payload,
+            sound_name=row.name,
+            grid_name=grid.name if grid is not None else "",
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    before = external_script.folder_snapshot(target.parent)
+    ok, output = external_script.run_batch(
+        environment.praat_executable,
+        wrapper,
+        timeout=timeout,
+        working_directory=work,
+    )
+    after = external_script.folder_snapshot(target.parent)
+
+    if not ok:
+        return (
+            False,
+            [],
+            f"外部脚本 {target.name} 在批处理里没跑成：{output}\n"
+            "（注意：批处理里看不到你当前的对象列表，脚本拿到的是导出的声音副本；"
+            "需要编辑器或交互的脚本请直接在 Praat 里运行。）",
+        )
+
+    lines: list[str] = [
+        f"外部脚本 {target.name} 跑完了（在批处理里跑的，没有动你开着的 Praat）。"
+    ]
+    if fields:
+        lines.append(
+            f"脚本的表单按它自己的默认值填了 {len(fields)} 个字段"
+            "（批处理里不显示表单）："
+            + "、".join(f"{field.label or field.kind}={field.default}" for field in fields)
+        )
+    lines.append(
+        f"输入：{row.class_name}「{row.name}」的副本"
+        + (f"，外加 TextGrid「{grid.name}」" if grid is not None else "")
+    )
+    if output:
+        for line in output.splitlines()[:EXTERNAL_OUTPUT_LINES]:
+            if line.strip():
+                lines.append(f"脚本输出：{line.strip()}")
+    else:
+        lines.append("脚本没有打印任何结果（它可能把结果写进了文件或新的对象里）。")
+    written = external_script.changed_files(before, after)
+    if written:
+        shown = "、".join(written[:10])
+        lines.append(f"脚本在自己那个目录里新增/改动了 {len(written)} 个文件：{shown}")
+    return True, lines, ""
+
+
 @dataclass(frozen=True, slots=True)
 class Tool:
     name: str
     summary: str
     signature: str
     build: Callable[[Mapping[str, Any], ToolContext], str]
+
+    def describe(self) -> str:
+        return f"- {self.name}: {self.summary} 参数：{self.signature}"
+
+
+@dataclass(frozen=True, slots=True)
+class LocalEnvironment:
+    """本地（不在 Praat 里跑）的工具需要的外部能力。
+
+    由对话窗口提供：``execute(脚本)`` 把脚本投给**正在运行的 Praat**（见
+    ``chat._send_script``），返回 ``(是否成功, 结果行, 失败说明)``；
+    ``praat_executable`` 是批处理要用的 Praat，``runtime_directory`` 是
+    ``ai/runtime``。
+    """
+
+    execute: Callable[[str], tuple[bool, list[str], str]]
+    praat_executable: str
+    runtime_directory: Path
+
+
+@dataclass(frozen=True, slots=True)
+class LocalTool:
+    """在前端（Python）里执行的工具：不需要渲染 Praat 脚本模板。
+
+    `build` 那套模板适合「一句话 → 一条固定脚本」的查询；像「把现成 .praat
+    脚本跑起来」（C3）这种要起批处理进程、还要读文件的工具，走这里。
+    """
+
+    name: str
+    summary: str
+    signature: str
+    parameters: dict[str, Any]
+    run: Callable[
+        [Mapping[str, Any], ToolContext, LocalEnvironment],
+        tuple[bool, list[str], str],
+    ]
 
     def describe(self) -> str:
         return f"- {self.name}: {self.summary} 参数：{self.signature}"
@@ -3468,6 +3646,33 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
 #: ``measure`` 的 schema 由参数表生成（加一行参数就多一个 enum 项）。
 TOOL_PARAMETERS[MEASURE_TOOL] = _measure_schema()
 
+#: 在前端（Python）里执行的工具。它们不走「渲染脚本 → 投递」，所以单独一张表；
+#: 工具说明、schema、catalog 和标签都要一起给模型看（见下面几个函数的合并逻辑）。
+LOCAL_TOOLS: dict[str, LocalTool] = {
+    RUN_SCRIPT_TOOL: LocalTool(
+        name=RUN_SCRIPT_TOOL,
+        summary=(
+            "跑一个现成的（社区）.praat 脚本：把它当成批处理跑，输入是当前声音的副本"
+            "（脚本里表单的默认值会自动填进去）。脚本自己打印的结果会回到这里。"
+            "注意批处理里看不到你当前的对象列表，也不能用编辑器/交互窗口；"
+            "对编辑器圈选段做分析的脚本要在 Praat 里自己跑。"
+        ),
+        signature="path（.praat 文件完整路径）、object（可选，输入的声音）、textgrid（可选）、timeout（秒，默认 60）",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": _text_arg("要跑的 .praat 文件完整路径，例如 D:/scripts/vot.praat"),
+                "object": _object_arg("作为输入的声音对象；不填就用当前选中的"),
+                "textgrid": _object_arg("（可选）一起交给脚本的 TextGrid"),
+                "timeout": _number_arg("批处理超时秒数，默认 60"),
+            },
+            "required": ["path"],
+        },
+        run=_run_external_script,
+    )
+}
+TOOL_PARAMETERS[RUN_SCRIPT_TOOL] = LOCAL_TOOLS[RUN_SCRIPT_TOOL].parameters
+
 
 def tool_parameters(name: str) -> dict[str, Any]:
     """取一个工具的 JSON Schema（没登记就用空参数表）。"""
@@ -3494,6 +3699,17 @@ def tool_schemas() -> list[dict[str, Any]]:
         }
         for tool in TOOLS
     ]
+    schemas.extend(
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.summary,
+                "parameters": tool.parameters,
+            },
+        }
+        for tool in LOCAL_TOOLS.values()
+    )
     schemas.append(
         {
             "type": "function",
@@ -3536,6 +3752,8 @@ MUTATING_TOOLS: frozenset[str] = frozenset(
         "textgrid_insert_boundary",
         "textgrid_set_interval",
         CUSTOM_SCRIPT_TOOL,
+        # 现成脚本可能只打印结果，也可能写文件，按「会改动」保守处理。
+        RUN_SCRIPT_TOOL,
     }
 )
 
@@ -3550,6 +3768,7 @@ def tool_labels() -> dict[str, str]:
     """``工具名 -> 一句中文说明``，规划层用它给「模型只想执行、没写回话」兜底。"""
 
     labels = {tool.name: tool.summary for tool in TOOLS}
+    labels.update({tool.name: tool.summary for tool in LOCAL_TOOLS.values()})
     labels[CUSTOM_SCRIPT_TOOL] = "执行模型给出的自定义 Praat 脚本。"
     return labels
 
@@ -3602,6 +3821,7 @@ def catalog_text() -> str:
         f"- {MEASURE_TOOL}: 表驱动的声学测量（一行参数 = 一条查询，参数表在"
         f" ai/praat_ai/measures.tsv）。参数：{measure_parameter_help()}。"
     )
+    lines.extend(tool.describe() for tool in LOCAL_TOOLS.values())
     lines.append(
         f"- {CUSTOM_SCRIPT_TOOL}: 只有在上面所有工具都无法完成请求时才使用；"
         "这时把完整 Praat 英文脚本写进 script 字段。"

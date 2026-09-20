@@ -315,7 +315,7 @@ def install(
     )
     if not quiet:
         print(f"已安装到 {target}")
-        print(f"  对话窗口命令：\"{python}\" \"{project / 'start_ai_chat.py'}\"")
+        print(f"  对话窗口命令：\"{_pythonw(python)}\" \"{project / 'ai' / 'start_ai_chat.py'}\"")
     return target
 
 

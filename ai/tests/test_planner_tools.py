@@ -33,7 +33,11 @@ def signature_names(signature: str) -> set[str]:
 
 class ToolSchemaTests(unittest.TestCase):
     def test_every_tool_has_a_schema(self) -> None:
-        expected = {tool.name for tool in tools.TOOLS} | {tools.CUSTOM_SCRIPT_TOOL}
+        expected = (
+            {tool.name for tool in tools.TOOLS}
+            | set(tools.LOCAL_TOOLS)
+            | {tools.CUSTOM_SCRIPT_TOOL}
+        )
         self.assertEqual(set(tools.TOOL_PARAMETERS), expected)
 
     def test_schema_shape_is_valid(self) -> None:
@@ -52,7 +56,7 @@ class ToolSchemaTests(unittest.TestCase):
     def test_schema_parameters_match_the_documented_signature(self) -> None:
         """schema 里的参数名必须出现在工具的 signature 里，防止两边跑偏。"""
 
-        for tool in tools.TOOLS:
+        for tool in list(tools.TOOLS) + list(tools.LOCAL_TOOLS.values()):
             schema = tools.tool_parameters(tool.name)
             documented = signature_names(tool.signature)
             with self.subTest(tool=tool.name):
@@ -68,7 +72,9 @@ class ToolSchemaTests(unittest.TestCase):
 
     def test_schemas_are_openai_shaped(self) -> None:
         schemas = tools.tool_schemas()
-        self.assertEqual(len(schemas), len(tools.TOOLS) + 1)
+        self.assertEqual(
+            len(schemas), len(tools.TOOLS) + len(tools.LOCAL_TOOLS) + 1
+        )
         names = [item["function"]["name"] for item in schemas]
         self.assertEqual(len(names), len(set(names)))
         for item in schemas:
@@ -81,6 +87,8 @@ class ToolSchemaTests(unittest.TestCase):
         labels = tools.tool_labels()
         for tool in tools.TOOLS:
             self.assertIn(tool.name, labels)
+        for name in tools.LOCAL_TOOLS:
+            self.assertIn(name, labels)
         self.assertIn(tools.CUSTOM_SCRIPT_TOOL, labels)
 
 

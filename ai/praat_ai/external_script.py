@@ -1,0 +1,311 @@
+"""跑现成的（社区）Praat 脚本（C3）。
+
+用户手里常有一堆社区 `.praat` 脚本（声学参数测量、标注、画图），它们默认是
+「在 Praat 图形界面里对选中的对象运行」。前端**不能**把这类脚本直接送进用户
+开着的 Praat：
+
+- 脚本里的 `form` 会弹一个模态对话框；批处理里不弹，但直接 `runScript` 会因为
+  缺参数报错；
+- 脚本自己报错时 Praat 会弹错误对话框，把后面排队的所有消息一起挡住
+  （guide.md §8.5 / §8.8 的那条坑）。
+
+所以这里走**批处理**：
+
+    save as wav（交给开着的 Praat 存一份当前对象的副本）→
+    Praat.exe --FULL-TRUST --run 包装脚本 → 读回脚本自己打印的结果和它写出的文件
+
+边界（也写在工具的说明里，用户看得到）：
+
+- 批处理里**看不到用户当前的对象列表**：脚本拿到的是我们导出的声音副本（列表里
+  还有 TextGrid 时，一并导出一份）。所以「对编辑器里圈选的那一段」这类脚本不能
+  这样跑，得在 Praat 里自己点；
+- 表单不会显示，表单字段的**默认值**会被自动传进去（:func:`run_arguments` 从脚本
+  文本里读出来）——也就是脚本作者点 OK 时那个默认行为；
+- 批处理进程有超时，脚本自己卡住（例如它弹了对话框）会被结束掉，而不是把前端
+  挂死。
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+
+
+class ExternalScriptError(ValueError):
+    """脚本没法包装（读不到、表单认不出来、跑失败）。"""
+
+
+#: 表单字段类型 → 传参方式。
+NUMERIC_KINDS = frozenset(
+    {
+        "real",
+        "positive",
+        "nonnegative",
+        "integer",
+        "natural",
+        "natural0",
+        "natural1",
+        "boolean",
+        "choice",
+        "optionmenu",
+    }
+)
+STRING_KINDS = frozenset(
+    {"word", "sentence", "text", "infile", "outfile", "folder", "folderorfile"}
+)
+VECTOR_KINDS = frozenset(
+    {
+        "realvector",
+        "nonnegativevector",
+        "positivevector",
+        "integervector",
+        "naturalvector",
+        "natural0vector",
+        "natural1vector",
+    }
+)
+#: 不占 `runScript` 参数的字段（Praat 自己也会跳过它们）。
+IGNORED_KINDS = frozenset({"comment", "button", "option"})
+
+FORM_OPEN = re.compile(r"^\s*form\s*:\s*(?P<title>.*)$", re.IGNORECASE)
+FORM_CLOSE = re.compile(r"^\s*endform\s*$", re.IGNORECASE)
+FIELD = re.compile(r"^\s*(?P<kind>[A-Za-z][A-Za-z0-9]*)\s*:\s*(?P<rest>.*)$")
+
+
+@dataclass(frozen=True, slots=True)
+class FormField:
+    kind: str
+    label: str
+    default: str
+
+
+def split_arguments(text: str) -> list[str]:
+    """按逗号切分表单字段的参数，逗号在引号里不算（``realvector`` 的格式里有逗号）。"""
+
+    pieces: list[str] = []
+    current: list[str] = []
+    quoted = False
+    index = 0
+    while index < len(text):
+        character = text[index]
+        if character == '"':
+            if quoted and index + 1 < len(text) and text[index + 1] == '"':
+                current.append('""')
+                index += 2
+                continue
+            quoted = not quoted
+            current.append(character)
+            index += 1
+            continue
+        if character == "," and not quoted:
+            pieces.append("".join(current).strip())
+            current = []
+            index += 1
+            continue
+        current.append(character)
+        index += 1
+    pieces.append("".join(current).strip())
+    return [piece for piece in pieces if piece != ""]
+
+
+def unquote(text: str) -> str:
+    stripped = text.strip()
+    if len(stripped) >= 2 and stripped[0] == '"' and stripped[-1] == '"':
+        return stripped[1:-1].replace('""', '"')
+    return stripped
+
+
+def quote(text: str) -> str:
+    return '"' + str(text).replace("\\", "/").replace('"', '""') + '"'
+
+
+def parse_form(script: str) -> tuple[FormField, ...]:
+    """取脚本开头那个 ``form ... endform`` 的字段（没有表单就返回空）。
+
+    只认第一个表单：Praat 的 ``form`` 必须在脚本最前面，而 ``runScript`` 用的
+    参数就是按这个表单的字段顺序传的。
+    """
+
+    lines = (script or "").splitlines()
+    start = None
+    for number, line in enumerate(lines):
+        if FORM_OPEN.match(line):
+            start = number
+            break
+    if start is None:
+        return ()
+    fields: list[FormField] = []
+    for line in lines[start + 1 :]:
+        if FORM_CLOSE.match(line):
+            break
+        match = FIELD.match(line)
+        if not match:
+            continue
+        kind = match.group("kind").casefold()
+        parts = split_arguments(match.group("rest"))
+        if kind in IGNORED_KINDS:
+            continue
+        if kind not in NUMERIC_KINDS | STRING_KINDS | VECTOR_KINDS:
+            raise ExternalScriptError(
+                f"这个脚本的表单里有前端不认识的字段类型「{kind}」，"
+                "不能自动填默认值（可以改用手写脚本，或者在 Praat 里直接运行它）。"
+            )
+        label = unquote(parts[0]) if parts else ""
+        default = unquote(parts[-1]) if len(parts) > 1 else ""
+        fields.append(FormField(kind=kind, label=label, default=default))
+    return tuple(fields)
+
+
+def run_arguments(fields: tuple[FormField, ...]) -> list[str]:
+    """把表单字段的默认值变成 ``runScript`` 的参数。"""
+
+    arguments: list[str] = []
+    for field in fields:
+        if field.kind in NUMERIC_KINDS:
+            value = field.default.strip()
+            if not re.fullmatch(r"[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?", value):
+                raise ExternalScriptError(
+                    f"表单字段「{field.label}」的默认值 {field.default!r} 不是数字，"
+                    "不知道该怎么传给脚本。"
+                )
+            arguments.append(value)
+            continue
+        if field.kind in VECTOR_KINDS:
+            arguments.append(quote(field.default))
+            continue
+        arguments.append(quote(field.default))
+    return arguments
+
+
+def wrapper_script(
+    *,
+    sound_path: Path,
+    grid_path: Path | None,
+    target: Path,
+    arguments: list[str],
+    sound_name: str = "",
+    grid_name: str = "",
+) -> str:
+    """生成包装脚本：读回导出的对象 → 跑现成脚本。
+
+    读回来的对象会改回**原来的名字**：脚本作者按对象名找对象时（``select Sound
+    "tone"``）也能找到，看到的名字也和在用户自己的 Praat 里一致。
+    """
+
+    lines = [
+        "# 由 praat_ai 生成（C3）：在批处理里跑现成脚本的包装。",
+        "# 现成脚本看不到用户开着的那个 Praat 的对象列表，这里的副本就是它的输入。",
+        f"Read from file: {quote(str(sound_path))}",
+        'soundId = selected ("Sound")',
+        "if soundId = 0",
+        '    exitScript: "导出的声音读不回来。"',
+        "endif",
+    ]
+    if sound_name:
+        lines.append(f"Rename: {quote(sound_name)}")
+    if grid_path is not None:
+        lines.extend(
+            [
+                f"Read from file: {quote(str(grid_path))}",
+                'gridId = selected ("TextGrid")',
+                f"Rename: {quote(grid_name)}" if grid_name else "# TextGrid 保持原文件名",
+                "selectObject: soundId",
+                "if gridId <> 0",
+                "    plusObject: gridId",
+                "endif",
+            ]
+        )
+    call = [quote(str(target))]
+    if arguments:
+        call.extend(arguments)
+    lines.append("runScript: " + ", ".join(call))
+    lines.append('writeInfoLine: "praat_ai: 外部脚本执行完毕。"')
+    return "\n".join(lines) + "\n"
+
+
+def decode_console(data: bytes) -> str:
+    """Praat 在 Windows 上把批处理输出写成 UTF-16LE 的控制台字节流。"""
+
+    if not data:
+        return ""
+    if os.name == "nt":
+        text = data.decode("utf-16-le", "replace")
+    else:
+        text = data.decode("utf-8", "replace")
+    return text.replace("\x00", "").strip()
+
+
+def run_batch(
+    praat_executable: str,
+    wrapper: Path,
+    *,
+    timeout: float = 60.0,
+    working_directory: Path | None = None,
+) -> tuple[bool, str]:
+    """跑批处理，返回 ``(是否成功, 输出/错误文本)``。"""
+
+    creation_flags = 0
+    if os.name == "nt":
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            [praat_executable, "--FULL-TRUST", "--run", str(wrapper)],
+            cwd=str(working_directory) if working_directory else None,
+            capture_output=True,
+            timeout=timeout,
+            creationflags=creation_flags,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"脚本在 {timeout:.0f} 秒内没有跑完（它可能自己弹了对话框），已经结束它。"
+    except OSError as error:
+        return False, f"启动批处理 Praat 失败：{error}"
+    output = decode_console(completed.stdout + completed.stderr)
+    if completed.returncode != 0:
+        return False, output or f"Praat 以退出码 {completed.returncode} 结束。"
+    return True, output
+
+
+def read_script(path: Path, *, maximum_bytes: int = 2_000_000) -> str:
+    """读脚本（限定大小，别把一个大文件塞进内存）。"""
+
+    if not path.is_file():
+        raise ExternalScriptError(f"找不到脚本文件：{path}")
+    if path.suffix.casefold() not in {".praat", ".praat.txt", ".txt"}:
+        raise ExternalScriptError(
+            f"{path.name} 看起来不是 Praat 脚本（.praat）。"
+        )
+    data = path.read_bytes()
+    if len(data) > maximum_bytes:
+        raise ExternalScriptError("脚本文件太大（超过 2 MB）。")
+    return data.decode("utf-8", "replace")
+
+
+def folder_snapshot(folder: Path) -> dict[str, float]:
+    """记住文件夹里有哪些文件（用来报告脚本新写了什么）。"""
+
+    snapshot: dict[str, float] = {}
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        return snapshot
+    for entry in entries:
+        try:
+            if entry.is_file():
+                snapshot[entry.name] = entry.stat().st_mtime
+        except OSError:
+            continue
+    return snapshot
+
+
+def changed_files(before: dict[str, float], after: dict[str, float]) -> list[str]:
+    """两次快照之间新增或改动的文件（按名字排序）。"""
+
+    names = [
+        name
+        for name, stamp in after.items()
+        if name not in before or before[name] != stamp
+    ]
+    return sorted(names)
