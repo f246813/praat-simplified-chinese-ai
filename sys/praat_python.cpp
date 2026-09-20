@@ -136,6 +136,51 @@ static std::wstring utf8_to_wstring (const std::string &u8) {
 
 static char32 thePythonExecutablePath [Preferences_STRING_BUFFER_SIZE];
 
+static std::filesystem::path findAiPythonExecutable () {
+	const auto isPythonExecutable = [] (const std::filesystem::path &path) {
+		std::error_code error;
+		return std::filesystem::is_regular_file (path, error);
+	};
+	std::vector<std::filesystem::path> roots;
+	std::error_code error;
+	const std::filesystem::path currentDirectory = std::filesystem::current_path (error);
+	if (! currentDirectory.empty()) {
+		roots.push_back (currentDirectory);
+		if (currentDirectory.has_parent_path())
+			roots.push_back (currentDirectory.parent_path());
+	}
+	#if defined (_WIN32)
+		wchar_t executablePath [MAX_PATH];
+		const DWORD executablePathLength = GetModuleFileNameW (
+			nullptr, executablePath, static_cast <DWORD> (MAX_PATH)
+		);
+		if (executablePathLength > 0 && executablePathLength < MAX_PATH) {
+			const std::filesystem::path executableDirectory =
+				std::filesystem::path (executablePath, executablePath + executablePathLength). parent_path();
+			roots.push_back (executableDirectory);
+			if (executableDirectory.has_parent_path())
+				roots.push_back (executableDirectory.parent_path());
+		}
+	#endif
+	for (const std::filesystem::path &root : roots) {
+		#if defined (_WIN32)
+			const std::vector<std::filesystem::path> candidates {
+				root / "venv-ai" / "Scripts" / "python.exe",
+				root / ".venv" / "Scripts" / "python.exe"
+			};
+		#else
+			const std::vector<std::filesystem::path> candidates {
+				root / "venv-ai" / "bin" / "python3",
+				root / ".venv" / "bin" / "python3"
+			};
+		#endif
+		for (const std::filesystem::path &candidate : candidates)
+			if (isPythonExecutable (candidate))
+				return candidate;
+	}
+	return { };
+}
+
 void praat_python_initPreferences () {
 	#if defined (_WIN32)
 		Preferences_addString (U"Python.executablePath", thePythonExecutablePath, U"python");
@@ -145,9 +190,31 @@ void praat_python_initPreferences () {
 	conststring32 configuredPath = Melder_getenv (U"PRAAT_PYTHON_EXECUTABLE");
 	if (configuredPath && configuredPath [0])
 		str32cpy (thePythonExecutablePath, configuredPath);
+	else if (str32equ (thePythonExecutablePath, U"python") || str32equ (thePythonExecutablePath, U"python3")) {
+		const std::filesystem::path detectedPath = findAiPythonExecutable ();
+		if (! detectedPath.empty()) {
+			const std::string detectedPath8 = path_to_utf8 (detectedPath);
+			autostring32 detectedPath32 = Melder_8to32_e (detectedPath8.c_str());
+			if (detectedPath32)
+				str32cpy (thePythonExecutablePath, detectedPath32.get());
+		}
+	}
 }
 
 conststring32 praat_python_getExecutablePath () {
+	if (
+		! thePythonExecutablePath [0] ||
+		str32equ (thePythonExecutablePath, U"python") ||
+		str32equ (thePythonExecutablePath, U"python3")
+	) {
+		const std::filesystem::path detectedPath = findAiPythonExecutable ();
+		if (! detectedPath.empty()) {
+			const std::string detectedPath8 = path_to_utf8 (detectedPath);
+			autostring32 detectedPath32 = Melder_8to32_e (detectedPath8.c_str());
+			if (detectedPath32)
+				str32cpy (thePythonExecutablePath, detectedPath32.get());
+		}
+	}
 	if (thePythonExecutablePath [0] != U'\0')
 		return thePythonExecutablePath;
 	#if defined (_WIN32)

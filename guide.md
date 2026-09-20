@@ -365,3 +365,49 @@ AI 纠音实验代码位于 `ai/`：
   $env:PYTHONPATH = 'ai'
   python -m unittest discover -s ai/tests -v
   ```
+
+### 8.1 对话窗口（自然语言操作 Praat）
+
+`ai/praat_ai/chat.py` 是启动前端后自动弹出的独立对话窗口，除了上面的纠音流水线，
+它还负责把自然语言请求变成 Praat 操作。维护时注意以下约定：
+
+- 模型不直接执行自由文本：模型只选工具并填参数，脚本由 `ai/praat_ai/tools.py`
+  的固定模板渲染；`custom_script` 只是兜底，并且要过 `validate_script()`。
+- 结果回传是文件协议：脚本把数值写入 `ai/runtime/chat_result.tsv`，最后一行用
+  `appendFileLine` 写 `ai/runtime/chat_state.txt`，窗口轮询完成标记后再读结果文件。
+- 写结果文件依赖 `Praat.exe --FULL-TRUST --send`：`sys/praat.cpp` 的 Windows/UNIX
+  分支必须在 message file 里写上 `# --FULL-TRUST`（与 macOS 分支一致），
+  否则正在运行的 Praat 会以 “potentially dangerous action … not allowed without
+  --FULL-TRUST” 拒绝整个脚本。不要再把这段标记删掉。
+- `An instance of Praat that is not me is already running.` 是 `--send` 的常规提示，
+  不是错误，不要让对话窗口把它当成执行结果。
+- 自由脚本的常见坑（都已在 `tools.py` 里规避）：对象名必须带类名前缀
+  （`selectObject: "Sound xxx"`，或直接用数字 id）；字符串只能用双引号，
+  单引号是变量插值会报 `Unknown symbol`；`Formant: Get bandwidth/value at time`
+  需要 4 个参数（编号、时间、单位、插值）。
+
+### 8.2 模型加载与状态（llama-server）
+
+「端口上有服务」不等于「加载的是配置里的模型」。维护这条链路时遵守以下几点：
+
+- 判断必须走 `server_model_state()`（读 `GET /v1/models` 的 id 与配置路径比对，
+  路径或纯文件名都接受）。`QwenServerManager.ensure_started()`、`start_frontend()`、
+  `set_frontend_model()` 三处都要用它：不一致就停止旧服务并用新配置重启
+  （`control._restart_service()`，先等进程退出、再等端口释放）。
+- `collect_status()` 的 `frontend_model` 必须来自服务实际加载的模型
+  （`running_model_info()`），配置值放在 `frontend_model_configured`，
+  另外提供 `frontend_model_mismatch`、`frontend_model_source`、`frontend_vision`。
+  旧实现直接返回配置里的文件名，会出现「界面显示 2B、实际在跑 0.8B」的假象。
+- mmproj 只对匹配的模型有效。`ensure_started()` 会先用 mmproj 启动，若服务退出
+  （典型报错 `mtmd_init_from_file: mismatch between text model (n_embd = …)`）
+  则自动回退纯文本再启动一次，并在 `logs/qwen-server.log` 追加
+  `=== PRAAT-AI: … ===` 说明；`frontend_vision` 由 `/v1/models` 的 capabilities 决定。
+  需要视觉的模型必须配自己的 mmproj，否则只能纯文本运行。
+- 多模型的投影文件用 `server.mmproj_by_model`（模型路径或文件名 → mmproj）配对，
+  它优先于 `server.mmproj_path`；`set_frontend_model()` 在收到 mmproj 时会为该模型
+  写入这条映射，因此切换模型不会把别人的投影文件带过去。
+  取投影文件前先核对 `clip.vision.projection_dim` 是否等于模型的
+  `qwen35.embedding_length`（0.8B = 1024，2B = 2048）。
+- 服务不是本前端启动的（`runtime/qwen.pid` 不存在或进程已死）时不能自动重启，
+  `_restart_service()` 会抛 `QwenServerError` 让用户手动停止，避免误杀别人的进程。
+- 回归用例：`ai/tests/test_frontend_model.py`。

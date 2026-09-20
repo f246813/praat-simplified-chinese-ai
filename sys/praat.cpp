@@ -508,6 +508,7 @@ void praat_updateSelection () {
 		theCurrentPraatObjects -> totalBeingCreated = 0;
 		praat_show ();
 	}
+	PraatAiControl_refreshChatContext ();   // 让对话窗口看到当前对象列表和选中状态
 }
 
 static void gui_cb_list_selectionChanged (Thing /* boss */, GuiList_SelectionChangedEvent event) {
@@ -535,6 +536,7 @@ static void gui_cb_list_selectionChanged (Thing /* boss */, GuiList_SelectionCha
 		theCurrentPraatObjects -> totalSelection += 1;
 	}
 	praat_show ();
+	PraatAiControl_refreshChatContext ();   // 鼠标改选中对象后同步给对话窗口
 }
 
 static HBITMAP createMenuIcon (const wchar_t *glyph, COLORREF color) {
@@ -2018,6 +2020,8 @@ static bool tryToSwitchToRunningPraat (bool foundTheOpenOption, bool foundTheSen
 		autofile f;
 		try {
 			f = Melder_fopen (& messageFile, "w");
+			if (praatP. fullTrust)
+				fprintf (f, "\n# --FULL-TRUST\n");
 			fprintf (f, "%s", text8.get());
 			f.close (& messageFile);
 		} catch (MelderError) {
@@ -2035,6 +2039,8 @@ static bool tryToSwitchToRunningPraat (bool foundTheOpenOption, bool foundTheSen
 		autofile f;
 		try {
 			f = Melder_fopen (& messageFile, "w");
+			if (praatP. fullTrust)
+				fprintf (f, "\n# --FULL-TRUST\n");
 			fprintf (f, "%s", text8.get());
 			f.close (& messageFile);
 		} catch (MelderError) {

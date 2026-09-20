@@ -124,6 +124,76 @@ class QwenClient:
         response = self.chat(messages, max_tokens=700, temperature=0.1, json_mode=True)
         return extract_json_object(response)
 
+    def plan_praat_command(
+        self,
+        user_text: str,
+        object_context: str,
+        history: list[dict[str, str]],
+        *,
+        tool_catalog: str,
+        result_path: str,
+        state_path: str,
+    ) -> dict[str, Any]:
+        system_prompt = """
+你是 Praat 桌面助手的操作规划器。用户用自然语言提出操作要求，你只输出一个 JSON 对象，不输出 Markdown，不输出多余文字。
+
+JSON 结构：
+{"reply": "给用户的中文简短回复", "tool": "工具名", "arguments": {}, "script": ""}
+
+规则：
+1. tool 必须从下面的工具列表里选择；能用工具完成时 script 必须是空字符串。
+2. 只有工具都无法完成请求时，tool 才用 "custom_script"，并在 script 里写完整 Praat 英文脚本。
+3. 脚本里字符串一律用双引号；单引号在 Praat 中是变量插值，会直接报错。
+4. 对象只能使用下方对象列表里真实存在的 id，不得编造。
+5. 请求能从当前选中对象直接完成时，直接选工具，不要反问；只有请求完全无法执行时才在 reply 里提问。
+6. 需要输出数值时，用 appendFileLine 写到我给出的结果文件路径。
+""".strip()
+        examples = """
+示例：
+用户：提取当前语音的第二共振峰带宽
+输出：{"reply": "查询中间时刻的第 2 共振峰带宽。", "tool": "formant_bandwidth", "arguments": {"formant": 2}, "script": ""}
+用户：把选中的声音改名为 测试
+输出：{"reply": "重命名选中的声音。", "tool": "rename_object", "arguments": {"new_name": "测试"}, "script": ""}
+用户：打开这个声音的编辑器
+输出：{"reply": "打开编辑器。", "tool": "view_edit", "arguments": {}, "script": ""}
+用户：导入 /tmp/a.wav
+输出：{"reply": "读取 wav 文件。", "tool": "custom_script", "arguments": {}, "script": "Read from file: \\"/tmp/a.wav\\""}
+""".strip()
+        context_message = "\n".join(
+            [
+                f"结果文件（脚本把数值结果写到这里）：{result_path}",
+                f'完成标记文件（脚本最后一行必须是 appendFileLine: "{state_path}", "done"）：'
+                f"{state_path}",
+                "",
+                "可用工具：",
+                tool_catalog,
+                "",
+                "当前 Praat 对象列表（id、类、名称、是否选中）：",
+                object_context,
+                "",
+                examples,
+            ]
+        )
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": system_prompt + "\n\n" + context_message,
+            },
+        ]
+        for item in history[-8:]:
+            role = item.get("role", "")
+            content = item.get("content", "")
+            if role in {"user", "assistant"} and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_text})
+        response = self.chat(
+            messages,
+            max_tokens=700,
+            temperature=0.1,
+            json_mode=True,
+        )
+        return extract_json_object(response)
+
     def explain_errors(self, request: dict[str, Any], result: dict[str, Any]) -> str:
         messages = [
             {

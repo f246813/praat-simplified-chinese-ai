@@ -25,6 +25,7 @@ class ServerConfig:
     llama_server: str = ""
     model_path: str = ""
     mmproj_path: str = ""
+    mmproj_by_model: dict[str, str] = field(default_factory=dict)
     host: str = "127.0.0.1"
     port: int = 8000
     n_gpu_layers: int = -1

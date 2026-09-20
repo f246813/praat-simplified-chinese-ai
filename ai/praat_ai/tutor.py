@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -218,7 +219,11 @@ def run_from_praat(
             for item in bridge.selected_objects()
             if item.class_name == "Sound"
         ]
-        values = show_tutor_form(sounds)
+        try:
+            values = show_tutor_form(sounds)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 1
         request = values.request
         if request is None:
             return 0

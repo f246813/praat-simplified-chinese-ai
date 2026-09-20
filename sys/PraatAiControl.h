@@ -9,8 +9,6 @@
 
 void PraatAiControl_initPreferences ();
 
-void PraatAiControl_addModelMenu (GuiWindow window);
-
 conststring32 PraatAiControl_getAlignmentMode ();
 void PraatAiControl_setAlignmentMode (conststring32 mode);
 
@@ -18,8 +16,10 @@ bool PraatAiControl_refreshStatus ();
 conststring32 PraatAiControl_getFrontendModel ();
 conststring32 PraatAiControl_getFrontendStatus ();
 conststring32 PraatAiControl_getVramText (bool *low);
+void PraatAiControl_chooseFrontendModel ();
 void PraatAiControl_startFrontend ();
 void PraatAiControl_stopFrontend ();
 void PraatAiControl_runAnalysis ();
+void PraatAiControl_refreshChatContext ();
 
 #endif

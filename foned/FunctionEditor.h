@@ -134,11 +134,10 @@ Thing_define (FunctionEditor, Editor) {
 	GuiScrollBar scrollBar;
 	GuiCheckButton groupButton;
 	GuiObject bottomArea;
-	GuiLabel aiFrontendStatusLabel, aiVramStatusLabel;
-	GuiButton aiStartButton, aiStopButton, aiRunButton;
-	GuiRadioButton aiAutoAlignmentButton, aiMfaAlignmentButton, aiWav2vec2AlignmentButton;
+	GuiMenu aiFrontendMenu;
+	GuiMenuItem aiAlignmentAutoItem, aiAlignmentMfaItem, aiAlignmentWav2vec2Item;
+	GuiMenuItem aiModelStatusItem, aiFrontendStatusItem, aiVramStatusItem;
 	integer aiStatusTimer = 0;
-	bool aiVramIsLow = false;
 	bool group, enableUpdates;
 	int nrect;
 	struct { double left, right, bottom, top; } rect [8];
