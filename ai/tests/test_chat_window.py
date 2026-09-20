@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from praat_ai import chat
 from praat_ai.config import AppConfig
-from praat_ai.qwen import _selected_object_hint
+from praat_ai.qwen import selected_object_hint
 
 
 class SelectedObjectHintTests(unittest.TestCase):
@@ -22,12 +22,12 @@ class SelectedObjectHintTests(unittest.TestCase):
             "1\tTextGrid\tTextGrid grid\t0\n"
             "2\tSound\tSound tone\t1\n"
         )
-        self.assertEqual(_selected_object_hint(context), "当前选中：id 2（Sound Sound tone）")
+        self.assertEqual(selected_object_hint(context), "当前选中：id 2（Sound Sound tone）")
 
     def test_hint_when_nothing_is_selected(self) -> None:
         context = "id\tclass\tname\tselected\n1\tSound\tSound tone\t0\n"
-        self.assertIn("没有选中", _selected_object_hint(context))
-        self.assertIn("没有选中", _selected_object_hint(""))
+        self.assertIn("没有选中", selected_object_hint(context))
+        self.assertIn("没有选中", selected_object_hint(""))
 
 
 class PresetLabelTests(unittest.TestCase):

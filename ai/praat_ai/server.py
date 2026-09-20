@@ -249,6 +249,11 @@ class QwenServerManager:
             "--parallel",
             str(self.config.server.parallel),
             "--no-webui",
+            # 用模型自带的 chat 模板：对话前端会把工具结果作为 role=tool 的消息回灌
+            # 给模型（见 ai/docs/adr/ADR-004），没有这一条时 llama.cpp 用内置模板，
+            # 小模型在多轮里会跑偏（实测「阅读当前对象的信息」被它做成频谱图，还连着
+            # 多做三步）。开 --jinja 之后同一个多轮对话选对工具、第二轮直接回答。
+            "--jinja",
         ]
         if mmproj is not None:
             command.extend(["--mmproj", str(mmproj)])

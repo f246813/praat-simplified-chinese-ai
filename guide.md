@@ -417,6 +417,13 @@ AI 纠音实验代码位于 `ai/`：
   `qwen35.embedding_length`（0.8B = 1024，2B = 2048）。
 - 服务不是本前端启动的（`runtime/qwen.pid` 不存在或进程已死）时不能自动重启，
   `_restart_service()` 会抛 `QwenServerError` 让用户手动停止，避免误杀别人的进程。
+- **启动参数里必须有 `--jinja`**（`server.py` 的 `_build_command()`）：对话循环会把
+  工具结果作为 `role: tool` 消息回灌给模型，只有让模型自带的 chat 模板处理它，
+  小模型才不会跑偏。实测对照（同一台机器、同一个 Qwen3.5-2B）：「阅读当前对象的
+  信息」在默认模板下被做成**三次频谱图**（还选错了工具），加了 `--jinja` 之后
+  1 步 `object_info` + 直接回答。改启动参数时别把这行删掉，`test_frontend_model.py`
+  会守着它；本机手工起的服务也要记得加（例如
+  `llama-server -m … --jinja --mmproj …`），否则前端的多步/回灌行为会明显变差。
 - 回归用例：`ai/tests/test_frontend_model.py`。
 
 ### 8.3 模型预设（server.presets）
@@ -493,6 +500,30 @@ AI 纠音实验代码位于 `ai/`：
   （`tools.MAX_ACTIONS_PER_REQUEST`）。**加工具时必须同时加 schema**：
   `ai/tests/test_planner_tools.py` 会拿 `Tool.signature` 对拍。决策见
   `ai/docs/adr/ADR-003-planning-interface.md`。
+- **一轮请求是一个有界循环**（`chat.run_turn`，见
+  `ai/docs/adr/ADR-004-agent-loop.md`）：模型给动作 → 逐个执行 → 把结果（或失败
+  原因）作为 `role: tool` 的观察结果回灌 → 再让模型决定下一步，直到它不再调工具
+  （那句话就是回答）或者撞到上限（`MAX_AGENT_ROUNDS = 3` 轮、`MAX_AGENT_STEPS = 5`
+  个动作，之后强制要一次纯文字回答）。三条实测出来的规矩：
+  1. **服务端必须开 `--jinja`**（§8.2）。不开时小模型在多轮里会跑偏得很厉害
+     （选错工具、顺手多做几步），这是我们这个循环能不能用的前提；
+  2. **同一个动作只执行一次**（工具名 + 参数完全相同），重复调用只回灌「这一步刚才
+     已经做过」——实测「截取 0.2–0.5 秒」被同一个模型连做三遍；
+  3. **观察结果要带收尾提示**（「够回答就直接回答，不要顺手多做别的操作」），
+     否则它会在成功之后继续调工具。
+  4. **用户没说要第二步时，第二轮之后不许动对象**：`tools.MUTATING_TOOLS` 里的工具
+     （建/删/改名/标注/另存/读入/频谱图/custom_script）在第二轮之后要执行，用户这句
+     话里必须有「然后 / 再 / 接着 / 之后 / 并且 / 同时 / 顺便 / 先」（
+     `chat.wants_second_step`），只读查询不受限制。实测 0.8B 预设下「打开当前声音的
+     编辑器」会顺手做两次频谱图、把选中对象也换掉，后面的请求全被带偏。这条护栏管得住
+     「回灌之后多做」，管不住**第一轮就选错工具**——那是模型能力问题：2B 预设实测每条
+     都选对（`verify_chat_live.py` 六个用例全 1 步、`verify_chat_planning.py` 21/21），
+     0.8B 会把「阅读当前对象的信息」做成频谱图。日常建议用 2B 预设。
+  另外模型偶尔把工具调用写成正文里的 `<tool_call><function=…>` 文本
+  （`qwen.parse_text_tool_calls`）：那也要当动作执行，XML 之外的文字才算回答——
+  以前那串 XML 会被原样显示给用户。工具报错（参数不合法、对象类型不对）**不再直接
+  判死**，而是回灌给模型让它改参数重试；只有模型同时给了脚本时才用脚本兜底，并在
+  窗口里说明「改用模型给出的脚本」。
 - **文件读入是独立工具**：`read_file`（`Read from file:`）和 `save_sound`
   （`Save as WAV file:`）方向相反，必须分开——换成 tool calling 时丢了少样本示例，
   模型立刻把「读取 D:/in/a.wav」做成了「另存为」。文件不存在时在脚本里用

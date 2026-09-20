@@ -432,6 +432,16 @@ def _finish(context: ToolContext) -> list[str]:
     return [f"appendFileLine: {quote(context.state_path)}, \"done\""]
 
 
+def _id_fragment(variable: str = "newId") -> str:
+    """结果行里的「（id N）」：多步请求要靠它认出刚建出来的那个对象。
+
+    2026-09-20 实测：不写 id 时模型在第二步只能拿旧对象的 id 顶上
+    （「截取前 0.3 秒再改名」变成了给**原对象**改名）。
+    """
+
+    return f"{quote('（id ')}, fixed$ ({variable}, 0), {quote('）')}"
+
+
 def _write_result(context: ToolContext, fragments: Sequence[str]) -> str:
     joined = ", ".join(fragments)
     return f"appendFileLine: {quote(context.result_path)}, {joined}"
@@ -997,7 +1007,7 @@ def _build_spectrogram(arguments: Mapping[str, Any], context: ToolContext) -> st
         name = f"{name} 频谱图"
     lines = [
         f"selectObject: {row.id}",
-        f"To Spectrogram: {window_length:.6f}, {maximum_frequency:.6f}, "
+        f"newId = To Spectrogram: {window_length:.6f}, {maximum_frequency:.6f}, "
         f"{time_step:.6f}, {frequency_step:.6f}, \"Gaussian\"",
         f"Rename: {quote(name)}",
         "frames = Get number of frames",
@@ -1006,6 +1016,7 @@ def _build_spectrogram(arguments: Mapping[str, Any], context: ToolContext) -> st
             [
                 quote("已生成频谱图："),
                 quote(name),
+                _id_fragment(),
                 quote(f"，分析窗口 {window_length * 1000:.1f} ms，最高频率 "),
                 f"fixed$ ({maximum_frequency:.6f}, 0)",
                 quote(" Hz，共 "),
@@ -1859,14 +1870,14 @@ def _build_create_sound(arguments: Mapping[str, Any], context: ToolContext) -> s
     amplitude = _number(arguments, "amplitude", 0.5, 0.0, 1.0)
     if frequency <= 0.0:
         lines = [
-            f"Create Sound from formula: {quote(name)}, 1, 0, "
+            f"newId = Create Sound from formula: {quote(name)}, 1, 0, "
             f"{duration:.6f}, 44100, ~ 0",
             "duration = Get total duration",
         ]
         description = "静音"
     else:
         lines = [
-            f"Create Sound as pure tone: {quote(name)}, 1, 0, "
+            f"newId = Create Sound as pure tone: {quote(name)}, 1, 0, "
             f"{duration:.6f}, 44100, {frequency:.6f}, {amplitude:.6f}, 0.01, 0.01",
             "duration = Get total duration",
         ]
@@ -1877,6 +1888,7 @@ def _build_create_sound(arguments: Mapping[str, Any], context: ToolContext) -> s
             [
                 quote(f"已创建{description}："),
                 quote(name),
+                _id_fragment(),
                 quote("，时长 "),
                 "fixed$ (duration, 3)",
                 quote(" 秒"),
@@ -1900,7 +1912,7 @@ def _build_concatenate(arguments: Mapping[str, Any], context: ToolContext) -> st
     lines = [
         f"selectObject: {first.id}",
         f"plusObject: {second.id}",
-        "Concatenate",
+        "newId = Concatenate",
         f"Rename: {quote(name)}",
         "duration = Get total duration",
         _write_result(
@@ -1908,6 +1920,7 @@ def _build_concatenate(arguments: Mapping[str, Any], context: ToolContext) -> st
             [
                 quote(f"已把 {first.name} 和 {second.name} 拼成："),
                 quote(name),
+                _id_fragment(),
                 quote("，时长 "),
                 "fixed$ (duration, 3)",
                 quote(" 秒"),
@@ -1953,7 +1966,7 @@ def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> s
         "if t1 < 0",
         "    t1 = 0",
         "endif",
-        'Extract part: t1, t2, "rectangular", 1, "no"',
+        'newId = Extract part: t1, t2, "rectangular", 1, "no"',
         f"Rename: {quote(name)}",
         "duration = Get total duration",
         _write_result(
@@ -1961,6 +1974,7 @@ def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> s
             [
                 quote("已截取片段："),
                 quote(name),
+                _id_fragment(),
                 quote("，区间 "),
                 "fixed$ (t1, 3)",
                 quote("–"),
@@ -2054,14 +2068,16 @@ def _build_resample(arguments: Mapping[str, Any], context: ToolContext) -> str:
     rate = _integer(arguments, "rate", 16000, 1000, 768000)
     lines = [
         f"selectObject: {row.id}",
-        f"Resample: {rate}, 50",
+        f"newId = Resample: {rate}, 50",
         "actual = Get sampling frequency",
         _write_result(
             context,
             [
                 quote("已重采样为新对象，采样率 "),
                 "fixed$ (actual, 0)",
-                quote(" Hz（原对象保持不变）"),
+                quote(" Hz"),
+                _id_fragment(),
+                quote("（原对象保持不变）"),
             ],
         ),
     ]
@@ -2077,8 +2093,8 @@ def _build_duplicate(arguments: Mapping[str, Any], context: ToolContext) -> str:
         name = f"{name} 副本"
     lines = [
         f"selectObject: {row.id}",
-        f"Copy: {quote(name)}",
-        _write_result(context, [quote("已复制为："), quote(name)]),
+        f"newId = Copy: {quote(name)}",
+        _write_result(context, [quote("已复制为："), quote(name), _id_fragment()]),
     ]
     return _assemble(lines, context)
 
@@ -2607,6 +2623,36 @@ def tool_schemas() -> list[dict[str, Any]]:
 #: 一次给多个工具调用（实测 Qwen3.5-2B 就会这么做），它们按顺序拼进同一条脚本里
 #: 执行；给个上限是怕模型一口气列十几个，把一次投递变成一串没人看过的操作。
 MAX_ACTIONS_PER_REQUEST = 3
+
+#: 会**改动 Praat 里的对象**（建/删/改名/标注/写盘）的工具。
+#:
+#: 对话循环用它做第二道护栏：用户没说「然后再……」时，第二轮之后不许再动这些工具。
+#: 实测 0.8B 预设下「打开当前声音的编辑器」会在第二轮顺手做两次频谱图，把选中对象
+#: 也换掉，后面的请求全被带偏；只读查询（pitch、object_info 这类）不受限制。
+#: 认不出来的工具（例如 custom_script）按「会改动」处理。
+MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "create_sound",
+        "extract_part",
+        "concatenate_sounds",
+        "duplicate_object",
+        "resample_sound",
+        "read_file",
+        "rename_object",
+        "remove_object",
+        "save_sound",
+        "spectrogram",
+        "textgrid_insert_boundary",
+        "textgrid_set_interval",
+        CUSTOM_SCRIPT_TOOL,
+    }
+)
+
+
+def is_mutating(tool_name: str) -> bool:
+    """这个工具会不会改动对象；没登记的工具按「会改动」处理（保守）。"""
+
+    return (tool_name or "").strip() not in (set(TOOL_MAP) - MUTATING_TOOLS)
 
 
 def tool_labels() -> dict[str, str]:

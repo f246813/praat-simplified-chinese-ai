@@ -160,6 +160,33 @@ class ScriptRenderingTests(unittest.TestCase):
         with self.assertRaises(tools.ToolError):
             self.render("rename_object")
 
+    def test_object_creating_tools_report_the_new_id(self) -> None:
+        """新建对象的结果行里要带 id：多步请求的下一步要靠它认出这个新对象。"""
+
+        base = Path(self.directory.name)
+        context = tools.ToolContext(
+            tools.parse_object_context(
+                "id\tclass\tname\tselected\n"
+                "1\tSound\tSound tone\t1\n"
+                "2\tSound\ttone2\t0\n"
+            ),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+        cases = {
+            "create_sound": {"duration": 0.2, "frequency": 220},
+            "extract_part": {"start": 0.1, "end": 0.4},
+            "duplicate_object": {},
+            "resample_sound": {"rate": 16000},
+            "concatenate_sounds": {"object": 1, "object2": 2},
+            "spectrogram": {},
+        }
+        for tool_name, arguments in cases.items():
+            with self.subTest(tool=tool_name):
+                script = tools.render(tool_name, arguments, context)
+                self.assertIn("newId = ", script, tool_name)
+                self.assertIn("fixed$ (newId, 0)", script, tool_name)
+
 
 class ScriptValidationTests(unittest.TestCase):
     def test_single_quotes_become_double_quotes(self) -> None:

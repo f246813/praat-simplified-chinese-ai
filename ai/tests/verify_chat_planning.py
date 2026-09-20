@@ -64,6 +64,10 @@ REQUESTS: tuple[str, ...] = (
     "提取这段语音的 vot",
     "爆破是 0.30 秒，浊音起始是 0.42 秒，帮我算 VOT",
     "在 0.25 到 0.5 秒之间找一下 VOT",
+    # 多步（A3）：先截出一段新对象，再改名——第二步要作用在第一步刚建出来的对象上。
+    "把当前声音的前 0.3 秒截出来，然后把它改名为 短音",
+    # 工具拒绝后的重试（A4）：没说标哪一段，模型得自己补时间或者反问。
+    "把当前这个 TextGrid 标成 a",
     "删除 1 号对象",
 )
 
@@ -108,6 +112,38 @@ def run_script(script: str, directory: Path, name: str, prefix: str) -> tuple[bo
     return ok, (text or output[:200])
 
 
+def run_case_script(
+    script: str, directory: Path, name: str, prefix: str
+) -> tuple[bool, list[str], str]:
+    """把脚本交给批处理 Praat 跑一遍，返回 ``(成功, 结果行, 失败说明)``。
+
+    对话窗口里的执行是「投给正在运行的 Praat」，这里换成 `--run` 批处理：
+    两者跑的是同一份脚本，命令行输出的差别在 §8.4 里记过（批处理看不到 live 对象）。
+    """
+
+    state = directory / f"{name}.state"
+    result = directory / f"{name}.tsv"
+    script_path = directory / f"{name}.praat"
+    script_path.write_text(prefix + "\n" + script, encoding="utf-8")
+    completed = subprocess.run(
+        [str(PRAAT), "--FULL-TRUST", "--run", str(script_path)],
+        capture_output=True,
+        timeout=120,
+    )
+    output = (completed.stdout + completed.stderr).decode("utf-16-le", "replace")
+    output = output.replace("\x00", "").strip().replace("\n", " | ")
+    if not state.is_file():
+        return False, [], output[:200] or "脚本没有写完 chat_state.txt"
+    lines: list[str] = []
+    if result.is_file():
+        lines = [
+            line.strip()
+            for line in result.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    return True, lines, ""
+
+
 def main() -> int:
     if not PRAAT.is_file():
         print(f"没有找到 {PRAAT}，请先构建 Praat.exe。")
@@ -130,32 +166,52 @@ def main() -> int:
         for index, text in enumerate(requests):
             name = f"case{index}"
             started = time.monotonic()
+            context = tools.ToolContext(
+                tools.parse_object_context(CONTEXT),
+                directory / f"{name}.tsv",
+                directory / f"{name}.state",
+            )
+            # 每一步都在一个新的批处理进程里跑，所以每次把**前面所有步骤**重放一遍
+            # （前缀 + 已执行的脚本），这样后一步仍然能看到前一步留下的对象。
+            replay: list[str] = []
+            seen_lines = 0
+
+            def execute(script: str) -> tuple[bool, list[str], str]:
+                nonlocal seen_lines
+                replay.append(script)
+                for path in (context.result_path, context.state_path):
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
+                ok, lines, failure = run_case_script(
+                    "\n".join(replay), directory, name, GRID
+                )
+                # 重放会让前面几步的结果行再出现一次：只把**这一步新增的**回灌给模型。
+                fresh = lines[seen_lines:]
+                seen_lines = len(lines)
+                return ok, fresh, failure
+
             try:
-                plan = client.plan_praat_command(
-                    text,
-                    CONTEXT,
-                    [],
-                    tool_catalog=tools.catalog_text(),
-                    tool_schemas=tools.tool_schemas(),
-                    tool_labels=tools.tool_labels(),
-                    result_path="@RESULT@",
-                    state_path="@STATE@",
+                outcome = chat.run_turn(
+                    client,
+                    user_text=text,
+                    context_text=CONTEXT,
+                    history=[],
+                    context=context,
+                    execute=execute,
                 )
             except Exception as error:   # noqa: BLE001 - 回归脚本只关心结论
-                print(f"FAIL 规划失败：{text} -> {error}")
+                print(f"FAIL 这一轮没跑完：{text} -> {error}")
                 failures += 1
                 continue
-            actions = tools.plan_actions(plan)
-            tool_names = "/".join(action["tool"] for action in actions)
-            tool_name = actions[0]["tool"] if actions else ""
-            custom = str(plan.get("script", "") or "")
-            if not tool_name and custom.strip():
-                tool_name = tools.CUSTOM_SCRIPT_TOOL
-            if not tool_name:
+            tool_names = "/".join(step.tool for step in outcome.steps)
+            tool_name = outcome.steps[0].tool if outcome.steps else ""
+            if not outcome.used_tools:
                 if text in NO_SUBSTITUTION:
-                    print(f"CHAT {text} -> 没有对应工具时的回答：{plan.get('reply', '')}")
+                    print(f"CHAT {text} -> 没有对应工具时的回答：{outcome.reply}")
                 else:
-                    print(f"CHAT {text} -> 不执行脚本：{plan.get('reply', '')}")
+                    print(f"CHAT {text} -> 不执行脚本：{outcome.reply}")
                 continue
             allowed = NO_SUBSTITUTION.get(text)
             if allowed is not None and tool_name not in allowed:
@@ -165,35 +221,22 @@ def main() -> int:
                 )
                 failures += 1
                 continue
-            context = tools.ToolContext(
-                tools.parse_object_context(CONTEXT),
-                directory / f"{name}.tsv",
-                directory / f"{name}.state",
-            )
-            try:
-                # 一条请求可能规划出多个动作（例如「0.25 秒和 0.75 秒的基频」会给两个
-                # pitch 调用），按顺序拼成同一条脚本，和对话窗口里的做法完全一致。
-                parts: list[str] = []
-                for action in actions:
-                    part, note = chat.render_action(action, context)
-                    if note:
-                        print(f"     ! {note}")
-                    parts.append(part)
-                script = "\n".join(parts)
-            except tools.ToolError as error:
-                print(f"WARN {text} -> {tool_names}：{error}")
-                warnings += 1
-                continue
-            ok, detail = run_script(script, directory, name, GRID)
+            for step in outcome.steps:
+                if not step.ok:
+                    print(f"     ! {step.observation}")
+            ok = bool(outcome.results)
+            detail = " | ".join(outcome.results) or outcome.failure
             elapsed = time.monotonic() - started
             tag = "OK  " if ok else "FAIL"
             kind = "自编脚本" if tool_name == tools.CUSTOM_SCRIPT_TOOL else tool_names
             print(f"{tag} {text}")
             print(
-                f"     {kind} "
-                f"{json.dumps([action['arguments'] for action in actions], ensure_ascii=False)} "
-                f"({elapsed:.1f}s) -> {detail[:160]}"
+                f"     {kind}（{len(outcome.steps)} 步）"
+                f"{json.dumps([step.arguments for step in outcome.steps], ensure_ascii=False)} "
+                f"({elapsed:.1f}s) -> {detail[:170]}"
             )
+            if outcome.reply:
+                print(f"     回答：{outcome.reply[:120]}")
             if not ok:
                 failures += 1
     print(f"\n失败 {failures}，警告 {warnings}，共 {len(REQUESTS)} 条请求")

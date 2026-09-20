@@ -79,34 +79,39 @@ def send(script: str) -> tuple[bool, str]:
     return ok, ("；".join(results) if results else output.strip())
 
 
-def ask(client: QwenClient, text: str) -> tuple[str, str]:
-    rows = context_rows()
+def ask(client: QwenClient, text: str) -> tuple[str, str, bool]:
+    """走对话窗口真正那条路：run_turn 规划 + 投给正在运行的 Praat 执行。
+
+    返回 ``(说明, 结果文字, 是否执行成功)``。
+    """
+
     context = tools.ToolContext(
-        objects=rows,
+        objects=context_rows(),
         result_path=chat.result_path(),
         state_path=chat.state_path(),
     )
-    plan = client.plan_praat_command(
-        text,
-        chat.object_context(),
-        [],
-        tool_catalog=tools.catalog_text(),
-        result_path=str(chat.result_path()),
-        state_path=str(chat.state_path()),
+    executable = chat.praat_executable()
+
+    def execute(script: str) -> tuple[bool, list[str], str]:
+        ok, output = chat._send_script(executable, script)
+        if not ok:
+            return False, [], output or "Praat 没有响应"
+        return True, chat._read_results(), ""
+
+    outcome = chat.run_turn(
+        client,
+        user_text=text,
+        context_text=chat.object_context(),
+        history=[],
+        context=context,
+        execute=execute,
     )
-    reply = str(plan.get("reply", "")).strip() or "已完成。"
-    tool_name = str(plan.get("tool", "")).strip()
-    if not tool_name and str(plan.get("script", "") or "").strip():
-        tool_name = tools.CUSTOM_SCRIPT_TOOL
-    if not tool_name:
-        return reply, ""
-    script = tools.render(
-        tool_name,
-        plan.get("arguments") or {},
-        context,
-        custom_script=str(plan.get("script", "") or ""),
+    kind = (
+        "、".join(f"{step.round_index}:{step.tool}" for step in outcome.steps) or "只回话"
     )
-    return f"{reply}（工具 {tool_name}）", script
+    failed = bool(outcome.steps) and not outcome.results
+    detail = "；".join(outcome.results) or outcome.failure
+    return f"{outcome.reply}（{kind}）", detail, not failed
 
 
 def main() -> int:
@@ -151,14 +156,11 @@ def main() -> int:
             "播放当前声音",
         ]
         for text in cases:
-            reply, script = ask(client, text)
+            reply, detail, ok = ask(client, text)
             print(f"· {text}")
-            print(f"  规划：{reply}")
-            if not script:
-                print("  （这个请求不需要执行脚本）")
-                continue
-            ok, detail = send(script)
-            print(f"  执行{'成功' if ok else '失败'}：{detail}")
+            print(f"  执行{'成功' if ok else '失败'}：{reply}")
+            if detail:
+                print(f"  结果：{detail}")
             if not ok:
                 failures += 1
             if text.startswith("把当前对象改名"):

@@ -61,10 +61,14 @@ TOOL_PLANNER_INSTRUCTIONS = """
 7. 用户说法里带对象类型时按类型选：说「这个 TextGrid」就用 TextGrid，不要因为别的类型是当前选中就写错。
 8. 没有对应工具的测量（例如 CPP）不许拿别的量代替；这时在回复里直说做不到，并说明还缺什么。
 9. 请求能从当前选中对象直接完成时就直接调用工具，不要反问；只有完全无法执行时才在回复里提问。
+10. 回复里只能用工具结果里出现过的数字、名称和文件名，一个都不要自己编造或推算；
+    结果里没有的信息就直说没有。
+11. 只做用户要求的那件事：不要顺手多做别的操作，也不要重复调用同一个工具；
+    上一步的结果已经够回答时，直接回答，不要再调工具。
 """.strip()
 
 
-def _history_messages(history: list[dict[str, str]]) -> list[dict[str, Any]]:
+def history_messages(history: list[dict[str, str]]) -> list[dict[str, Any]]:
     """把对话历史转成 messages（只留最近几轮，接口不认的字段一律丢掉）。"""
 
     messages: list[dict[str, Any]] = []
@@ -98,14 +102,14 @@ def extract_tool_actions(message: Mapping[str, Any]) -> list[dict[str, Any]]:
     """把一次响应里的 ``tool_calls`` 变成 ``[{"tool": ..., "arguments": {...}}]``。
 
     模型可能一次给多个调用（实测同一句话里问两个时刻，它会给两个 ``pitch`` 调用），
-    顺序就是它想执行的顺序。
+    顺序就是它想执行的顺序。``id`` 也带上：回灌结果时要按 ``tool_call_id`` 对上。
     """
 
     calls = message.get("tool_calls") or []
     actions: list[dict[str, Any]] = []
     if not isinstance(calls, list):
         return actions
-    for call in calls:
+    for index, call in enumerate(calls):
         if not isinstance(call, Mapping):
             continue
         function = call.get("function")
@@ -115,12 +119,124 @@ def extract_tool_actions(message: Mapping[str, Any]) -> list[dict[str, Any]]:
         if not name:
             continue
         actions.append(
-            {"tool": name, "arguments": _parse_tool_arguments(function.get("arguments"))}
+            {
+                "tool": name,
+                "arguments": _parse_tool_arguments(function.get("arguments")),
+                "id": str(call.get("id", "") or f"call-{index + 1}"),
+            }
         )
     return actions
 
 
-def _selected_object_hint(object_context: str) -> str:
+#: 模型写在正文里的工具调用（Qwen 的文本格式）。
+_TEXT_TOOL_CALL = re.compile(r"<tool_call\s*>(.*?)</tool_call\s*>", re.DOTALL | re.IGNORECASE)
+_TEXT_FUNCTION = re.compile(r"<function\s*=\s*([\w.\-]+)\s*>", re.IGNORECASE)
+_TEXT_PARAMETER = re.compile(r"<parameter\s*=\s*([\w.\-]+)\s*>", re.IGNORECASE)
+
+
+def parse_text_tool_calls(content: str) -> tuple[list[dict[str, Any]], str]:
+    """解析模型写在**正文里**的 ``<tool_call>`` 文本形式，返回 ``(动作, 剩下的文字)``。
+
+    本机 llama-server 没开 ``--jinja`` 时，小模型偶尔不返回结构化的 ``tool_calls``，
+    而是把 Qwen 的文本格式塞进 ``content``::
+
+        <tool_call>
+        <function=spectrogram>
+        <parameter=name>
+        Spectrum_03
+        </parameter>
+        </function>
+        </tool_call>
+
+    以前这串 XML 会被当成"最终回答"显示给用户。这里把它解析成工具调用（参数值是
+    字符串，工具自己的解析函数都接受），并把 XML 之外的文字留给用户看。模型被截断
+    （只有开头没有 ``</tool_call>``）时也能解析，剩下的半截不会再显示出来。
+    """
+
+    text = content or ""
+    actions: list[dict[str, Any]] = []
+    blocks = _TEXT_TOOL_CALL.findall(text)
+    if not blocks:
+        first = _TEXT_FUNCTION.search(text)
+        if first:
+            # 模型被 max_tokens 截断，只有开头：把 <function=…> 之后的部分当一个块。
+            blocks = [text[first.start() :]]
+    for index, block in enumerate(blocks):
+        functions = list(_TEXT_FUNCTION.finditer(block))
+        for order, function in enumerate(functions):
+            # 一个块里可能有多个 <function=…>，各自取到下一个函数标签为止。
+            tail_start = (
+                functions[order + 1].start() if order + 1 < len(functions) else len(block)
+            )
+            body = block[function.end() : tail_start]
+            arguments: dict[str, Any] = {}
+            for parameter in _TEXT_PARAMETER.finditer(body):
+                key = parameter.group(1)
+                tail = body[parameter.end() :]
+                end = re.search(r"</parameter\s*>", tail, re.IGNORECASE)
+                raw = tail[: end.start()] if end else tail
+                arguments[key] = raw.strip()
+            actions.append(
+                {
+                    "tool": function.group(1),
+                    "arguments": arguments,
+                    "id": f"text-{index + 1}-{order + 1}",
+                }
+            )
+    if not actions:
+        return [], text.strip()
+
+    leftover = _TEXT_TOOL_CALL.sub("", text)
+    if _TEXT_FUNCTION.search(leftover):
+        # 没有闭合标签（模型被 max_tokens 截断）：从 <tool_call> / <function= 起全不要。
+        leftover = re.split(r"<tool_call\s*>|<function\s*=", leftover, maxsplit=1, flags=re.IGNORECASE)[0]
+    return actions, leftover.strip()
+
+
+def assistant_tool_message(
+    message: Mapping[str, Any],
+    actions: list[dict[str, Any]] | None = None,
+    content: str | None = None,
+) -> dict[str, Any]:
+    """把模型那次「工具调用」的响应整理成可以回传的 assistant 消息。
+
+    只留 ``role`` / ``content`` / ``tool_calls``：``reasoning_content`` 这类字段
+    各家服务端的接受度不一样，回灌时不需要它（推理内容不参与下一轮对话）。
+
+    ``actions`` 由调用方给出（正文里那串文本形式的调用也要按同样的顺序回传，
+    否则后面每条 ``role: tool`` 的 id 就对不上了）。
+    """
+
+    parsed = extract_tool_actions(message) if actions is None else actions
+    calls: list[dict[str, Any]] = []
+    for action in parsed:
+        calls.append(
+            {
+                "id": str(action.get("id", "") or "call-1"),
+                "type": "function",
+                "function": {
+                    "name": action["tool"],
+                    "arguments": json.dumps(action["arguments"], ensure_ascii=False),
+                },
+            }
+        )
+    if content is None:
+        raw = message.get("content") or ""
+        content = raw if isinstance(raw, str) else ""
+    return {
+        "role": "assistant",
+        "content": content,
+        "tool_calls": calls,
+    }
+
+
+def tool_result_message(call_id: str, content: str) -> dict[str, Any]:
+    """一次工具执行的观察结果，按 OpenAI 的 ``role: tool`` 形状回灌。"""
+
+    return {"role": "tool", "tool_call_id": call_id, "content": content}
+
+
+def selected_object_hint(object_context: str) -> str:
     """把「当前选中哪个对象」单独写一句，模型不会误挑同名列表里的第一条。"""
 
     for line in (object_context or "").splitlines():
@@ -327,7 +443,7 @@ class QwenClient:
                 + self._tool_context(result_path, state_path, object_context),
             },
         ]
-        messages.extend(_history_messages(history))
+        messages.extend(history_messages(history))
         messages.append({"role": "user", "content": user_text})
         message = self.chat_message(
             messages,
@@ -366,7 +482,7 @@ class QwenClient:
                 f'完成标记文件（脚本最后一行必须是 appendFileLine: "{state_path}", "done"）：'
                 f"{state_path}",
                 "",
-                _selected_object_hint(object_context),
+                selected_object_hint(object_context),
                 "",
                 "当前 Praat 对象列表（id、类、名称、是否选中）：",
                 object_context,
@@ -439,7 +555,7 @@ JSON 结构：
                 "可用工具：",
                 tool_catalog,
                 "",
-                _selected_object_hint(object_context),
+                selected_object_hint(object_context),
                 "",
                 "当前 Praat 对象列表（id、类、名称、是否选中）：",
                 object_context,

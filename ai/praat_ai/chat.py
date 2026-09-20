@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import subprocess
@@ -27,13 +28,14 @@ import threading
 import time
 import tkinter as tk
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import ttk
+from typing import Any, Callable, Mapping
 
-from . import praat_app, sendpraat, tools
+from . import praat_app, qwen, sendpraat, tools
 from .config import load_config
 from .presets import PresetError, active_preset, list_presets
-from .qwen import QwenClient, QwenError
 from .server import running_model_info
 
 
@@ -368,6 +370,429 @@ def render_action(
         )
 
 
+#: 一次用户请求最多让模型规划几轮（每轮可以执行 1–3 个动作）。
+#:
+#: 一轮结束会把执行结果**回灌**给模型，让它接着做下一步或者把结果讲清楚；到上限
+#: 还在调工具时就强制要一次纯文本回答。3 轮是权衡：多步请求够用，最坏情况也只多花
+#: 一两次小模型调用（实测一次调用 0.3–1 秒）。
+MAX_AGENT_ROUNDS = 3
+
+#: 一次用户请求最多**实际执行**几个动作。小模型在多轮里会退化成重复调用同一个
+#: 工具（实测「截取 0.2–0.5 秒」被它连做三遍），所以除了轮数还要卡总步数。
+MAX_AGENT_STEPS = 5
+
+
+@dataclass(slots=True)
+class AgentStep:
+    """一次工具执行，以及回灌给模型的那段观察结果。"""
+
+    round_index: int
+    tool: str
+    arguments: dict[str, Any]
+    ok: bool
+    observation: str
+    script: str = ""
+    results: list[str] = field(default_factory=list)
+    note: str = ""
+
+
+@dataclass(slots=True)
+class TurnOutcome:
+    """一轮用户请求的结果（可能包含多步执行）。"""
+
+    reply: str = ""
+    results: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    steps: list[AgentStep] = field(default_factory=list)
+    used_tools: bool = False
+    failure: str = ""
+
+    @property
+    def last_script(self) -> str:
+        for step in reversed(self.steps):
+            if step.script:
+                return step.script
+        return ""
+
+
+def _short_arguments(arguments: Mapping[str, Any], *, maximum: int = 60) -> str:
+    if not arguments:
+        return ""
+    text = ", ".join(f"{key}={value}" for key, value in arguments.items())
+    return text if len(text) <= maximum else text[: maximum - 1] + "…"
+
+
+def _progress_text(step: AgentStep) -> str:
+    head = step.tool + (f"（{_short_arguments(step.arguments)}）" if step.arguments else "")
+    if step.ok:
+        detail = "；".join(step.results) or "已执行"
+        return f"第 {step.round_index} 轮：{head} → {detail}"
+    return f"第 {step.round_index} 轮：{head} 未完成 → {step.observation}"
+
+
+def _summary_of(outcome: TurnOutcome) -> str:
+    """模型没给出文字时的兜底回答。"""
+
+    if outcome.results:
+        return "结果：" + "；".join(outcome.results)
+    if outcome.failure:
+        return "执行未完成：" + outcome.failure
+    return "已完成。"
+
+
+def _action_signature(action: Mapping[str, Any]) -> str:
+    """动作签名（工具名 + 参数），用来认出重复调用。"""
+
+    return json.dumps(
+        [str(action.get("tool", "")), action.get("arguments") or {}],
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+
+#: 用户明确说了「还有下一步」的说法。第二轮之后要动对象，必须出现其中之一。
+_FOLLOWUP_WORDS = (
+    "然后",
+    "再",
+    "接着",
+    "之后",
+    "并且",
+    "同时",
+    "顺便",
+    "第一步",
+    "第二步",
+    "先",
+)
+
+
+def wants_second_step(user_text: str) -> bool:
+    """用户这句话是不是明确要求「不止一步」。
+
+    「把前 0.3 秒截出来，**然后**把它改名」是两步；「打开这个声音的编辑器」只有一步。
+    小模型（尤其 0.8B 预设）在第二轮之后爱顺手多做几步（实测会做频谱图、换掉选中
+    对象），所以只有用户自己说要接着做，才允许后续轮次动对象。
+    """
+
+    text = (user_text or "").strip()
+    return any(word in text for word in _FOLLOWUP_WORDS)
+
+
+def _execute_action(
+    action: Mapping[str, Any],
+    context: tools.ToolContext,
+    execute: Callable[[str], tuple[bool, list[str], str]],
+    round_index: int,
+) -> AgentStep:
+    """执行一个动作，把它变成一条可以回灌给模型的观察结果。
+
+    工具自己拒绝请求（参数不合法、对象找不到）时**不再往上抛**：那是一条「这个动作
+    没做成，原因是……」的观察结果，模型看到之后可以改参数重试（见 A4 的取舍）。
+    """
+
+    tool_name = str(action.get("tool", "") or "").strip()
+    arguments = action.get("arguments") or {}
+    if not isinstance(arguments, Mapping):
+        arguments = {}
+    try:
+        script, note = render_action(action, context)
+    except tools.ToolError as error:
+        observation = f"工具 {tool_name} 没有执行：{error}"
+        return AgentStep(round_index, tool_name, dict(arguments), False, observation)
+    ok, results, failure = execute(script)
+    if ok:
+        detail = "；".join(results) if results else "（脚本跑完了，但没有输出结果行）"
+        observation = (
+            f"工具 {tool_name} 执行成功，结果：{detail}\n"
+            "（如果这些结果已经够回答用户，就直接回答，不要再调工具、也不要顺手多做别的操作；"
+            "只有确实还需要下一步时才继续调工具。）"
+        )
+    else:
+        observation = f"工具 {tool_name} 执行失败：{failure}"
+    return AgentStep(
+        round_index,
+        tool_name,
+        dict(arguments),
+        ok,
+        observation,
+        script,
+        results,
+        note,
+    )
+
+
+def _run_agent_turn(
+    planner,
+    *,
+    context: tools.ToolContext,
+    execute: Callable[[str], tuple[bool, list[str], str]],
+    on_progress: Callable[[str], None] | None = None,
+    max_rounds: int = MAX_AGENT_ROUNDS,
+    max_steps: int = MAX_AGENT_STEPS,
+    allow_followup_mutations: bool = False,
+) -> TurnOutcome:
+    """循环本体：规划 → 执行 → 回灌 → 再规划（planner 负责具体接口）。
+
+    两道防线对付小模型的退化行为（实测会重复调用同一个工具）：
+    ① 同一个动作（工具名 + 参数完全相同）只执行一次，重复的调用只回灌一条
+       「这一步刚才已经做过」；
+    ② 一次请求最多实际执行 :data:`MAX_AGENT_STEPS` 个动作。
+
+    还有一道针对「顺手多做」的护栏：用户没明确说要接着做时（见
+    :func:`wants_second_step`），第二轮之后不许再执行会改动对象的工具
+    （``tools.MUTATING_TOOLS``）——只读查询不受限制。
+    """
+
+    outcome = TurnOutcome()
+    executed: dict[str, str] = {}
+    steps_done = 0
+    stopped_early = False
+    for round_index in range(1, max_rounds + 1):
+        actions, reply = planner.next()
+        if not actions:
+            outcome.reply = reply or _summary_of(outcome)
+            return outcome
+        for action in actions:
+            signature = _action_signature(action)
+            tool_name = str(action.get("tool", "") or "")
+            if signature in executed:
+                observation = (
+                    "这一步刚才已经执行过，没有重复执行。"
+                    f"上一次的结果：{executed[signature]}"
+                )
+                step = AgentStep(
+                    round_index,
+                    tool_name,
+                    dict(action.get("arguments") or {}),
+                    True,
+                    observation,
+                    "",
+                    [],
+                    "重复调用被跳过。",
+                )
+                outcome.steps.append(step)
+                outcome.notes.append(f"跳过一次重复调用：{tool_name}")
+                planner.observe(action, observation)
+                continue
+            if (
+                round_index > 1
+                and not allow_followup_mutations
+                and tools.is_mutating(tool_name)
+            ):
+                # 用户这句话没有要求第二步，而这个动作会改动对象：不做。
+                observation = (
+                    f"没有执行这个动作：{tool_name} 会改动 Praat 里的对象，"
+                    "而用户这次只要求做一件事。请直接用上面已经拿到的结果回答；"
+                    "如果确实还需要这一步，就在回答里说明需要做什么。"
+                )
+                step = AgentStep(
+                    round_index,
+                    tool_name,
+                    dict(action.get("arguments") or {}),
+                    True,
+                    observation,
+                    "",
+                    [],
+                    f"拦下了一次多余的操作：{tool_name}（用户没有要求第二步）",
+                )
+                outcome.steps.append(step)
+                outcome.notes.append(step.note)
+                planner.observe(action, observation)
+                continue
+            if steps_done >= max_steps:
+                stopped_early = True
+                break
+            step = _execute_action(action, context, execute, round_index)
+            steps_done += 1
+            executed[signature] = step.observation
+            outcome.steps.append(step)
+            outcome.used_tools = True
+            if step.ok:
+                outcome.results.extend(step.results)
+            else:
+                outcome.failure = step.observation
+            if step.note:
+                outcome.notes.append(step.note)
+            planner.observe(action, step.observation)
+            if on_progress is not None:
+                on_progress(_progress_text(step))
+        if stopped_early:
+            break
+    outcome.reply = planner.wrap_up() or _summary_of(outcome)
+    return outcome
+
+
+class _NativePlanner:
+    """原生工具调用：自己维护 messages，逐轮把 tool 结果塞回去。"""
+
+    def __init__(
+        self,
+        client: qwen.QwenClient,
+        *,
+        user_text: str,
+        context_text: str,
+        history: list[dict[str, str]],
+        result_path: str,
+        state_path: str,
+    ) -> None:
+        self.client = client
+        self.messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": qwen.TOOL_PLANNER_INSTRUCTIONS
+                + "\n\n"
+                + tool_context_text(context_text, result_path, state_path),
+            }
+        ]
+        self.messages.extend(qwen.history_messages(history))
+        self.messages.append({"role": "user", "content": user_text})
+
+    def next(self) -> tuple[list[dict[str, Any]], str]:
+        message = self.client.chat_message(
+            self.messages,
+            tools=tools.tool_schemas(),
+            max_tokens=self.client.config.plan_max_tokens,
+            temperature=self.client.config.plan_temperature,
+        )
+        actions = qwen.extract_tool_actions(message)
+        content = str(message.get("content") or "").strip()
+        if not actions:
+            # 没开 --jinja 时小模型偶尔把调用写成正文里的 <tool_call> 文本；
+            # 那种情况也要当工具调用执行，而不是把一坨 XML 当成回答显示给用户。
+            actions, content = qwen.parse_text_tool_calls(content)
+        if actions:
+            # 回灌形状必须和这次响应一致：assistant(tool_calls) + 每条 tool 结果。
+            # 正文只留 XML 之外的文字，别把工具调用文本也塞回历史里（会把模型带偏）。
+            self.messages.append(qwen.assistant_tool_message(message, actions, content))
+        return actions, content
+
+    def observe(self, action: Mapping[str, Any], observation: str) -> None:
+        call_id = str(action.get("id", "") or "call-1")
+        self.messages.append(qwen.tool_result_message(call_id, observation))
+
+    def wrap_up(self) -> str:
+        text = self.client.chat(
+            self.messages,
+            max_tokens=self.client.config.plan_max_tokens,
+            temperature=self.client.config.plan_temperature,
+        ).strip()
+        # 收尾这轮也可能又写工具调用文本：那些不执行了，也不能显示给用户。
+        _actions, leftover = qwen.parse_text_tool_calls(text)
+        return leftover
+
+
+class _JsonPlanner:
+    """老的提示词接口：把观察结果写成一条「上一轮执行结果」再问一次。"""
+
+    def __init__(
+        self,
+        client: qwen.QwenClient,
+        *,
+        user_text: str,
+        context_text: str,
+        history: list[dict[str, str]],
+        result_path: str,
+        state_path: str,
+    ) -> None:
+        self.client = client
+        self.user_text = user_text
+        self.context_text = context_text
+        self.history = list(history)
+        self.result_path = result_path
+        self.state_path = state_path
+        self.observations: list[str] = []
+
+    def next(self) -> tuple[list[dict[str, Any]], str]:
+        history = list(self.history)
+        if self.observations:
+            history.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "上一步的执行结果：\n"
+                        + "\n".join(self.observations)
+                        + "\n请根据这些结果回答用户；如果需要继续操作就再选工具，"
+                        "不需要就不要选工具。"
+                    ),
+                }
+            )
+        plan = self.client.plan_praat_command(
+            self.user_text,
+            self.context_text,
+            history,
+            tool_catalog=tools.catalog_text(),
+            result_path=self.result_path,
+            state_path=self.state_path,
+        )
+        return tools.plan_actions(plan), str(plan.get("reply", "") or "").strip()
+
+    def observe(self, action: Mapping[str, Any], observation: str) -> None:
+        tool_name = str(action.get("tool", "") or "")
+        self.observations.append(f"{tool_name}：{observation}")
+
+    def wrap_up(self) -> str:
+        return ""
+
+
+def tool_context_text(
+    object_context: str, result_path: str, state_path: str
+) -> str:
+    """现场信息：结果文件、完成标记、当前选中、对象列表。"""
+
+    return "\n".join(
+        [
+            f"结果文件（脚本把数值结果写到这里）：{result_path}",
+            f'完成标记文件（脚本最后一行必须是 appendFileLine: "{state_path}", "done"）：'
+            f"{state_path}",
+            "",
+            qwen.selected_object_hint(object_context),
+            "",
+            "当前 Praat 对象列表（id、类、名称、是否选中）：",
+            object_context,
+        ]
+    )
+
+
+def run_turn(
+    client: qwen.QwenClient,
+    *,
+    user_text: str,
+    context_text: str,
+    history: list[dict[str, str]],
+    context: tools.ToolContext,
+    execute: Callable[[str], tuple[bool, list[str], str]],
+    on_progress: Callable[[str], None] | None = None,
+    native: bool | None = None,
+    max_rounds: int = MAX_AGENT_ROUNDS,
+) -> TurnOutcome:
+    """跑一轮用户请求：先规划，执行，把结果回灌，再规划（见 ``MAX_AGENT_ROUNDS``）。
+
+    ``execute(脚本)`` 由调用方提供，返回 ``(是否成功, 结果行, 失败说明)``——对话窗口
+    用它投递给正在运行的 Praat，验证脚本用它跑批处理。
+    """
+
+    use_native = (
+        qwen.planner_mode() != qwen.JSON_MODE if native is None else native
+    )
+    planner_class = _NativePlanner if use_native else _JsonPlanner
+    planner = planner_class(
+        client,
+        user_text=user_text,
+        context_text=context_text,
+        history=history,
+        result_path=str(context.result_path),
+        state_path=str(context.state_path),
+    )
+    return _run_agent_turn(
+        planner,
+        context=context,
+        execute=execute,
+        on_progress=on_progress,
+        max_rounds=2 if not use_native else max_rounds,
+        allow_followup_mutations=wants_second_step(user_text),
+    )
+
+
 def _send_script(
     executable: str, script: str, *, request_id: str = ""
 ) -> tuple[bool, str]:
@@ -616,7 +1041,7 @@ class ChatWindow:
         self.root.minsize(680, 480)
         self.root.configure(background="#F3F4F6")
         self.config = load_config()
-        self.client = QwenClient(self.config.qwen)
+        self.client = qwen.QwenClient(self.config.qwen)
         self.history: list[dict[str, str]] = []
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy = False
@@ -852,7 +1277,7 @@ class ChatWindow:
             from . import control
 
             result = control.apply_preset(preset_id)
-        except (PresetError, QwenError, OSError, ValueError) as error:
+        except (PresetError, qwen.QwenError, OSError, ValueError) as error:
             self.messages.put(("assistant", f"切换模型预设失败：{error}"))
         else:
             label = str(result.get("frontend_preset_label", "")) or preset_id
@@ -910,12 +1335,11 @@ class ChatWindow:
         ).start()
         return "break"
 
-    def plan_script(self, text: str) -> tuple[str, str]:
-        """Return ``(reply, script)`` for one user message.
+    def run_user_turn(self, text: str, executable: str) -> TurnOutcome:
+        """规划并执行一轮用户请求（可能多步），返回最终回答和每一步的结果。
 
-        模型一次可能给多个工具调用（实测「0.25 秒和 0.75 秒的基频」就是两个
-        ``pitch``），它们按顺序拼成**同一条**脚本投递：一次往返、一个请求编号，
-        动作顺序就是模型给的顺序。
+        执行由 :func:`_send_script` 完成，所以每一步都是一条独立的 app 消息（各自
+        有请求编号）；每步跑完把结果（或错误）回灌给模型，让它接着做或者解释结果。
         """
 
         context_text = object_context()
@@ -925,28 +1349,22 @@ class ChatWindow:
             result_path=result_path(),
             state_path=state_path(),
         )
-        plan = self.client.plan_praat_command(
-            text,
-            context_text,
-            self.history,
-            tool_catalog=tools.catalog_text(),
-            tool_schemas=tools.tool_schemas(),
-            tool_labels=tools.tool_labels(),
-            result_path=str(result_path()),
-            state_path=str(state_path()),
-        )
-        reply = str(plan.get("reply", "")).strip() or "已完成。"
-        actions = tools.plan_actions(plan)
-        if not actions:
-            return reply, ""
-        scripts: list[str] = []
-        for action in actions:
-            script, note = render_action(action, context)
-            if note:
-                self.messages.put(("hint", note))
-            scripts.append(script)
-        return reply, "\n".join(scripts)
 
+        def execute(script: str) -> tuple[bool, list[str], str]:
+            ok, output = _send_script(executable, script)
+            if not ok:
+                return False, [], output or _blocked_reason()
+            return True, _read_results(), ""
+
+        return run_turn(
+            self.client,
+            user_text=text,
+            context_text=context_text,
+            history=self.history,
+            context=context,
+            execute=execute,
+            on_progress=lambda line: self.messages.put(("hint", line)),
+        )
 
     def process_message(self, text: str) -> None:
         try:
@@ -963,13 +1381,6 @@ class ChatWindow:
                 if not refreshed and note:
                     self.messages.put(("hint", note))
 
-            reply, script = self.plan_script(text)
-            if not script:
-                self.messages.put(("assistant", reply))
-                self.history.append({"role": "user", "content": text})
-                self.history.append({"role": "assistant", "content": reply})
-                return
-
             if not executable:
                 raise OSError(
                     praat_app.describe_search()
@@ -981,39 +1392,48 @@ class ChatWindow:
                     "再从菜单「前端 → 启动前端」启动对话窗口。"
                 )
 
-            success, output = _send_script(executable, script)
-            results = _read_results()
-            if success:
-                body = f"{reply}\n结果：{'；'.join(results)}" if results else reply
+            outcome = self.run_user_turn(text, executable)
+            for note in outcome.notes:
+                self.messages.put(("hint", note))
+
+            if not outcome.used_tools:
+                # 模型判断不需要动手（打招呼、或者这件事做不到），直接回话。
+                self.messages.put(("assistant", outcome.reply))
+                self.history.append({"role": "user", "content": text})
+                self.history.append({"role": "assistant", "content": outcome.reply})
+                return
+
+            if outcome.results:
+                body = f"{outcome.reply}\n结果：{'；'.join(outcome.results)}"
                 self.messages.put(("assistant", body))
-                if results:
-                    self.messages.put(
-                        ("result", "结果：\n" + "\n".join(results))
-                    )
-                elif output:
-                    self.messages.put(("hint", f"Praat 返回：{output}"))
+                self.messages.put(("result", "结果：\n" + "\n".join(outcome.results)))
+                if outcome.failure:
+                    # 前面几步成功、后面某一步没做成：结果照给，另起一句说明。
+                    self.messages.put(("hint", outcome.failure))
                 self.history.append({"role": "user", "content": text})
                 self.history.append({"role": "assistant", "content": body})
+                return
+
+            message = (
+                f"{outcome.reply}\n执行未完成：Praat 没有返回结果，"
+                "请查看 Praat 主窗口弹出的错误提示（脚本执行失败时 Praat "
+                "会自己弹出提示，对话窗口拿不到那些文字）。"
+            )
+            if outcome.failure:
+                message += f"\n{outcome.failure}"
             else:
-                message = (
-                    f"{reply}\n执行未完成：Praat 没有返回结果，"
-                    "请查看 Praat 主窗口弹出的错误提示（脚本执行失败时 Praat "
-                    "会自己弹出提示，对话窗口拿不到那些文字）。"
+                message += (
+                    "\n（Praat 没有输出任何信息：常见原因是脚本里的命令和当前"
+                    "选中的对象不匹配，或者 Praat 正被对话框挡住。）"
                 )
-                if output:
-                    message += f"\n{output}"
-                else:
-                    message += (
-                        "\n（Praat 没有输出任何信息：常见原因是脚本里的命令和当前"
-                        "选中的对象不匹配，或者 Praat 正被对话框挡住。）"
-                    )
-                message += f"\n\n本次脚本：\n{tools.describe_script(script)}"
-                self.messages.put(("assistant", message))
-                self.history.append({"role": "user", "content": text})
-                self.history.append(
-                    {"role": "assistant", "content": "（上次脚本执行未完成）"}
-                )
-        except (QwenError, tools.ToolError, PresetError, OSError) as error:
+            if outcome.last_script:
+                message += f"\n\n本次脚本：\n{tools.describe_script(outcome.last_script)}"
+            self.messages.put(("assistant", message))
+            self.history.append({"role": "user", "content": text})
+            self.history.append(
+                {"role": "assistant", "content": "（上次脚本执行未完成）"}
+            )
+        except (qwen.QwenError, tools.ToolError, PresetError, OSError) as error:
             self.messages.put(("assistant", f"处理失败：{error}"))
         finally:
             self.messages.put(("done", ""))
@@ -1055,7 +1475,7 @@ class ChatWindow:
         """重新读取 ai_config.json（切换预设之后模型和 mmproj 都会变）。"""
 
         self.config = load_config()
-        self.client = QwenClient(self.config.qwen)
+        self.client = qwen.QwenClient(self.config.qwen)
         self.presets = list_presets(self.config)
         self.refresh_preset_widgets()
         self.status.set("Praat AI  |  " + model_status_text(self.config))
