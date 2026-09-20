@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig, default_config_path, load_config
+from .process import process_alive as _process_alive
 from .server import (
     QwenServerError,
     QwenServerManager,
@@ -46,14 +47,15 @@ def _read_pid() -> int | None:
         return None
 
 
-def _process_alive(pid: int | None) -> bool:
-    if not pid:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+def _wait_for_process_exit(process_id: int, timeout: float = 20.0) -> bool:
+    """True when the process really is gone (used before deleting the pid file)."""
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _process_alive(process_id):
+            return True
+        time.sleep(0.2)
+    return not _process_alive(process_id)
 
 
 def _write_status(values: dict[str, Any]) -> dict[str, Any]:
@@ -123,23 +125,110 @@ def _kill_process(process_id: int | None) -> None:
             pass
 
 
-def _stop_running_service() -> bool:
+def _parse_netstat_listening(text: str, port: int) -> list[int]:
+    """Pick the PIDs that LISTEN on `port` from `netstat -ano` output."""
+
+    suffix = f":{port}"
+    process_ids: list[int] = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        if parts[0].upper() != "TCP" or "LISTENING" not in line.upper():
+            continue
+        if not parts[1].endswith(suffix):
+            continue
+        try:
+            process_id = int(parts[-1])
+        except ValueError:
+            continue
+        if process_id and process_id not in process_ids:
+            process_ids.append(process_id)
+    return process_ids
+
+
+def _listening_pids(port: int) -> list[int]:
+    if os.name != "nt":
+        return []
+    try:
+        completed = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return _parse_netstat_listening(completed.stdout, port)
+
+
+def _process_name(process_id: int) -> str:
+    """Image name of a PID (empty when it cannot be read)."""
+
+    if os.name != "nt":
+        return ""
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {process_id}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    for line in (completed.stdout or "").splitlines():
+        first = line.split('","')[0].strip().strip('"').strip()
+        if first and not first.upper().startswith("INFO"):
+            return first
+    return ""
+
+
+def _stop_service_by_port(config: AppConfig) -> bool:
+    """Fallback stop: find the configured llama-server by its listening port.
+
+    只在 `runtime/qwen.pid` 丢失或失效时使用，而且必须同时满足「监听本项目的
+    host/port」和「进程名等于配置里的 llama-server」两个条件才结束进程，
+    避免误杀占用同一端口的其它程序。
+    """
+
+    expected = Path(config.server.llama_server).name.casefold()
+    if not expected:
+        return False
+    stopped = False
+    for process_id in _listening_pids(config.server.port):
+        if _process_name(process_id).casefold() != expected:
+            continue
+        _kill_process(process_id)
+        stopped = True
+    if stopped:
+        _remove_pid_file()
+    return stopped
+
+
+def _stop_running_service(config: AppConfig | None = None) -> bool:
     """Stop the llama-server started by this frontend; True if one was stopped."""
 
+    stopped = False
     process_id = _read_pid()
-    if not process_id:
-        return False
-    _kill_process(process_id)
+    if process_id:
+        _kill_process(process_id)
+        # 只有确认进程真的退出才算停止成功，否则先保留 pid 文件。
+        stopped = _wait_for_process_exit(process_id)
+    # pid 文件丢失、过期或没杀掉时的兜底：按端口找出本项目的 llama-server
+    if config is not None and _stop_service_by_port(config):
+        stopped = True
+    if stopped:
+        _remove_pid_file()
+    return stopped
+
+
+def _remove_pid_file() -> None:
     try:
         pid_path().unlink()
     except FileNotFoundError:
         pass
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        if not _process_alive(process_id):
-            return True
-        time.sleep(0.2)
-    return True
 
 
 def _wait_for_endpoint_gone(base_url: str, timeout: float = 20.0) -> None:
@@ -173,7 +262,7 @@ def _restart_service(
 ) -> dict[str, Any]:
     """Stop a service that loaded the wrong model and start it with the new config."""
 
-    if not _stop_running_service():
+    if not _stop_running_service(config):
         raise QwenServerError(
             f"{config.qwen.base_url} 上运行的服务不是本前端启动的，无法自动重启；"
             "请先手动停止该服务，再从菜单启动前端。"
@@ -195,7 +284,7 @@ def start_frontend(config_path: str | Path | None = None) -> dict[str, Any]:
 
 
 def stop_frontend(config_path: str | Path | None = None) -> dict[str, Any]:
-    _stop_running_service()
+    _stop_running_service(load_config(config_path))
     return collect_status(config_path)
 
 
