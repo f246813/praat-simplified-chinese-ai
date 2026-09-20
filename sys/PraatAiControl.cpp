@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -35,6 +36,30 @@ namespace {
 	MelderString statusFrontendStatus;
 	char32 theAiProjectDirectoryBuffer [Preferences_STRING_BUFFER_SIZE];
 	constexpr conststring32 defaultFrontendModel = U"Qwen3.5-0.8B-Q4_K_M.gguf";
+	/*
+		用户在编辑器里手动拖出来的选区。只在「编辑器还开着」时才算数：
+		编辑器关掉之后 editors[] 里的那个指针会被清成 null，这里自然就失效了。
+	*/
+	Thing theNotedEditor = nullptr;
+	Thing theNotedEditorObject = nullptr;
+	double theNotedSelectionStart = 0.0, theNotedSelectionEnd = 0.0;
+
+	bool notedSelectionMatches (integer iobject, Daata object) {
+		if (! theNotedEditor || theNotedEditorObject != (Thing) object)
+			return false;
+		if (! (theNotedSelectionEnd > theNotedSelectionStart))
+			return false;   // 只点了一下光标，没拖选
+		for (integer ieditor = 0; ieditor < praat_MAXNUM_EDITORS; ieditor ++)
+			if ((Thing) theCurrentPraatObjects -> list [iobject]. editors [ieditor] == theNotedEditor)
+				return true;
+		return false;
+	}
+
+	std::string formatSelectionSeconds (double value) {
+		std::ostringstream text;
+		text << std::fixed << std::setprecision (6) << value;
+		return text. str();
+	}
 
 	std::string jsonStringField (const std::string &json, const std::string &name, const std::string &fallback = "") {
 		const std::string key = "\"" + name + "\"";
@@ -222,7 +247,7 @@ namespace {
 
 	std::string buildChatContext () {
 		std::ostringstream text;
-		text << "id\tclass\tname\tselected\n";
+		text << "id\tclass\tname\tselected\tsel_start\tsel_end\n";
 		if (theCurrentPraatObjects) {
 			for (integer iobject = 1; iobject <= theCurrentPraatObjects -> n; iobject ++) {
 				Daata object = theCurrentPraatObjects -> list [iobject]. object;
@@ -232,8 +257,14 @@ namespace {
 					<< theCurrentPraatObjects -> list [iobject]. id << '\t'
 					<< cleanContextField (Thing_className (object)) << '\t'
 					<< cleanContextField (theCurrentPraatObjects -> list [iobject]. name. get()) << '\t'
-					<< (theCurrentPraatObjects -> list [iobject]. isSelected ? "1" : "0")
-					<< '\n';
+					<< (theCurrentPraatObjects -> list [iobject]. isSelected ? "1" : "0");
+				if (notedSelectionMatches (iobject, object))
+					text
+						<< '\t' << formatSelectionSeconds (theNotedSelectionStart)
+						<< '\t' << formatSelectionSeconds (theNotedSelectionEnd);
+				else
+					text << "\t\t";   // 没有圈选就留空两列，行数与表头保持一致
+				text << '\n';
 			}
 		}
 		return text. str();
@@ -395,6 +426,16 @@ void PraatAiControl_runAnalysis () {
 void PraatAiControl_refreshChatContext () {
 	if (Melder_batch)
 		return;   // 批处理里没有对话窗口
+	writeChatContext ();   // 内容没变化时不会重复写盘
+}
+
+void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end) {
+	if (Melder_batch)
+		return;
+	theNotedEditor = editor;
+	theNotedEditorObject = object;
+	theNotedSelectionStart = start;
+	theNotedSelectionEnd = end;
 	writeChatContext ();   // 内容没变化时不会重复写盘
 }
 

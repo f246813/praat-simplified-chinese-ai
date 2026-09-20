@@ -2057,6 +2057,8 @@ void FunctionEditor_selectionMarksChanged (FunctionEditor me) {
 	my v_updateText ();
 	FunctionEditor_redraw (me);
 	updateGroup (me, false, true);
+	PraatAiControl_noteEditorSelection (me, my data(), my startSelection, my endSelection);
+	// 让对话窗口知道用户刚在波形上拖了哪一段
 }
 
 void FunctionEditor_updateText (FunctionEditor me) {

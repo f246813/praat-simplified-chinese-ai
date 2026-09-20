@@ -6,6 +6,7 @@
  */
 
 #include "Gui.h"
+#include "Thing.h"
 
 void PraatAiControl_initPreferences ();
 
@@ -21,5 +22,6 @@ void PraatAiControl_startFrontend ();
 void PraatAiControl_stopFrontend ();
 void PraatAiControl_runAnalysis ();
 void PraatAiControl_refreshChatContext ();
+void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end);
 
 #endif
