@@ -9,6 +9,7 @@
 #include "praat_python.h"
 #include "Preferences.h"
 #include "melder_sysenv.h"
+#include "melder_progress.h"
 #include "praat_translate.h"
 #include "Sound.h"
 #include "TextGrid.h"
@@ -37,6 +38,39 @@ static std::filesystem::path get_process_workspace () {
 	pid_t pid = getpid ();
 #endif
 	return std::filesystem::temp_directory_path () / ("praat_py_workspace_" + std::to_string (pid));
+}
+
+static bool handlePythonOutputLine (
+	const std::string &line,
+	std::string &displayOutput,
+	bool &progressWasShown
+) {
+	constexpr const char *progressPrefix = "PRAAT_PROGRESS\t";
+	if (line. rfind (progressPrefix, 0) != 0) {
+		displayOutput.append (line);
+		displayOutput.append ("\n");
+		return false;
+	}
+
+	const char *payload = line. c_str() + strlen (progressPrefix);
+	const char *tab = strchr (payload, '\t');
+	const std::string fractionText = tab ?
+		std::string (payload, tab - payload) :
+		std::string (payload);
+	double fraction = 0.0;
+	try {
+		fraction = std::stod (fractionText);
+	} catch (...) {
+		fraction = 0.0;
+	}
+	if (tab) {
+		autostring32 message = Melder_8to32_e (tab + 1);
+		Melder_progress (fraction, message. get());
+	} else {
+		Melder_progress (fraction, U"Praat AI");
+	}
+	progressWasShown = true;
+	return true;
 }
 
 static std::string escape_json_string (const std::string &str) {
@@ -108,6 +142,9 @@ void praat_python_initPreferences () {
 	#else
 		Preferences_addString (U"Python.executablePath", thePythonExecutablePath, U"python3");
 	#endif
+	conststring32 configuredPath = Melder_getenv (U"PRAAT_PYTHON_EXECUTABLE");
+	if (configuredPath && configuredPath [0])
+		str32cpy (thePythonExecutablePath, configuredPath);
 }
 
 conststring32 praat_python_getExecutablePath () {
@@ -770,14 +807,27 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 		}
 
 		// Read output continuously
-		std::string outputAccum;
+		std::string outputAccum, pendingOutput;
+		bool progressWasShown = false;
 		char buffer [4096];
 		DWORD bytesRead = 0;
 
 		while (ReadFile (hPipeRead, buffer, sizeof (buffer) - 1, & bytesRead, NULL) && bytesRead > 0) {
 			buffer [bytesRead] = '\0';
-			outputAccum.append (buffer, bytesRead);
+			pendingOutput.append (buffer, bytesRead);
+			size_t newlinePosition;
+			while ((newlinePosition = pendingOutput. find ('\n')) != std::string::npos) {
+				std::string line = pendingOutput. substr (0, newlinePosition);
+				pendingOutput. erase (0, newlinePosition + 1);
+				if (! line. empty () && line. back () == '\r')
+					line. pop_back ();
+				handlePythonOutputLine (line, outputAccum, progressWasShown);
+			}
 		}
+		if (! pendingOutput. empty ())
+			handlePythonOutputLine (pendingOutput, outputAccum, progressWasShown);
+		if (progressWasShown)
+			Melder_progress (1.0);
 
 		WaitForSingleObject (pi.hProcess, INFINITE);
 		DWORD exitCode = 0;
@@ -833,6 +883,7 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 		std::string cmd = "'" + escapedPyExec + "' '" + escapedFilePath + "' 2>&1";
 
 		std::string outputAccum;
+		bool progressWasShown = false;
 		FILE *pipe = popen (cmd.c_str(), "r");
 
 		// Restore environment variables
@@ -850,8 +901,15 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 		}
 		char buffer [4096];
 		while (fgets (buffer, sizeof (buffer), pipe) != nullptr) {
-			outputAccum.append (buffer);
+			std::string line (buffer);
+			if (! line. empty () && line. back () == '\n')
+				line. pop_back ();
+			if (! line. empty () && line. back () == '\r')
+				line. pop_back ();
+			handlePythonOutputLine (line, outputAccum, progressWasShown);
 		}
+		if (progressWasShown)
+			Melder_progress (1.0);
 		int status = pclose (pipe);
 		int exitCode = WIFEXITED (status) ? WEXITSTATUS (status) : -1;
 

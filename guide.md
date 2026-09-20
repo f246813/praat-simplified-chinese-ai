@@ -342,3 +342,26 @@ git diff -- guide.md
 - 不要提交 `Praat.exe`、zip 包、`.o`、`debug_translations.txt`、`translation_candidates.txt` 等忽略产物。
 - 如果修改了生成后的 `sys/praat_translate.cpp`，确认 `tools/generate_translation_map.py` 中的源映射也同步了。
 - 如果修改了手册源码，优先审查链接语法和页面标题，不要让中文显示文本变成链接目标。
+
+## 8. 本地 AI 纠音前端
+
+AI 纠音实验代码位于 `ai/`：
+
+- `ai/README.zh-CN.md`：使用说明。
+- `ai/praat_ai/`：Praat 桥接、Qwen 客户端、声学分析、DTW、报告和显存档位。
+- `ai/run_ai_tutor.py`：在 Praat Python 编辑器中运行的入口。
+- `docs/ai-frontend/DESIGN.zh-CN.md`：总体架构和分阶段方案。
+
+重要边界：
+
+- Qwen3.5-0.8B 是视觉语言模型，不是音频模型。
+- Qwen 只能解析请求、选择受限工具和解释已有结果，不能直接计算发音分数。
+- 音素对齐采用 MFA 主对齐、wav2vec2/CTC 交叉验证、比例分段兜底；特征比较和错误区间由 Praat/Parselmouth/NumPy 的确定性流水线完成。
+- 配置入口是 `ai/ai_config.json` 的 `alignment` 节点；缺少模型时自动回退并记录警告。
+- AI 前端必须复用 `praat.get_selected()`、`praat.call()` 和 `praat.get_output_dir()`，不要绕过桥接直接修改 Praat 内存对象。
+- 修改 Python 代码后运行：
+
+  ```powershell
+  $env:PYTHONPATH = 'ai'
+  python -m unittest discover -s ai/tests -v
+  ```

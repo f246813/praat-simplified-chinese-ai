@@ -21,6 +21,11 @@
 #include "EditorM.h"
 #include "GuiP.h"
 #include "FunctionArea.h"
+#include "PraatAiControl.h"
+#if motif
+	#include <commctrl.h>
+#endif
+#include <string>
 
 Thing_implement_pureVirtual (FunctionEditor, Editor, 0);
 
@@ -44,6 +49,182 @@ namespace {
 	constexpr integer THE_MAXIMUM_GROUP_SIZE = 100;
 	integer theGroupSize = 0;
 	FunctionEditor theGroupMembers [1 + THE_MAXIMUM_GROUP_SIZE];
+
+	#if motif
+	constexpr UINT_PTR AI_TOOLBAR_PARENT_SUBCLASS_ID = 0x0A17;
+
+	LRESULT CALLBACK aiToolbarParentSubclassProc (
+		HWND window,
+		UINT message,
+		WPARAM wParam,
+		LPARAM lParam,
+		UINT_PTR /* subclassId */,
+		DWORD_PTR refData
+	) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (refData);
+		if (
+			message == WM_CTLCOLORSTATIC &&
+			me &&
+			me -> aiVramIsLow &&
+			me -> aiVramStatusLabel &&
+			reinterpret_cast <HWND> (lParam) == me -> aiVramStatusLabel -> d_widget -> window
+		) {
+			SetTextColor (reinterpret_cast <HDC> (wParam), RGB (220, 0, 0));
+			SetBkMode (reinterpret_cast <HDC> (wParam), TRANSPARENT);
+			return reinterpret_cast <LRESULT> (GetSysColorBrush (COLOR_WINDOW));
+		}
+		return DefSubclassProc (window, message, wParam, lParam);
+	}
+
+	void updateAiToolbarLabels (FunctionEditor me) {
+		if (! me -> aiFrontendStatusLabel || ! me -> aiVramStatusLabel)
+			return;
+		autoMelderString frontendLine;
+		MelderString_append (
+			& frontendLine,
+			praat_translate (U"Frontend: "),
+			PraatAiControl_getFrontendModel(),
+			U" [",
+			praat_translate (
+				str32equ (PraatAiControl_getFrontendStatus(), U"running") ?
+					U"running" :
+					U"stopped"
+			),
+			U"]"
+		);
+		GuiLabel_setText (me -> aiFrontendStatusLabel, frontendLine. string);
+
+		bool vramIsLow = false;
+		conststring32 vramText = PraatAiControl_getVramText (& vramIsLow);
+		me -> aiVramIsLow = vramIsLow;
+		GuiLabel_setText (me -> aiVramStatusLabel, vramText);
+		InvalidateRect (me -> aiVramStatusLabel -> d_widget -> window, nullptr, TRUE);
+	}
+	#else
+	void updateAiToolbarLabels (FunctionEditor /* me */) { }
+	#endif
+
+	void updateAiToolbarStatus (FunctionEditor me) {
+		PraatAiControl_refreshStatus();
+		updateAiToolbarLabels (me);
+	}
+
+	void gui_radiobutton_cb_aiAlignment (FunctionEditor me, GuiRadioButtonEvent event) {
+		const char32 *mode = U"auto";
+		if (event -> toggle == me -> aiMfaAlignmentButton)
+			mode = U"mfa";
+		else if (event -> toggle == me -> aiWav2vec2AlignmentButton)
+			mode = U"wav2vec2";
+		PraatAiControl_setAlignmentMode (mode);
+		updateAiToolbarLabels (me);
+	}
+
+	void gui_button_cb_aiStart (FunctionEditor me, GuiButtonEvent /* event */) {
+		try {
+			PraatAiControl_startFrontend();
+			updateAiToolbarLabels (me);
+		} catch (MelderError) {
+			Melder_flushError ();
+		}
+	}
+
+	void gui_button_cb_aiStop (FunctionEditor me, GuiButtonEvent /* event */) {
+		try {
+			PraatAiControl_stopFrontend();
+			updateAiToolbarLabels (me);
+		} catch (MelderError) {
+			Melder_flushError ();
+		}
+	}
+
+	void gui_button_cb_aiRun (FunctionEditor me, GuiButtonEvent /* event */) {
+		try {
+			PraatAiControl_runAnalysis ();
+			PraatAiControl_refreshStatus();
+			updateAiToolbarLabels (me);
+		} catch (MelderError) {
+			Melder_flushError ();
+		}
+	}
+
+	#if motif
+	void aiStatusTimerCallback (XtPointer closure, XtIntervalId * /* id */) {
+		FunctionEditor me = static_cast <FunctionEditor> (closure);
+		if (! me || ! me -> aiVramStatusLabel)
+			return;
+		PraatAiControl_refreshStatus();
+		updateAiToolbarLabels (me);
+		me -> aiStatusTimer = XtAddTimeOut (2000, aiStatusTimerCallback, me);
+	}
+	#endif
+
+	void createAiToolbar (FunctionEditor me, int top, int bottom) {
+		GuiRadioGroup_begin ();
+		me -> aiAutoAlignmentButton = GuiRadioButton_createShown (
+			me -> windowForm, 8, 90, top, bottom,
+			U"自动", gui_radiobutton_cb_aiAlignment, me,
+			str32equ (PraatAiControl_getAlignmentMode(), U"auto") ? GuiRadioButton_SET : 0
+		);
+		me -> aiMfaAlignmentButton = GuiRadioButton_createShown (
+			me -> windowForm, 94, 152, top, bottom,
+			U"MFA", gui_radiobutton_cb_aiAlignment, me,
+			str32equ (PraatAiControl_getAlignmentMode(), U"mfa") ? GuiRadioButton_SET : 0
+		);
+		me -> aiWav2vec2AlignmentButton = GuiRadioButton_createShown (
+			me -> windowForm, 156, 250, top, bottom,
+			U"wav2vec2", gui_radiobutton_cb_aiAlignment, me,
+			str32equ (PraatAiControl_getAlignmentMode(), U"wav2vec2") ? GuiRadioButton_SET : 0
+		);
+		GuiRadioGroup_end ();
+		me -> aiStartButton = GuiButton_createShown (
+			me -> windowForm, 262, 338, top, bottom,
+			U"Start frontend", gui_button_cb_aiStart, me, 0
+		);
+		me -> aiStopButton = GuiButton_createShown (
+			me -> windowForm, 342, 414, top, bottom,
+			U"Stop frontend", gui_button_cb_aiStop, me, 0
+		);
+		me -> aiRunButton = GuiButton_createShown (
+			me -> windowForm, 418, 510, top, bottom,
+			U"Run AI tutor", gui_button_cb_aiRun, me, 0
+		);
+		const int middle = (top + bottom) / 2;
+		me -> aiFrontendStatusLabel = GuiLabel_createShown (
+			me -> windowForm, -350, -8, top, middle,
+			U"", GuiLabel_RIGHT
+		);
+		me -> aiVramStatusLabel = GuiLabel_createShown (
+			me -> windowForm, -350, -8, middle, bottom,
+			U"", GuiLabel_RIGHT
+		);
+		#if motif
+			SetWindowSubclass (
+				me -> windowForm -> d_widget -> window,
+				aiToolbarParentSubclassProc,
+				AI_TOOLBAR_PARENT_SUBCLASS_ID,
+				reinterpret_cast <DWORD_PTR> (me)
+			);
+		#endif
+		updateAiToolbarStatus (me);
+		#if motif
+			me -> aiStatusTimer = XtAddTimeOut (2000, aiStatusTimerCallback, me);
+		#endif
+	}
+
+	void destroyAiToolbar (FunctionEditor me) {
+		#if motif
+			if (me -> windowForm && me -> windowForm -> d_widget)
+				RemoveWindowSubclass (
+					me -> windowForm -> d_widget -> window,
+					aiToolbarParentSubclassProc,
+					AI_TOOLBAR_PARENT_SUBCLASS_ID
+				);
+			if (me -> aiStatusTimer) {
+				XtRemoveTimeOut (me -> aiStatusTimer);
+				me -> aiStatusTimer = 0;
+			}
+		#endif
+	}
 }
 
 static bool group_equalDomain (double tmin, double tmax) {
@@ -375,6 +556,7 @@ static void drawBackgroundAndData (FunctionEditor me) {
 /********** METHODS **********/
 
 void structFunctionEditor :: v9_destroy () noexcept {
+	destroyAiToolbar (this);
 	MelderAudio_stopPlaying (MelderAudio_IMPLICIT);
 	if (our group) {   // undangle
 		integer i = 1;
@@ -1484,6 +1666,9 @@ static void gui_drawingarea_cb_mouse (FunctionEditor me, GuiDrawingArea_MouseEve
 
 void structFunctionEditor :: v_createChildren () {
 	int x = BUTTON_X;
+	const int aiToolbarTop = Machine_getMenuBarBottom ();
+	const int aiToolbarHeight = our v_hasAiToolbar() ? 30 : 0;
+	const int contentTop = aiToolbarTop + aiToolbarHeight;
 
 	/*
 		Create zoom buttons.
@@ -1522,8 +1707,8 @@ void structFunctionEditor :: v_createChildren () {
 	*/
 	if (our v_hasText ()) {
 		our textArea = GuiText_createShown (our windowForm, 0, 0,
-			Machine_getMenuBarBottom (),
-			Machine_getMenuBarBottom () + TEXT_HEIGHT,
+			contentTop,
+			contentTop + TEXT_HEIGHT,
 			GuiText_INKWRAP | GuiText_SCROLLED
 		);
 		#if gtk
@@ -1546,11 +1731,21 @@ void structFunctionEditor :: v_createChildren () {
 	#endif
 	our drawingArea = GuiDrawingArea_createShown (our windowForm,
 		0, 0,
-		Machine_getMenuBarBottom () + ( our v_hasText () ? TEXT_HEIGHT + marginBetweenTextAndDrawingAreaToEnsureCorrectUnhighlighting : 0), -8 - Gui_PUSHBUTTON_HEIGHT,
+		contentTop + ( our v_hasText () ? TEXT_HEIGHT + marginBetweenTextAndDrawingAreaToEnsureCorrectUnhighlighting : 0), -8 - Gui_PUSHBUTTON_HEIGHT,
 		gui_drawingarea_cb_expose, gui_drawingarea_cb_mouse,
 		nullptr, gui_drawingarea_cb_resize, gui_drawingarea_cb_zoom, this, 0
 	);
 	GuiDrawingArea_setSwipable (our drawingArea, our scrollBar, nullptr);
+
+	/*
+		Create the optional AI toolbar after the main drawing area.
+		The Windows Motif emulation relies on the main drawing area being
+		the form's active drawing target during editor initialization.
+	*/
+	if (our v_hasAiToolbar()) {
+		createAiToolbar (this, aiToolbarTop, contentTop);
+		our windowForm -> drawingArea = our drawingArea;
+	}
 }
 
 void structFunctionEditor :: v1_dataChanged (Editor sender) {

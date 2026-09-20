@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+from .alignment import dtw_align, mean_and_stddev
+from .audio import extract_phone_tracks
+from .config import AlignmentConfig
+from .forced_alignment import build_aligner
+from .models import (
+    AnalysisRequest,
+    AnalysisResult,
+    FeatureTrack,
+    PhoneFeatureTracks,
+    PhoneSpec,
+    PronunciationError,
+)
+
+
+def infer_learner_segments(
+    phones: list[PhoneSpec],
+    learner_duration: float,
+) -> list[PhoneSpec]:
+    if not phones:
+        return []
+    reference_start = min(phone.reference_start for phone in phones)
+    reference_end = max(phone.reference_end for phone in phones)
+    reference_duration = max(reference_end - reference_start, 1e-9)
+    scale = learner_duration / reference_duration
+    result: list[PhoneSpec] = []
+    for phone in phones:
+        result.append(
+            PhoneSpec(
+                ipa=phone.ipa,
+                label=phone.label,
+                reference_start=phone.reference_start,
+                reference_end=phone.reference_end,
+                learner_start=max(
+                    0.0,
+                    (phone.reference_start - reference_start) * scale,
+                ),
+                learner_end=min(
+                    learner_duration,
+                    (phone.reference_end - reference_start) * scale,
+                ),
+            )
+        )
+    return result
+
+
+def _valid_track(track: FeatureTrack) -> bool:
+    if len(track.values) < 2:
+        return False
+    return any(abs(value) > 1e-9 for value in track.values)
+
+
+def _direction(delta: float, unit: str) -> str:
+    if abs(delta) <= 1e-9:
+        return "无明显偏差"
+    direction = "偏高" if delta > 0 else "偏低"
+    if unit == "amplitude":
+        direction = "偏强" if delta > 0 else "偏弱"
+    elif unit in {"ratio", "dB"}:
+        direction = "偏大" if delta > 0 else "偏小"
+    return direction
+
+
+def compare_phone(
+    request: AnalysisRequest,
+    reference: PhoneFeatureTracks,
+    learner: PhoneFeatureTracks,
+) -> list[PronunciationError]:
+    errors: list[PronunciationError] = []
+    for feature_name, reference_track in reference.tracks.items():
+        learner_track = learner.tracks.get(feature_name)
+        if learner_track is None or not _valid_track(reference_track):
+            continue
+        if not _valid_track(learner_track):
+            errors.append(
+                PronunciationError(
+                    phone_index=reference.phone_index,
+                    ipa=reference.ipa,
+                    start=learner.start,
+                    end=learner.end,
+                    feature=feature_name,
+                    score=max(2.0, request.error_threshold * 1.5),
+                    severity=1.0,
+                    direction="缺失或无法测量",
+                    message=f"{reference.ipa} 的 {feature_name} 无法可靠测量。",
+                reference_value=0.0,
+                learner_value=0.0,
+                unit=reference_track.unit,
+                alignment_confidence=learner.alignment_confidence,
+            )
+            )
+            continue
+
+        aligned_reference, aligned_learner, normalized_distance = dtw_align(
+            reference_track.values,
+            learner_track.values,
+        )
+        if not aligned_reference:
+            continue
+        reference_mean, reference_stddev = mean_and_stddev(aligned_reference)
+        learner_mean, _ = mean_and_stddev(aligned_learner)
+        delta = learner_mean - reference_mean
+        tolerance = max(reference_track.minimum_tolerance, reference_stddev)
+        score = abs(delta) / max(tolerance, 1e-9)
+        score = max(score, normalized_distance / max(tolerance, 1e-9))
+        if score < request.error_threshold:
+            continue
+
+        severity = min(1.5, score / max(request.error_threshold, 1e-9))
+        direction = _direction(delta, reference_track.unit)
+        uncertainty = ""
+        if learner.alignment_confidence < 0.70:
+            uncertainty = (
+                f"（对齐置信度 {learner.alignment_confidence:.2f}，"
+                "建议复核该区间）"
+            )
+        errors.append(
+            PronunciationError(
+                phone_index=reference.phone_index,
+                ipa=reference.ipa,
+                start=learner.start,
+                end=learner.end,
+                feature=feature_name,
+                score=round(score, 4),
+                severity=round(severity, 4),
+                direction=direction,
+                message=(
+                    f"/{reference.ipa}/ 的 {feature_name} {direction}："
+                    f"参考 {reference_mean:.3f}{reference_track.unit}，"
+                    f"学习者 {learner_mean:.3f}{reference_track.unit}。"
+                    f"{uncertainty}"
+                ),
+                reference_value=round(reference_mean, 6),
+                learner_value=round(learner_mean, 6),
+                unit=reference_track.unit,
+                alignment_confidence=learner.alignment_confidence,
+            )
+        )
+
+    errors.sort(key=lambda item: (-item.severity, item.feature))
+    return errors[: request.maximum_errors_per_phone]
+
+
+def align_learner_phones(
+    learner_path: str,
+    phones: list[PhoneSpec],
+    language: str,
+    transcript: str,
+    config: AlignmentConfig | None,
+) -> tuple[list[PhoneSpec], str, float, list[str]]:
+    alignment_config = config or AlignmentConfig()
+    result = build_aligner(alignment_config).align(
+        learner_path,
+        phones,
+        language,
+        transcript,
+    )
+    aligned_by_index = {phone.phone_index: phone for phone in result.phones}
+    aligned_phones: list[PhoneSpec] = []
+    for index, phone in enumerate(phones, start=1):
+        aligned = aligned_by_index.get(index)
+        if aligned is None:
+            continue
+        aligned_phones.append(
+            PhoneSpec(
+                ipa=phone.ipa,
+                label=phone.label,
+                reference_start=phone.reference_start,
+                reference_end=phone.reference_end,
+                learner_start=aligned.start,
+                learner_end=aligned.end,
+                alignment_confidence=aligned.confidence,
+                alignment_source=aligned.source,
+            )
+        )
+    return (
+        aligned_phones,
+        result.source,
+        result.confidence,
+        list(result.warnings),
+    )
+
+
+def analyze_pronunciation(
+    request: AnalysisRequest,
+    alignment_config: AlignmentConfig | None = None,
+) -> AnalysisResult:
+    reference_path = str(request.reference_object)
+    learner_path = str(request.learner_object)
+
+    from .audio import read_wav
+
+    reference_sound = read_wav(reference_path)
+    learner_sound = read_wav(learner_path)
+    learner_phones, alignment_source, alignment_confidence, warnings = (
+        align_learner_phones(
+            learner_path,
+            request.phonemes,
+            request.language,
+            request.transcript,
+            alignment_config,
+        )
+    )
+
+    reference_tracks = extract_phone_tracks(
+        reference_path,
+        request.phonemes,
+        learner=False,
+    )
+    learner_tracks = extract_phone_tracks(
+        learner_path,
+        learner_phones,
+        learner=True,
+    )
+
+    learner_by_index = {item.phone_index: item for item in learner_tracks}
+    errors: list[PronunciationError] = []
+    for reference in reference_tracks:
+        learner = learner_by_index.get(reference.phone_index)
+        if learner is not None:
+            errors.extend(compare_phone(request, reference, learner))
+
+    return AnalysisResult(
+        language=request.language,
+        reference_name=reference_path,
+        learner_name=learner_path,
+        reference_path=reference_path,
+        learner_path=learner_path,
+        duration=learner_sound.duration,
+        errors=errors,
+        reference_phones=reference_tracks,
+        learner_phones=learner_tracks,
+        alignment_source=alignment_source,
+        alignment_confidence=alignment_confidence,
+        warnings=warnings,
+    )

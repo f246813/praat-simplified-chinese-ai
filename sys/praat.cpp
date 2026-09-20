@@ -44,6 +44,7 @@
 #include "NotebookEditor.h"
 #include "Strings_.h"
 #include "praat_python.h"
+#include "PraatAiControl.h"
 #include "../kar/UnicodeData.h"
 #include "InfoEditor.h"
 #include "praat_translate.h"
@@ -1199,6 +1200,7 @@ static void installPraatShellPreferences () {
 	structTextEditor :: f_preferences ();   // font size...
 	Preferences_addInt (U"Praat.languageChoice", & g_language_choice, 1);
 	praat_python_initPreferences ();
+	PraatAiControl_initPreferences ();
 }
 
 extern "C" void praatlib_init () {
