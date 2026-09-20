@@ -34,6 +34,18 @@ HALF_SILENT = (
 )
 
 ONE_SOUND = "id\tclass\tname\tselected\n1\tSound\tSound tone\t1\n"
+TEXTGRID = 'Create TextGrid: 0, 1, "words", ""'
+# 已经标好一个区间、并且 0.5 秒处已经有边界，用来验证重复插入会被跳过。
+TEXTGRID_ANNOTATED = "\n".join(
+    [
+        TEXTGRID,
+        "selectObject: 1",
+        "Insert boundary: 1, 0.2",
+        "Insert boundary: 1, 0.5",
+        'Set interval text: 1, 2, "a"',
+    ]
+)
+ONE_TEXTGRID = "id\tclass\tname\tselected\n1\tTextGrid\tTextGrid grid\t1\n"
 TWO_SOUNDS = (
     "id\tclass\tname\tselected\n"
     "1\tSound\tSound tone\t1\n"
@@ -86,6 +98,29 @@ CASES: tuple[Case, ...] = (
     ),
     Case("harmonicity_statistics", {}, SOUND, ONE_SOUND, "谐噪比 HNR"),
     Case("spectrogram", {}, SOUND, ONE_SOUND, "已生成频谱图"),
+    Case("textgrid_info", {}, TEXTGRID_ANNOTATED, ONE_TEXTGRID, "标签「a」"),
+    Case(
+        "textgrid_set_interval",
+        {"start": 0.3, "end": 0.7, "label": "b"},
+        TEXTGRID,
+        ONE_TEXTGRID,
+        "标成「b」",
+    ),
+    Case(
+        "textgrid_insert_boundary",
+        {"time": 0.6},
+        TEXTGRID,
+        ONE_TEXTGRID,
+        "插入边界",
+    ),
+    Case(
+        "textgrid-insert-existing-boundary",
+        {"time": 0.5},
+        TEXTGRID_ANNOTATED,
+        ONE_TEXTGRID,
+        "已经有边界",
+        tool="textgrid_insert_boundary",
+    ),
     Case("select_object", {}, SOUND, ONE_SOUND, "已选中"),
     Case("rename_object", {"new_name": "改名测试"}, SOUND, ONE_SOUND, "已重命名"),
     Case("create_sound", {"duration": 0.5, "frequency": 220}, SOUND, ONE_SOUND, "已创建"),

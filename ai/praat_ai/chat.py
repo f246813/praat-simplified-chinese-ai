@@ -318,6 +318,40 @@ def refresh_object_context(executable: str) -> tuple[bool, str]:
     return False, output or "Praat 没有响应，无法刷新对象列表。"
 
 
+def resolve_preset_id(presets: list[dict], label: str) -> str:
+    """把下拉框里的显示文本换回预设 id（标签带模型名和「视觉/纯文本」后缀）。
+
+    下拉框的值是给人看的文本，切换之后列表会重建，所以不能只按完全相等查，
+    还要能按 id、模型文件名和标签前缀兜底。
+    """
+
+    text = (label or "").strip()
+    if not text:
+        return ""
+    for preset in presets:
+        if text == preset_label_text(preset):
+            return preset["id"]
+    for preset in presets:
+        if text in {preset["id"], preset["model"]}:
+            return preset["id"]
+    for preset in presets:
+        if text.startswith(preset["label"] or preset["model"]):
+            return preset["id"]
+    return ""
+
+
+def preset_label_text(preset: dict) -> str:
+    """下拉框里那一行文字（不含「当前」，切换后不会变）。"""
+
+    parts = [preset["label"] or preset["model"]]
+    if preset["model"]:
+        parts.append(preset["model"])
+    parts.append("视觉" if preset["vision"] else "纯文本")
+    if not preset["available"]:
+        parts.append("文件缺失")
+    return " · ".join(item for item in parts if item)
+
+
 class ChatWindow:
     def __init__(self) -> None:
         self.root = tk.Tk()
@@ -501,15 +535,9 @@ class ChatWindow:
     # ------------------------------------------------------------ 模型预设
 
     def preset_label_for(self, preset: dict) -> str:
-        parts = [preset["label"] or preset["model"]]
-        if preset["model"]:
-            parts.append(preset["model"])
-        parts.append("视觉" if preset["vision"] else "纯文本")
-        if not preset["available"]:
-            parts.append("文件缺失")
-        if preset["active"]:
-            parts.append("当前")
-        return " · ".join(item for item in parts if item)
+        # 标签里不要写「当前」：切换后标签会变，下拉框里的旧值就对不上了。
+        # 当前预设显示在下拉框下面的提示行里。
+        return preset_label_text(preset)
 
     def preset_hint_text(self) -> str:
         if not self.presets:
@@ -520,7 +548,7 @@ class ChatWindow:
         current = next((preset for preset in self.presets if preset["active"]), None)
         if current is None:
             return "当前模型不在预设列表里；选中一个预设并点「应用预设」即可切换。"
-        bits = [f"{current['label']}：{current['model']}"]
+        bits = [f"{current['label']}：{current['model']}", "当前预设"]
         if current["mmproj"]:
             bits.append(f"投影文件 {current['mmproj']}")
         if current["context_tokens"]:
@@ -549,8 +577,9 @@ class ChatWindow:
     def apply_selected_preset(self, _event: object = None) -> None:
         if self.busy:
             return
-        preset_id = self.preset_ids.get(self.preset_choice.get(), "")
+        preset_id = resolve_preset_id(self.presets, self.preset_choice.get())
         if not preset_id:
+            self.append_hint("预设列表已经变化，请重新选择一个预设再点「应用预设」。")
             return
         self.busy = True
         self.send_button.configure(state="disabled")

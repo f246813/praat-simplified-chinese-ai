@@ -28,6 +28,52 @@ class SelectedObjectHintTests(unittest.TestCase):
         self.assertIn("没有选中", _selected_object_hint(""))
 
 
+class PresetLabelTests(unittest.TestCase):
+    """下拉框的值是文本，切换后列表会重建，所以要能稳定换回预设 id。"""
+
+    def setUp(self) -> None:
+        self.presets = [
+            {
+                "id": "big",
+                "label": "Qwen3.5-2B（视觉）",
+                "model": "Qwen3.5-2B-UD-Q5_K_XL.gguf",
+                "vision": True,
+                "available": True,
+                "active": True,
+            },
+            {
+                "id": "small",
+                "label": "Qwen3.5-0.8B（快速）",
+                "model": "Qwen3.5-0.8B-Q4_K_M.gguf",
+                "vision": False,
+                "available": False,
+                "active": False,
+            },
+        ]
+
+    def test_full_label_resolves(self) -> None:
+        label = chat.preset_label_text(self.presets[0])
+        self.assertNotIn("当前", label)
+        self.assertEqual(chat.resolve_preset_id(self.presets, label), "big")
+        self.assertEqual(
+            chat.resolve_preset_id(self.presets, chat.preset_label_text(self.presets[1])),
+            "small",
+        )
+
+    def test_id_model_and_prefix_also_resolve(self) -> None:
+        self.assertEqual(chat.resolve_preset_id(self.presets, "small"), "small")
+        self.assertEqual(
+            chat.resolve_preset_id(self.presets, "Qwen3.5-2B-UD-Q5_K_XL.gguf"), "big"
+        )
+        self.assertEqual(chat.resolve_preset_id(self.presets, "Qwen3.5-2B（视觉）"), "big")
+        self.assertEqual(chat.resolve_preset_id(self.presets, ""), "")
+        self.assertEqual(chat.resolve_preset_id(self.presets, "别的模型"), "")
+
+    def test_missing_file_is_shown_in_the_label(self) -> None:
+        self.assertIn("文件缺失", chat.preset_label_text(self.presets[1]))
+        self.assertIn("纯文本", chat.preset_label_text(self.presets[1]))
+
+
 class PraatProcessTests(unittest.TestCase):
     def test_multiple_instances_produce_a_warning(self) -> None:
         completed = CompletedProcess(

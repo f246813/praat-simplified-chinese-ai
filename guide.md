@@ -479,6 +479,13 @@ AI 纠音实验代码位于 `ai/`：
   （`Cannot edit a Sound from batch`），只能在 GUI 里验证。
 - **字符串结果可以现场拼**：`bwText$ = "，带宽 " + fixed$ (bw, 3) + " Hz"` 有效，
   所以「频率和带宽」能在一次查询里输出一行；带宽是 `undefined` 时把它置空即可。
+- **TextGrid 操作**：`Insert boundary` 在已有边界的位置（包括起止点）会直接报错，
+  所以 `tools._insert_boundary_block()` 先遍历 `Get start time of interval` 自查；
+  `Is interval tier` 这类查询命令**不能直接写在 `if` 条件里**（会报
+  `Unknown symbol «Is» in formula`），必须先赋值再判断。
+- **按类型兜底**：模型有时把 `object` 填成当前选中的 Sound，而用户问的是
+  「这个 TextGrid」。`ToolContext.resolve_by_class()` 在类型不匹配、且列表里只有
+  一个合格对象时直接用它，多个候选才报错。
 - 回归用例：`ai/tests/test_chat_tools.py`、`ai/tests/test_chat_window.py`；
   真机链路用 `python ai/tests/verify_chat_live.py`（临时开一个 Praat，
   验证建对象、改名后对象列表会刷新、基频查询和截取片段）。

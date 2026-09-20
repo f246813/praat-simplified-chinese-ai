@@ -19,6 +19,8 @@ MIXED_CONTEXT = (
     "4\tTable\tTable words\t0\n"
 )
 
+GRID_CONTEXT = "id\tclass\tname\tselected\n1\tTextGrid\tTextGrid grid\t1\n"
+
 
 class ObjectContextTests(unittest.TestCase):
     def test_context_is_parsed(self) -> None:
@@ -96,6 +98,7 @@ class ScriptRenderingTests(unittest.TestCase):
                 "id\tclass\tname\tselected\n"
                 "1\tSound\tSound tone\t1\n"
                 "2\tSound\ttone2\t0\n"
+                "3\tTextGrid\tTextGrid grid\t0\n"
             ),
             base / "chat_result.tsv",
             base / "chat_state.txt",
@@ -105,6 +108,14 @@ class ScriptRenderingTests(unittest.TestCase):
             "extract_part": {"start": 0.1, "end": 0.4},
             "save_sound": {"path": str(base / "ai-chat.wav")},
             "concatenate_sounds": {"object": 1, "object2": 2},
+            "textgrid_info": {"object": 3},
+            "textgrid_set_interval": {
+                "object": 3,
+                "start": 0.1,
+                "end": 0.2,
+                "label": "a",
+            },
+            "textgrid_insert_boundary": {"object": 3, "time": 0.5},
         }
         for tool in tools.TOOLS:
             arguments: dict[str, object] = dict(extra.get(tool.name, {}))
@@ -448,6 +459,111 @@ class NewToolTests(unittest.TestCase):
         script = tools.render("pitch_statistics", {}, self.context)
         self.assertIn('Get time of maximum: tmin, tmax, "Hertz", "Parabolic"', script)
         self.assertIn("最高点出现在", script)
+
+
+class TextGridToolTests(unittest.TestCase):
+    """TextGrid 的查看与标注（真机命令在 verify_chat_templates.py 里跑过）。"""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        base = Path(self.directory.name)
+        self.context = tools.ToolContext(
+            tools.parse_object_context(GRID_CONTEXT),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_info_lists_tiers_and_intervals(self) -> None:
+        script = tools.render("textgrid_info", {}, self.context)
+        self.assertIn("Get number of tiers", script)
+        # if 条件里不能直接调用命令，必须先赋值。
+        self.assertIn("isInterval = Is interval tier: tier", script)
+        self.assertIn("if isInterval = 1", script)
+        self.assertIn("Get label of interval: tier, part", script)
+        self.assertIn("Get number of points: tier", script)
+        self.assertIn("Get label of point: tier, part", script)
+
+    def test_info_limits_the_listing(self) -> None:
+        script = tools.render("textgrid_info", {"maximum_intervals": 5}, self.context)
+        self.assertIn("if shown < 5", script)
+        self.assertIn("未列出", script)
+
+    def test_set_interval_inserts_boundaries_and_writes_label(self) -> None:
+        script = tools.render(
+            "textgrid_set_interval",
+            {"start": 0.2, "end": 0.5, "label": "a"},
+            self.context,
+        )
+        self.assertIn("t1 = 0.200000", script)
+        self.assertIn("t2 = 0.500000", script)
+        self.assertIn("Insert boundary: 1, t1", script)
+        self.assertIn("Insert boundary: 1, t2", script)
+        self.assertIn('Set interval text: 1, part, "a"', script)
+        # 已经有边界时不能再插入，否则 Praat 会直接报错。
+        self.assertIn("needBoundary1 = 1", script)
+        self.assertIn("needBoundary2 = 1", script)
+        self.assertIn("boundaryTime", script)
+        self.assertIn("tier = 1", script)
+
+    def test_set_interval_requires_label_and_range(self) -> None:
+        with self.assertRaises(tools.ToolError):
+            tools.render("textgrid_set_interval", {"start": 0.2, "end": 0.5}, self.context)
+        with self.assertRaises(tools.ToolError):
+            tools.render("textgrid_set_interval", {"label": "a"}, self.context)
+        with self.assertRaises(tools.ToolError):
+            tools.render(
+                "textgrid_set_interval",
+                {"start": 0.5, "end": 0.2, "label": "a"},
+                self.context,
+            )
+
+    def test_insert_boundary_reports_existing_boundary(self) -> None:
+        script = tools.render("textgrid_insert_boundary", {"time": 0.5}, self.context)
+        self.assertIn("Insert boundary: 1, t1", script)
+        self.assertIn("已经有边界", script)
+        with self.assertRaises(tools.ToolError):
+            tools.render("textgrid_insert_boundary", {}, self.context)
+
+    def test_textgrid_tools_reject_other_objects(self) -> None:
+        sound_context = tools.ToolContext(
+            tools.parse_object_context(MIXED_CONTEXT),
+            self.context.result_path,
+            self.context.state_path,
+        )
+        for name, arguments in (
+            ("textgrid_info", {"object": 1}),
+            ("textgrid_set_interval", {"object": 1, "start": 0.1, "end": 0.2, "label": "a"}),
+            ("textgrid_insert_boundary", {"object": 1, "time": 0.5}),
+        ):
+            # 这个上下文里有两个 Sound、一个 TextGrid：模型把 object 填成 Sound 时
+            # 应该自动改用那个唯一的 TextGrid，而不是报错。
+            script = tools.render(name, arguments, sound_context)
+            self.assertIn("selectObject: 3", script, name)
+
+    def test_class_fallback_needs_a_unique_candidate(self) -> None:
+        two_grids = tools.ToolContext(
+            tools.parse_object_context(
+                "id\tclass\tname\tselected\n"
+                "1\tSound\tSound tone\t1\n"
+                "2\tTextGrid\tTextGrid a\t0\n"
+                "3\tTextGrid\tTextGrid b\t0\n"
+            ),
+            self.context.result_path,
+            self.context.state_path,
+        )
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("textgrid_info", {"object": 1}, two_grids)
+        self.assertIn("TextGrid", str(caught.exception))
+
+    def test_tier_number_is_validated(self) -> None:
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("textgrid_insert_boundary", {"time": 0.5, "tier": 0}, self.context)
+        self.assertIn("层号", str(caught.exception))
+        with self.assertRaises(tools.ToolError):
+            tools.render("textgrid_set_interval", {"tier": "第一层"}, self.context)
 
 
 class PythonScriptRejectionTests(unittest.TestCase):

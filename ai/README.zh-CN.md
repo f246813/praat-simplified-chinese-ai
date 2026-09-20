@@ -163,10 +163,14 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 | 声学查询 | `formant_frequency`（同时给带宽，可一次查 1,2…）、`formant_bandwidth`、`formant_statistics`、`pitch`、`pitch_statistics`、`intensity`、`intensity_statistics`、`harmonicity_statistics`（HNR） |
 | 编辑 | `select_object`、`rename_object`、`duplicate_object`、`remove_object`、`resample_sound` |
 | 生成与导出 | `create_sound`（纯音/静音）、`extract_part`、`concatenate_sounds`、`spectrogram`、`save_sound`（WAV，缺目录会先建好） |
+| TextGrid | `textgrid_info`（层、区间、标签）、`textgrid_set_interval`（标注时间段，自动补边界）、`textgrid_insert_boundary` |
 | 交互 | `view_edit`、`play` |
 
 一次问多个时刻也支持：`time` 可以写 `0.25,0.75`，「查询 0.25 秒和 0.75 秒的基频」
 会一次返回两行结果；`formant` 同样可以写 `1,2`。
+
+只对某类对象有效的工具（TextGrid 标注、播放/另存/重采样等）在模型指错对象类型时，
+会退回到列表里唯一的合格对象，并把实际用到的对象名写进结果，不会直接报错。
 
 模板覆盖不到的请求会退回 `custom_script`，此时脚本必须通过安全检查：单引号自动改成
 双引号、禁止 `runSystem`、`deleteFile`、`exit` 等命令，并且**必须是 Praat 脚本**——

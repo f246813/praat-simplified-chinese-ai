@@ -173,6 +173,27 @@ class ToolContext:
                 f"{description}（对象 {row.id} 是 {row.class_name}）。"
             )
 
+    def resolve_by_class(
+        self,
+        requested: Any,
+        classes: frozenset[str],
+        description: str,
+    ) -> ObjectRow:
+        """按对象类取对象：点错了类型而列表里只有一个候选时，直接用那个候选。
+
+        用户说「这个 TextGrid」时，模型有时候会把当前选中的 Sound 填进 ``object``。
+        这类工具本来就只对该类型的对象有效，所以只要列表里恰有一个合格对象，
+        就用它，而不是把一句中文错误丢给用户。
+        """
+
+        row = self.resolve_object(requested)
+        if row.class_name in classes:
+            return row
+        candidates = [item for item in self.objects if item.class_name in classes]
+        if len(candidates) == 1:
+            return candidates[0]
+        raise ToolError(f"{description}（对象 {row.id} 是 {row.class_name}）。")
+
 
 def parse_object_context(text: str) -> tuple[ObjectRow, ...]:
     """Parse the ``id / class / name / selected`` TSV written by Praat."""
@@ -842,8 +863,9 @@ def _build_harmonicity_statistics(
 def _build_spectrogram(arguments: Mapping[str, Any], context: ToolContext) -> str:
     """从 Sound 生成频谱图对象（「做成频谱图」用这个）。"""
 
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, SOUND_CLASSES, "只有声音对象可以做频谱图")
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以做频谱图"
+    )
     window_length = _number(arguments, "window_length", 0.005, 0.0001, 1.0)
     maximum_frequency = _number(arguments, "max_frequency", 5000.0, 100.0, 96000.0)
     time_step = _number(arguments, "time_step", 0.002, 0.0001, 1.0)
@@ -874,6 +896,292 @@ def _build_spectrogram(arguments: Mapping[str, Any], context: ToolContext) -> st
     return _assemble(lines, context)
 
 
+def _textgrid_row(arguments: Mapping[str, Any], context: ToolContext) -> ObjectRow:
+    return context.resolve_by_class(
+        arguments.get("object"),
+        frozenset({"TextGrid"}),
+        "只有 TextGrid 对象可以做标注",
+    )
+
+
+def _tier_number(arguments: Mapping[str, Any]) -> int:
+    value = arguments.get("tier", arguments.get("tier_number", 1))
+    try:
+        return _integer({"value": value}, "value", 1, 1, 100)
+    except ToolError as error:
+        raise ToolError("层号必须是 1–100 的整数。") from error
+
+
+def _insert_boundary_block(
+    tier: int,
+    time_variable: str,
+    counter_variable: str,
+    suffix: str,
+) -> list[str]:
+    """在 ``time_variable`` 处插入边界，跳过端点和已经有边界的位置。
+
+    Praat 的 ``Insert boundary`` 遇到已存在的边界会直接报错，而 TextGrid 的起止点
+    本来就各有一个边界，所以插入前先自己找一遍已有边界。
+    """
+
+    flag = f"needBoundary{suffix}"
+    loop = f"boundaryIndex{suffix}"
+    return [
+        f"{flag} = 1",
+        f"if {time_variable} <= 0",
+        f"    {flag} = 0",
+        "endif",
+        f"if {time_variable} >= duration",
+        f"    {flag} = 0",
+        "endif",
+        f"nIntervals = Get number of intervals: {tier}",
+        f"for {loop} from 1 to nIntervals",
+        f"    boundaryTime = Get start time of interval: {tier}, {loop}",
+        f"    if abs (boundaryTime - {time_variable}) < 0.000001",
+        f"        {flag} = 0",
+        "    endif",
+        "endfor",
+        f"if {flag} = 1",
+        f"    Insert boundary: {tier}, {time_variable}",
+        f"    {counter_variable} = {counter_variable} + 1",
+        "endif",
+    ]
+
+
+def _build_textgrid_info(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    row = _textgrid_row(arguments, context)
+    maximum = _integer(arguments, "maximum_intervals", 12, 1, 100)
+    lines = [
+        f"selectObject: {row.id}",
+        "duration = Get total duration",
+        "tiers = Get number of tiers",
+        _write_result(
+            context,
+            [
+                quote(f"{row.name}：时长 "),
+                "fixed$ (duration, 3)",
+                quote(" 秒，共 "),
+                "fixed$ (tiers, 0)",
+                quote(" 层"),
+            ],
+        ),
+        "for tier from 1 to tiers",
+        "    tierName$ = Get tier name: tier",
+        # Praat 里不能在 if 条件里直接调用命令，必须先赋值再判断。
+        "    isInterval = Is interval tier: tier",
+        "    if isInterval = 1",
+        "        count = Get number of intervals: tier",
+        _write_result(
+            context,
+            [
+                quote("第 "),
+                "fixed$ (tier, 0)",
+                quote(" 层「"),
+                "tierName$",
+                quote("」（区间层）："),
+                "fixed$ (count, 0)",
+                quote(" 个区间"),
+            ],
+        ),
+        "        shown = 0",
+        "        for part from 1 to count",
+        f"            if shown < {maximum}",
+        "                startTime = Get start time of interval: tier, part",
+        "                endTime = Get end time of interval: tier, part",
+        "                label$ = Get label of interval: tier, part",
+        _write_result(
+            context,
+            [
+                quote("    区间 "),
+                "fixed$ (part, 0)",
+                quote("："),
+                "fixed$ (startTime, 3)",
+                quote("–"),
+                "fixed$ (endTime, 3)",
+                quote(" 秒，标签「"),
+                "label$",
+                quote("」"),
+            ],
+        ),
+        "                shown = shown + 1",
+        "            endif",
+        "        endfor",
+        f"        if count > {maximum}",
+        _write_result(
+            context,
+            [
+                quote("    ……还有 "),
+                "fixed$ (count - shown, 0)",
+                quote(" 个区间未列出（可用参数 maximum_intervals 调整）"),
+            ],
+        ),
+        "        endif",
+        "    else",
+        "        count = Get number of points: tier",
+        _write_result(
+            context,
+            [
+                quote("第 "),
+                "fixed$ (tier, 0)",
+                quote(" 层「"),
+                "tierName$",
+                quote("」（点层）："),
+                "fixed$ (count, 0)",
+                quote(" 个点"),
+            ],
+        ),
+        "        shown = 0",
+        "        for part from 1 to count",
+        f"            if shown < {maximum}",
+        "                pointTime = Get time of point: tier, part",
+        "                label$ = Get label of point: tier, part",
+        _write_result(
+            context,
+            [
+                quote("    点 "),
+                "fixed$ (part, 0)",
+                quote("："),
+                "fixed$ (pointTime, 3)",
+                quote(" 秒，标签「"),
+                "label$",
+                quote("」"),
+            ],
+        ),
+        "                shown = shown + 1",
+        "            endif",
+        "        endfor",
+        "    endif",
+        "endfor",
+    ]
+    return _assemble(lines, context)
+
+
+def _build_textgrid_set_interval(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+) -> str:
+    row = _textgrid_row(arguments, context)
+    tier = _tier_number(arguments)
+    start = _number(arguments, "start", 0.0, 0.0, 36000.0)
+    raw_end = arguments.get("end", arguments.get("finish", None))
+    if raw_end in (None, ""):
+        raise ToolError("标注区间需要 end 参数（结束时间，单位秒）。")
+    end = _number(arguments, "end", 0.0, 0.0, 36000.0)
+    if start >= end:
+        raise ToolError("开始时间必须小于结束时间。")
+    label = str(
+        arguments.get("label", "")
+        or arguments.get("text", "")
+        or ""
+    ).strip()
+    if not label:
+        raise ToolError("标注区间需要 label 参数（要写进 TextGrid 的文字）。")
+    lines = [
+        f"selectObject: {row.id}",
+        f"tier = {tier}",
+        "duration = Get total duration",
+        f"t1 = {start:.6f}",
+        f"t2 = {end:.6f}",
+        "if t1 < 0",
+        "    t1 = 0",
+        "endif",
+        "if t2 > duration",
+        "    t2 = duration",
+        "endif",
+        "inserted = 0",
+    ]
+    lines.extend(_insert_boundary_block(tier, "t1", "inserted", "1"))
+    lines.extend(_insert_boundary_block(tier, "t2", "inserted", "2"))
+    lines.extend(
+        [
+            "t2i = t2 - 0.000001",
+            "if t2i < t1",
+            "    t2i = t1",
+            "endif",
+            f"i1 = Get interval at time: {tier}, t1",
+            f"i2 = Get interval at time: {tier}, t2i",
+            "if i2 < i1",
+            "    i2 = i1",
+            "endif",
+            "count = i2 - i1 + 1",
+            "for part from i1 to i2",
+            f"    Set interval text: {tier}, part, {quote(label)}",
+            "endfor",
+            _write_result(
+                context,
+                [
+                    quote("已把第 "),
+                    "fixed$ (tier, 0)",
+                    quote(" 层的 "),
+                    "fixed$ (t1, 3)",
+                    quote("–"),
+                    "fixed$ (t2, 3)",
+                    quote(" 秒（"),
+                    "fixed$ (count, 0)",
+                    quote(" 个区间）标成「"),
+                    quote(label),
+                    quote("」"),
+                ],
+            ),
+        ]
+    )
+    return _assemble(lines, context)
+
+
+def _build_textgrid_insert_boundary(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+) -> str:
+    row = _textgrid_row(arguments, context)
+    tier = _tier_number(arguments)
+    value = arguments.get("time", arguments.get("at", None))
+    if value in (None, ""):
+        raise ToolError("插入边界需要 time 参数（时间，单位秒）。")
+    time_value = _number(arguments, "time", 0.0, 0.0, 36000.0)
+    lines = [
+        f"selectObject: {row.id}",
+        f"tier = {tier}",
+        "duration = Get total duration",
+        f"t1 = {time_value:.6f}",
+        "if t1 < 0",
+        "    t1 = 0",
+        "endif",
+        "if t1 > duration",
+        "    t1 = duration",
+        "endif",
+        "inserted = 0",
+    ]
+    lines.extend(_insert_boundary_block(tier, "t1", "inserted", "b"))
+    lines.extend(
+        [
+            "if inserted = 1",
+            _write_result(
+                context,
+                [
+                    quote("已在第 "),
+                    "fixed$ (tier, 0)",
+                    quote(" 层的 "),
+                    "fixed$ (t1, 3)",
+                    quote(" 秒处插入边界"),
+                ],
+            ),
+            "else",
+            _write_result(
+                context,
+                [
+                    quote("第 "),
+                    "fixed$ (tier, 0)",
+                    quote(" 层的 "),
+                    "fixed$ (t1, 3)",
+                    quote(" 秒处已经有边界（或在 TextGrid 起止点上），没有改动"),
+                ],
+            ),
+            "endif",
+        ]
+    )
+    return _assemble(lines, context)
+
+
 def _build_select(arguments: Mapping[str, Any], context: ToolContext) -> str:
     row = context.resolve_object(arguments.get("object"))
     lines = [
@@ -894,8 +1202,9 @@ def _build_view(arguments: Mapping[str, Any], context: ToolContext) -> str:
 
 
 def _build_play(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, SOUND_CLASSES, "只有声音对象可以直接播放")
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以直接播放"
+    )
     lines = [
         f"selectObject: {row.id}",
         "Play",
@@ -969,13 +1278,13 @@ def _build_create_sound(arguments: Mapping[str, Any], context: ToolContext) -> s
 
 
 def _build_concatenate(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    first = context.resolve_object(arguments.get("object"))
+    first = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以拼接"
+    )
     other = arguments.get("object2", arguments.get("other", None))
     if other in (None, ""):
         raise ToolError("拼接需要 object2 参数，指出第二个声音对象。")
-    second = context.resolve_object(other)
-    context.require_class(first, SOUND_CLASSES, "只有声音对象可以拼接")
-    context.require_class(second, SOUND_CLASSES, "只有声音对象可以拼接")
+    second = context.resolve_by_class(other, SOUND_CLASSES, "只有声音对象可以拼接")
     if first.id == second.id:
         raise ToolError("拼接需要两个不同的声音对象。")
     name = _new_name(arguments, "拼接结果")
@@ -1000,8 +1309,9 @@ def _build_concatenate(arguments: Mapping[str, Any], context: ToolContext) -> st
 
 
 def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, SOUND_CLASSES, "只有声音对象可以截取片段")
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以截取片段"
+    )
     start = _number(arguments, "start", 0.0, 0.0, 36000.0)
     raw_end = arguments.get("end", arguments.get("finish", None))
     if raw_end in (None, ""):
@@ -1047,8 +1357,9 @@ def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> s
 
 
 def _build_save_sound(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, SOUND_CLASSES, "只有声音对象可以保存为 WAV 文件")
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以保存为 WAV 文件"
+    )
     path = str(
         arguments.get("path", "") or arguments.get("file", "") or ""
     ).strip().strip('"')
@@ -1076,8 +1387,9 @@ def _build_save_sound(arguments: Mapping[str, Any], context: ToolContext) -> str
 
 
 def _build_resample(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, SOUND_CLASSES, "只有声音对象可以改变采样率")
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以改变采样率"
+    )
     rate = _integer(arguments, "rate", 16000, 1000, 768000)
     lines = [
         f"selectObject: {row.id}",
@@ -1187,6 +1499,24 @@ TOOLS: tuple[Tool, ...] = (
         summary="把 Sound 做成频谱图对象（不是图片，画图用 Praat 的绘制菜单）。",
         signature="window_length（默认 0.005 秒）、max_frequency（默认 5000 Hz）、time_step、frequency_step、name、object（可选）",
         build=_build_spectrogram,
+    ),
+    Tool(
+        name="textgrid_info",
+        summary="查看 TextGrid 的层数、每层名称、区间/点的数量和标签。要「这个 TextGrid 有几个区间/标了什么」时用这个。",
+        signature="maximum_intervals（每层最多列几个，默认 12）、object（可选）",
+        build=_build_textgrid_info,
+    ),
+    Tool(
+        name="textgrid_set_interval",
+        summary="给 TextGrid 的某一层在指定时间区间写上标签（需要时自动插入边界）。要「把 0.2–0.5 秒标成 a」时用这个。",
+        signature="start、end（秒）、label（写入的文字）、tier（层号，默认 1）、object（可选）",
+        build=_build_textgrid_set_interval,
+    ),
+    Tool(
+        name="textgrid_insert_boundary",
+        summary="在 TextGrid 某一层的指定时刻插入一个边界。",
+        signature="time（秒）、tier（层号，默认 1）、object（可选）",
+        build=_build_textgrid_insert_boundary,
     ),
     Tool(
         name="select_object",
