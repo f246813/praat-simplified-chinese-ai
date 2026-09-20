@@ -77,6 +77,29 @@ class PresetLabelTests(unittest.TestCase):
 
 
 class PraatProcessTests(unittest.TestCase):
+    def test_refresh_reuses_a_known_process_list(self) -> None:
+        """调用方已经查过进程列表时，刷新上下文不该再起一次 tasklist。"""
+
+        with patch.object(chat.subprocess, "run") as run, patch.object(
+            chat, "praat_process_running_from", return_value=True
+        ), patch.object(chat, "_send_script", return_value=(True, "")) as send:
+            chat.refresh_object_context("D:/Praat-work/Praat.exe", [1234])
+        run.assert_not_called()
+        send.assert_called_once()
+
+    def test_refresh_queries_once_without_a_known_list(self) -> None:
+        completed = CompletedProcess(
+            args=["tasklist"],
+            returncode=0,
+            stdout='"Praat.exe","1234","Console","1","98,304 K"\n',
+            stderr="",
+        )
+        with patch.object(chat.subprocess, "run", return_value=completed) as run, patch.object(
+            chat, "_send_script", return_value=(True, "")
+        ):
+            chat.refresh_object_context("D:/Praat-work/Praat.exe")
+        self.assertEqual(run.call_count, 1)
+
     def test_multiple_instances_produce_a_warning(self) -> None:
         completed = CompletedProcess(
             args=["tasklist"],
