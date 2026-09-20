@@ -9,5 +9,6 @@
 | [ADR-002](ADR-002-result-output-contract.md) | 结果怎么回到对话窗口：中文结果行 + 不静默丢输出 | Accepted |
 | [ADR-003](ADR-003-planning-interface.md) | 用原生 function calling 选工具，JSON 提示词只作兜底 | Accepted |
 | [ADR-004](ADR-004-agent-loop.md) | 一轮请求 = 规划 → 执行 → 回灌结果 → 再规划（有界） | Accepted |
+| [ADR-005](ADR-005-table-driven-measurements.md) | 声学测量表驱动（`measures.tsv`），一次生成工具/插件/用例 | Accepted |
 
 写新 ADR 时照 [template.md](template.md) 的结构写。

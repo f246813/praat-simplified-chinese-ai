@@ -551,6 +551,21 @@ AI 纠音实验代码位于 `ai/`：
   `pitch_peak_latency`、`peak_to_average_ratio`、`intensity_slope` 一共九条真机用例
   在 `ai/tests/verify_chat_templates.py` 里（正弦的峰值/有效值正好是 1.41=√2，
   可以拿它当数值对不对的快速判断）。
+- **测量参数是「表」驱动的**（2026-09-21，B1）：`ai/praat_ai/measures.tsv` 一张表
+  管着 41 个参数（`@@ settings` 分析设置、`@@ derivations` 从 Sound 生成中间对象、
+  `@@ queries` 一行一个参数、`@@ dedicated` 交给已有专用工具、`@@ editor_only`
+  只能在编辑器里查的）。**加一个参数 = 加一行**：工具 JSON Schema 的 enum、catalog
+  文字、`measure` 的脚本、插件脚本、真机用例全都是从这张表生成的。三条要记住：
+  ① 命令字面量直接进脚本，**不要学 chengafni 在 Praat 端把命令拼成字符串再
+  `'queryCommand$'` 动态求值**（Praat 6.0 时代可行，7.0 上很脆）；
+  ② `To Pitch` / `To Formant` 这类命令**会把新建的对象选中**，所以每建一个派生
+  对象之前都要重新 `selectObject:` 基础对象（实测第二段派生对象会做在中间对象上，
+  `measure-many` 用例守着这条）；
+  ③ 命令名和 FORM 标题不一致的有两个坑（都是实测）：`Get shimmer (local_dB)`
+  （FORM 标题写的是 `local, dB`，脚本里不认）、`Get CPPS (hillenbrand)`
+  （默认那条 `Get CPPS:` 有 12 个参数，不写全会报缺 `Tolerance`）。
+  真机用例：`verify_chat_templates.py` 里每个参数一条 + 一条「一次测全部」，
+  98/98；`ai/tests/test_measures.py` 守着表本身的一致性。
 - **Praat 可执行文件由 `praat_ai/praat_app.py` 找**：环境变量
   `PRAAT_AI_PRAAT_EXECUTABLE` → 仓库根目录 → `PATH` → 常见安装位置；找到和没找到
   都缓存，没找到 30 秒后重试一次。**每条请求只查一次** `tasklist`
@@ -753,3 +768,39 @@ AI 纠音实验代码位于 `ai/`：
 Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COMMAND` 触发
 「启动前端」的真实回调 → 检查进程还在、没有新转储、`praat_context.json` 完整、
 导出文件名不是乱码）。修这条 bug 之前，同一个流程必崩并留下转储。
+
+### 8.7 原生插件（B2）：不重编 Praat 也能加菜单
+
+`ai/plugin/praat_ai/` 是一个 **Praat 原生插件**（`plugin_praat_ai`）。Praat 启动时
+会扫 preferences 目录下的 `plugin_*/setup.praat`（`sys/praat.cpp` 的
+`Melder_preferencesFolder7()` 那段），所以把文件夹复制到
+`%APPDATA%\Praat\plugin_praat_ai\` 就能在菜单里多出：
+
+| 在哪 | 菜单 | 作用 |
+| --- | --- | --- |
+| 对象列表（选中 Sound） | 右侧动态菜单底部「AI 声学测量...」 | 对话框选参数（`all` 或 `mean_pitch` 等）+ 时间范围，结果写进 Table「AI 测量结果」 |
+| 声音 / TextGrid 编辑器 | `Analyses` →「AI 声学测量（圈选段）...」 | 对编辑器圈选的那一段测全部参数 |
+| 对象列表窗口 | `Praat` →「启动 AI 对话窗口」 | 启动 Python 前端 |
+
+约定和坑：
+
+- **脚本由表生成**：`praatAiMeasure.praat` 由 `ai/tools/build_plugin.py` 从
+  `ai/praat_ai/measures.tsv` 生成（和对话前端同源，所以两边数一致），改了表要
+  `python ai/tools/build_plugin.py` 重新生成；`--check` 在单测里守着这条。
+  `@@ dedicated`（H/L、谱强调、Hammarberg、峰值/有效值、强度斜率、基频峰值延迟）
+  是多步脚本，插件里不重复实现。
+- 装/卸：`powershell -ExecutionPolicy Bypass -File ai\plugin\install.ps1`，
+  卸载就是删掉 `%APPDATA%\Praat\plugin_praat_ai`。
+- `install.ps1` **必须保持纯 ASCII**：Windows PowerShell 用 ANSI 代码页读没有 BOM
+  的 .ps1，中文注释会让解析直接失败（实测 `Missing closing '}'`）。中文说明写在
+  `ai/plugin/README.zh-CN.md`。
+- **表单字段的标签就是变量名**（空格变下划线），而且默认值必须是**带引号的字符串**：
+  `real: "Start (s)", "0"` 对，`real: "Start (s)", 0` 会报
+  “Only choice, optionmenu and boolean fields can take a number”。批量模式
+  （`--run`）里表单不会自己用默认值，必须把参数按位置传给 `runScript`。
+- 编辑器那一条（`praatAiMeasureEditor.praat`）读圈选范围要靠 `editor ... endeditor`，
+  批量模式没有编辑器（Praat 直接报 `Cannot edit a Sound from batch`），所以它只能
+  在真机上手点验证；其余每条都有自动化用例。
+- 回归：`python ai/tests/verify_plugin.py`（4 条：菜单注册语法、33 个参数、
+  单参数带范围、无声段）+ `ai/tests/test_plugin_build.py`（生成物和表一致、
+  菜单指向的文件存在、表单字段数和 `runScript` 参数个数相等）。

@@ -199,6 +199,43 @@ Praat 插件，出处见各自说明）：
 | 「峰值和平均值比」 | 峰值幅度 ÷ 有效值（Hillenbrand et al. 1994） |
 | 「强度斜率」 | 强度曲线的平均斜率 dB/s（局部逐点，或者说「整体」看首尾） |
 
+这些只是「专用工具」。剩下的声学参数走**表驱动的 `measure` 工具**：参数表在
+`ai/praat_ai/measures.tsv`，**加一个参数 = 加一行**（工具 schema 的 enum、说明文字、
+脚本模板、真机用例都是从表里生成的）。目前 41 个参数，覆盖：
+
+| 类别 | 参数（`measure` 的 `parameter`） |
+| --- | --- |
+| 基频 | `mean_pitch`、`minimum_pitch`、`maximum_pitch`、`median_pitch`、`sd_pitch`、`pitch_slope`、`pitch_slope_octave_free`、`pitch_start`、`pitch_end` |
+| 强度 | `mean_intensity`、`minimum_intensity`、`maximum_intensity`、`median_intensity`、`sd_intensity` |
+| 嗓音质量 | `hnr`、`cpps`、`local_jitter`、`rap_jitter`、`local_shimmer_percent`、`local_shimmer_db`、`apq3_shimmer` |
+| 共振峰 | `f1`、`f2`、`f3`（平均频率）、`b1`、`b2`、`b3`（带宽中位数） |
+| 频谱 | `centre_of_gravity`、`skewness`、`kurtosis` |
+| 幅度 | `rms`、`peak_amplitude`、`mean_amplitude` |
+| 多步的（交给各自的专用工具） | `hl_ratio`、`spectral_emphasis`、`hammarberg_index`、`pitch_peak_latency`、`peak_to_average_amplitude`、`intensity_slope_local`、`intensity_slope_global` |
+
+用法就是说出来：「这段的 jitter 和 shimmer 是多少」「F1–F3 的平均频率和带宽」。
+一次可以要多个参数（`parameter` 写 `f1,f2`），它们共用一个中间对象；`from`/`to`
+（或编辑器圈选）对按时间段查的参数生效。写分析设置（`pitch_floor`、`pitch_ceiling`、
+`formant_max`…）也能直接说，默认值在表里。表里 `@@ editor_only` 的参数
+（`mean_autocorrelation`）只能在声音编辑器的 Voice report 里查，前端会直接用中文
+说明，而不是让 Praat 弹英文错误框。
+
+## 在 Praat 菜单里直接用（原生插件）
+
+`ai/plugin/praat_ai/` 是一个可以装进 Praat 的原生插件：选中一个 Sound 就能从菜单里
+「AI 声学测量...」（结果写进 Table「AI 测量结果」），在声音/TextGrid 编辑器的
+`Analyses` 菜单里能对圈选段一键测全部参数，Praat 菜单里还能直接启动这个对话窗口。
+它和对话前端**共用 `measures.tsv` 这张表和同一套命令**，所以两边数值一致；
+**不需要重新编译 Praat**，没装这个 fork 的人也能用。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ai\plugin\install.ps1   # 装到 %APPDATA%\Praat\plugin_praat_ai
+python ai\tests\verify_plugin.py                                  # 真机回归（4 条）
+```
+
+卸载就是删掉 `%APPDATA%\Praat\plugin_praat_ai`；细节和已知边界见
+`ai/plugin/README.zh-CN.md`。
+
 模板覆盖不到的请求会退回 `custom_script`，此时脚本必须通过安全检查：单引号自动改成
 双引号、禁止 `runSystem`、`deleteFile`、`exit` 等命令，并且**必须是 Praat 脚本**——
 模型如果给出 Python 代码（`import`、`def`、`print(`、`numpy` 之类），前端会直接
@@ -268,6 +305,7 @@ python ai/tests/verify_chat_planning.py         # 真机模型规划一批请求
 python ai/tests/verify_chat_window_ui.py        # 对话窗口能不能正常建起来（会闪一下窗口）
 python ai/tests/verify_chat_live.py             # 对话窗口链路（会临时开一个 Praat）
 python ai/tests/verify_chat_no_popup.py         # 发指令时 Praat 的窗口一个都不许动（会收进任务栏）
+python ai/tests/verify_plugin.py                # 原生插件（B2）：菜单注册 + 33 个参数在真 Praat 里算一遍
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
 ```
 

@@ -15,10 +15,13 @@ Free-form scripts remain available as a validated fallback.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+
+from . import measures
 
 
 class ToolError(ValueError):
@@ -75,6 +78,9 @@ INFO_NOISE_PATTERN = re.compile(
 TEMPORARY_OBJECT_NAME = "ai-chat-temp"
 
 CUSTOM_SCRIPT_TOOL = "custom_script"
+
+#: 表驱动的测量工具；它的参数表是 ``ai/praat_ai/measures.tsv``。
+MEASURE_TOOL = "measure"
 
 # 「有时长概念」的对象类：只有这些类才能用 Get total duration 之类的查询，
 # 否则脚本会在 Praat 里直接报 “Command not available”，用户只看到一句英文错误。
@@ -2501,6 +2507,338 @@ def _build_intensity_slope(arguments: Mapping[str, Any], context: ToolContext) -
     return _assemble(lines, context)
 
 
+# ---------------------------------------------------------------------------
+# B1：表驱动的声学测量。
+#
+# 参数表在 ``ai/praat_ai/measures.tsv``（列的含义和出处见 measures.py）。
+# 这里只负责把「一行参数」拼成脚本：基础对象 → 只用到的派生对象 → 每条查询一行
+# 结果 → 删掉临时对象 → 把选中对象还给用户。
+# ---------------------------------------------------------------------------
+
+#: 走表时 ``arguments`` 里这些键是「怎么查」，不是分析设置。
+_MEASURE_RESERVED_KEYS = frozenset(
+    {"parameter", "parameters", "object", "from", "to", "start", "end", "unit"}
+)
+
+#: 已经分析好的对象能直接顶上对应派生对象时用（选中 Pitch 就别再 To Pitch 一次）。
+_MEASURE_CLASS_DERIVATIONS: dict[str, str] = {
+    "Pitch": "pitch",
+    "Intensity": "intensity",
+    "Formant": "formant",
+    "Spectrum": "spectrum",
+    "Ltas": "ltas",
+    "Harmonicity": "harmonicity",
+    "PointProcess": "pointProcess",
+    "PowerCepstrogram": "powerCepstrogram",
+}
+
+
+def measure_parameter_help() -> str:
+    """``measure`` 能测的参数名 + 中文说明（工具 JSON Schema 和 catalog 共用）。"""
+
+    return "、".join(
+        f"{entry.parameter}（{entry.label}）" for entry in measures.load_table().entries
+    )
+
+
+def measure_signature() -> str:
+    """``measure`` 的参数说明（设置项也由表生成，schema 才不会漏改）。"""
+
+    keys = "、".join(measures.load_table().settings)
+    return (
+        'parameter（参数名，可写多个如 "f1,f2"）、from、to（秒，默认整个对象或编辑器圈选）'
+        "、unit（hertz/Bark）、object（可选）"
+        f"、{keys}"
+    )
+
+
+def _measure_schema() -> dict[str, Any]:
+    table = measures.load_table()
+    properties: dict[str, Any] = {
+        "parameter": {
+            "type": "string",
+            "enum": table.parameters(),
+            "description": "要测哪一个参数：" + measure_parameter_help(),
+        },
+        "from": _seconds_arg("起点（秒），不填就是整个对象或编辑器圈选"),
+        "to": _seconds_arg("终点（秒），不填就是整个对象或编辑器圈选"),
+        "unit": _unit_arg(),
+        "object": _object_arg(),
+    }
+    for key, setting in table.settings.items():
+        description = f"{setting.note}（默认 {setting.value}）"
+        if setting.is_integer:
+            properties[key] = _integer_arg(description)
+        else:
+            properties[key] = _number_arg(description)
+    return {"type": "object", "properties": properties, "required": ["parameter"]}
+
+
+def _measure_names(arguments: Mapping[str, Any]) -> list[str]:
+    """``parameter`` 可以是名字、``"f1,f2"`` 或列表（JSON 规划那条路会传列表）。"""
+
+    raw = arguments.get("parameter", arguments.get("parameters"))
+    if raw is None or raw == "":
+        raise ToolError("measure 要用 parameter 指定参数名。")
+    if isinstance(raw, (list, tuple, set)):
+        pieces = [str(item) for item in raw]
+    else:
+        pieces = re.split(r"[,，、;；\s]+", str(raw))
+    names = [piece.strip() for piece in pieces if piece.strip()]
+    if not names:
+        raise ToolError("measure 要用 parameter 指定参数名。")
+    return names
+
+
+def _measure_entries(arguments: Mapping[str, Any]) -> list[measures.Entry]:
+    table = measures.load_table()
+    entries: list[measures.Entry] = []
+    for name in _measure_names(arguments):
+        try:
+            entries.append(table.find(name))
+        except KeyError as error:
+            known = "、".join(table.parameters())
+            raise ToolError(
+                f"measure 不认识参数「{name}」。可用参数有：{known}。"
+            ) from error
+    return entries
+
+
+def _measure_settings(
+    arguments: Mapping[str, Any], table: measures.Table
+) -> dict[str, int | float]:
+    """按表里的 ``@@ settings`` 取值：默认值在表里，模型可以用同名参数覆盖。"""
+
+    values: dict[str, int | float] = {}
+    for key, setting in table.settings.items():
+        if setting.is_integer:
+            values[key] = _integer(
+                arguments,
+                key,
+                int(float(setting.value)),
+                int(float(setting.minimum)),
+                int(float(setting.maximum)),
+            )
+        else:
+            values[key] = _number(
+                arguments,
+                key,
+                float(setting.value),
+                float(setting.minimum),
+                float(setting.maximum),
+            )
+    # 上下限写反的话 Praat 会弹一句英文错误框（还会卡住后面的消息），这里先拦下。
+    floor = values.get("pitch_floor")
+    ceiling = values.get("pitch_ceiling")
+    if isinstance(floor, (int, float)) and isinstance(ceiling, (int, float)):
+        if floor >= ceiling:
+            raise ToolError("pitch_floor（基频下限）必须小于 pitch_ceiling（基频上限）。")
+    return values
+
+
+def _measure_expand(
+    text: str,
+    settings: Mapping[str, int | float],
+    *,
+    unit_literal: str,
+    unit_text: str,
+) -> str:
+    """把 ``{pitch_floor}`` / ``{unit}`` / ``{unit_text}`` 换成实际值。"""
+
+    expanded = text
+    for key, value in settings.items():
+        rendered = str(value) if isinstance(value, int) else f"{value:.6f}"
+        expanded = expanded.replace("{" + key + "}", rendered)
+    expanded = expanded.replace("{unit}", unit_literal)
+    expanded = expanded.replace("{unit_text}", unit_text)
+    return expanded
+
+
+def _measure_plan(
+    table: measures.Table,
+    entries: Sequence[measures.Entry],
+    variables: Mapping[str, str],
+) -> list[str]:
+    """按表的顺序算出要建哪些派生对象（只用到的才建，依赖排在前面）。"""
+
+    wanted: set[str] = set()
+    pending: list[str] = []
+    for entry in entries:
+        for key in measures.source_keys(entry.source):
+            if key != "sound" and key not in variables and key not in wanted:
+                wanted.add(key)
+                pending.append(key)
+    while pending:
+        key = pending.pop()
+        derivation = table.derivations.get(key)
+        if derivation is None:
+            raise ToolError(f"measure 的表里没有「{key}」的派生规则。")
+        source = derivation.source.strip()
+        if source and source != "Sound" and source not in variables and source not in wanted:
+            wanted.add(source)
+            pending.append(source)
+    return [key for key in table.derivations if key in wanted]
+
+
+def _measure_select_lines(keys: Sequence[str], variables: Mapping[str, str]) -> list[str]:
+    """一条查询要选中哪些对象：第一个 ``selectObject``，其余 ``plusObject``。"""
+
+    lines: list[str] = []
+    for index, key in enumerate(keys):
+        target = variables.get(key)
+        if target is None:
+            raise ToolError(
+                f"这个参数要对「{key}」算，但当前对象只能直接给「"
+                + "、".join(sorted(variables))
+                + "」；请在 Praat 里选中声音对象再试。"
+            )
+        lines.append(("selectObject: " if index == 0 else "plusObject: ") + target)
+    return lines
+
+
+def _build_measure(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """表驱动的测量：一行参数 = 一条 Praat 查询（表在 ai/praat_ai/measures.tsv）。"""
+
+    table = measures.load_table()
+    entries = _measure_entries(arguments)
+    delegated = [entry for entry in entries if entry.kind == "dedicated"]
+    if delegated:
+        if len(entries) > 1:
+            names = "、".join(f"{e.parameter}（改用 {e.tool}）" for e in delegated)
+            raise ToolError(
+                f"{names} 要好几步才能算出来，得单独调用各自的专用工具，"
+                "一次 measure 里别和别的参数混在一起。"
+            )
+        entry = delegated[0]
+        tool = TOOL_MAP.get(entry.tool)
+        if tool is None:
+            raise ToolError(
+                f"measure 的表把 {entry.parameter} 指向了不存在的工具 {entry.tool}。"
+            )
+        merged = {
+            key: value
+            for key, value in arguments.items()
+            if key not in {"parameter", "parameters"}
+        }
+        merged.update(json.loads(entry.arguments or "{}"))
+        return tool.build(merged, context)
+
+    queries = [entry for entry in entries if entry.kind == "query"]
+    editor_only = [entry for entry in entries if entry.kind == "editor"]
+    row = context.resolve_object(arguments.get("object"))
+    variables: dict[str, str] = {}
+    if row.class_name in SOUND_CLASSES:
+        variables["sound"] = str(row.id)
+    else:
+        alias = _MEASURE_CLASS_DERIVATIONS.get(row.class_name)
+        if alias is None:
+            raise ToolError(
+                f"measure 需要声音对象（对象 {row.id} 是 {row.class_name}）："
+                "声学测量都是对声音做的，或者把已经分析好的 Pitch/Intensity 等对象选上。"
+            )
+        variables[alias] = str(row.id)
+
+    settings = _measure_settings(arguments, table)
+    unit_literal = _unit_literal(arguments, "hertz")
+    unit_text = _unit_display(arguments, "hertz").strip()
+    created = _measure_plan(table, entries, variables)
+
+    uses_range = any(
+        "tmin" in entry.command or "tmax" in entry.command for entry in queries
+    )
+    lines = [f"selectObject: {row.id}"]
+    if uses_range:
+        lines.append("duration = Get total duration")
+        lines.extend(_range_lines(arguments, row))
+    for key in created:
+        derivation = table.derivations[key]
+        # Praat 的 To X 生成的新对象会顶掉当前选中：每建一个派生对象之前都要把
+        # 它该从哪个对象来重新选一遍，否则第二个派生对象就是对中间对象做了。
+        source = derivation.source.strip() or "Sound"
+        lines.extend(
+            _measure_select_lines(
+                ["sound" if source == "Sound" else source], variables
+            )
+        )
+        command = _measure_expand(
+            derivation.command,
+            settings,
+            unit_literal=unit_literal,
+            unit_text=unit_text,
+        )
+        lines.append(f"{key}Id = {command}")
+        variables[key] = f"{key}Id"
+
+    for entry in queries:
+        lines.extend(_measure_select_lines(measures.source_keys(entry.source), variables))
+        command = _measure_expand(
+            entry.command, settings, unit_literal=unit_literal, unit_text=unit_text
+        )
+        statements = [piece.strip() for piece in command.split(";") if piece.strip()]
+        if not any("=" in statement for statement in statements):
+            statements[0] = f"value = {statements[0]}"
+        lines.extend(statements)
+        unit = _measure_expand(
+            entry.unit, settings, unit_literal=unit_literal, unit_text=unit_text
+        )
+        decimals = int(entry.decimals)
+        entry_range = "tmin" in entry.command or "tmax" in entry.command
+        if entry_range:
+            prefix = [
+                quote(f"{entry.label}（"),
+                "fixed$ (tmin, 3)",
+                quote("–"),
+                "fixed$ (tmax, 3)",
+                quote(" 秒）= "),
+            ]
+            missing = [
+                quote(f"{entry.label}（"),
+                "fixed$ (tmin, 3)",
+                quote("–"),
+                "fixed$ (tmax, 3)",
+                quote(" 秒）无法计算：这一段里没有可用的数据"),
+            ]
+        else:
+            prefix = [quote(f"{entry.label} = ")]
+            missing = [quote(f"{entry.label} 无法计算：这个对象里没有可用的数据")]
+        measured = prefix + [f"fixed$ (value, {decimals})"]
+        if unit:
+            measured.append(quote(f" {unit}"))
+        lines.append("if value = undefined")
+        lines.extend(
+            [_write_result(context, missing + (["rangeNote$"] if entry_range else []))]
+        )
+        lines.append("else")
+        lines.extend(
+            [
+                _write_result(
+                    context,
+                    measured + (["rangeNote$"] if entry_range else []),
+                )
+            ]
+        )
+        lines.append("endif")
+
+    for entry in editor_only:
+        lines.append(
+            _write_result(
+                context,
+                [
+                    quote(
+                        f"{entry.label}：这个参数只能在 Praat 的编辑器里查"
+                        f"（{entry.command}），对象列表里没有对应命令。"
+                    )
+                ],
+            )
+        )
+
+    for key in reversed(created):
+        lines.append(f"selectObject: {key}Id")
+        lines.append("Remove")
+    lines.append(f"selectObject: {row.id}")
+    return _assemble(lines, context)
+
+
 @dataclass(frozen=True, slots=True)
 class Tool:
     name: str
@@ -2745,6 +3083,16 @@ TOOLS: tuple[Tool, ...] = (
             "object（Sound 或 Intensity）"
         ),
         build=_build_intensity_slope,
+    ),
+    Tool(
+        name=MEASURE_TOOL,
+        summary=(
+            "表驱动的声学测量：jitter / shimmer、共振峰带宽、频谱重心/偏度/峰度、"
+            "CPPS、基频与强度的各种统计量都在这里。parameter 一次可以写多个"
+            "（逗号隔开），例如 \"f1,f2\"。"
+        ),
+        signature=measure_signature(),
+        build=_build_measure,
     ),
 )
 
@@ -3117,6 +3465,9 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     },
 }
 
+#: ``measure`` 的 schema 由参数表生成（加一行参数就多一个 enum 项）。
+TOOL_PARAMETERS[MEASURE_TOOL] = _measure_schema()
+
 
 def tool_parameters(name: str) -> dict[str, Any]:
     """取一个工具的 JSON Schema（没登记就用空参数表）。"""
@@ -3247,6 +3598,10 @@ def plan_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 def catalog_text() -> str:
     lines = [tool.describe() for tool in TOOLS]
+    lines.append(
+        f"- {MEASURE_TOOL}: 表驱动的声学测量（一行参数 = 一条查询，参数表在"
+        f" ai/praat_ai/measures.tsv）。参数：{measure_parameter_help()}。"
+    )
     lines.append(
         f"- {CUSTOM_SCRIPT_TOOL}: 只有在上面所有工具都无法完成请求时才使用；"
         "这时把完整 Praat 英文脚本写进 script 字段。"

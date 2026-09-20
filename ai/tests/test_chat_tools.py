@@ -140,6 +140,7 @@ class ScriptRenderingTests(unittest.TestCase):
             },
             "textgrid_insert_boundary": {"object": 3, "time": 0.5},
             "vot": {"object": 3, "burst": 0.3, "voicing": 0.42},
+            "measure": {"parameter": "rms,mean_intensity"},
         }
         for tool in tools.TOOLS:
             arguments: dict[str, object] = dict(extra.get(tool.name, {}))

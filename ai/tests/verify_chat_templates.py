@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from praat_ai import tools   # noqa: E402
+from praat_ai import measures, tools   # noqa: E402
 
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -87,6 +87,51 @@ class Case:
     custom_script: str = ""
     tool: str = ""
     tags: tuple[str, ...] = field(default_factory=tuple)
+
+
+def _measure_cases() -> tuple[Case, ...]:
+    """按 ``measures.tsv`` 生成用例：表里每个参数都要在真 Praat 里跑一遍。
+
+    表里加一行参数，这里就自动多一个用例（``ai/tests/test_measures.py`` 守着
+    「表里的参数都在这里出现过」）。交给专用工具算的那几行也走 ``measure``，
+    顺手验了「委托给专用工具」这条路。
+    """
+
+    table = measures.load_table()
+    cases: list[Case] = []
+    for entry in table.entries:
+        expect = entry.label
+        if entry.kind == "dedicated":
+            # 结果行的措辞由那个专用工具决定；这里只要求脚本跑到结尾（写出
+            # chat_state.txt），也就是委托那条路没走错。
+            expect = ""
+        elif entry.kind == "editor":
+            expect = "编辑器"
+        cases.append(
+            Case(
+                f"measure-{entry.parameter}",
+                {"parameter": entry.parameter},
+                SOUND,
+                ONE_SOUND,
+                expect,
+                tool="measure",
+                tags=("measure",),
+            )
+        )
+    # 一次测全部参数：共享派生对象、多条查询、临时对象清理全在一份脚本里。
+    every = ",".join(entry.parameter for entry in table.queries())
+    cases.append(
+        Case(
+            "measure-many",
+            {"parameter": every},
+            SOUND,
+            ONE_SOUND,
+            "平均基频",
+            tool="measure",
+            tags=("measure",),
+        )
+    )
+    return tuple(cases)
 
 
 CASES: tuple[Case, ...] = (
@@ -392,7 +437,7 @@ CASES: tuple[Case, ...] = (
         "没有周期性声源",
         tool="pitch_statistics",
     ),
-)
+) + _measure_cases()
 
 
 def run_case(case: Case, directory: Path) -> tuple[bool, str]:
