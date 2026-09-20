@@ -276,9 +276,12 @@ python tools/build_glossary.py
 本地 Windows 开发通常使用 MSYS2 shell 调用仓库根目录的 `Makefile`。当前本机常用命令为：
 
 ```powershell
-$env:MSYSTEM="UCRT64"
-C:\msys64\usr\bin\bash.exe -lc "cd /c/path/to/Praat_ZH && make PRAAT_COMPILER=gcc -j16"
+$env:MSYSTEM="CLANG64"   # 本机只装了 CLANG64 工具链（没有 mingw64 的 g++）
+C:\msys64\usr\bin\bash.exe -lc "cd /d/path/to/Praat_ZH && make PRAAT_COMPILER=clang -j16"
 ```
+
+链接写 `Praat.exe` 时如果报 `Permission denied`，说明 Praat 还开着：先关掉所有
+Praat 窗口（包括对话窗口），再重新执行上面的命令，构建是增量的。
 
 构建成功后根目录生成 `Praat.exe`。如果只改文档或 guide，不需要构建；如果改 C++、翻译表或手册源字符串，至少应尝试本地构建，或明确说明未构建原因。
 
@@ -486,6 +489,50 @@ AI 纠音实验代码位于 `ai/`：
 - **按类型兜底**：模型有时把 `object` 填成当前选中的 Sound，而用户问的是
   「这个 TextGrid」。`ToolContext.resolve_by_class()` 在类型不匹配、且列表里只有
   一个合格对象时直接用它，多个候选才报错。
+- **没有工具的测量值不许顶替**：VOT 以前会被模型换成「共振峰带宽」之类交差。
+  现在 `vot` 有两种用法：给了 `burst`/`voicing` 就相减（TextGrid 顺带补边界），
+  只给 `from`/`to` 就在大概范围里自动估计；规则 14 要求其它没有工具的测量
+  （例如 CPP）在 reply 里直说做不到。加工具比加提示词管用，提示词只留一行。
+- **VOT 自动估计的取舍**（都在真机合成用例上量过，真值 30 ms）：爆破和浊音起始
+  分成两步测，结果里分别给出各自的依据。**爆破**用 2–8 kHz 带通后的强度包络
+  （`To Intensity: 2000, 0.001`，窗口 3.2 ms）找最陡的上升沿，并且要求上升沿之后
+  能量守得住 5 ms——被硬切出来的爆音"来了就走"，拿它当爆破会把 VOT 报大几十毫秒；
+  升幅不到 6 dB 才退回全频段包络。不再用"区间峰值 − 25 dB"当阈值：范围里只要还夹着
+  别的强段（后面的元音），这个阈值就会漂，同一个音两次差 6 ms（实测 47 和 41 毫秒）。
+  **浊音起始**用 `To Pitch (ac): 0.002, …` 连续 3 帧判出基频（默认 10 ms 步长会把起点
+  推迟一个帧；`To Harmonicity (cc)` 13 ms 窗口实测晚 8 ms，所以只拿起点后 50 ms 内
+  最高的谐噪比当佐证数字）。这套在同真值下跑三遍是 30/32/32 ms。
+  **代价**：`To Harmonicity (cc)` 对整段声音做交叉相关很贵（10 秒的声音要 0.301 秒，
+  其余各步加起来才 0.11 秒），所以谐噪比只截起点后 50 ms 那一小段算，实测 0.007 秒；
+  它只是回话里的佐证数字，不是判定依据。
+  `To Harmonicity (cc)` 的 periodsPerWindow 给 0.5 会让 Praat 7.0.02 在
+  `Sound_to_Pitch.cpp` 直接断言崩溃，只能 ≥ 1；minPitch 250（4 ms 窗口）在 220 Hz 上
+  会判成"全是噪声"，窗口就按 1/minPitch 走。范围整段都在浊音里时必须报"起点已是浊音"
+  而不是给一个 1 ms 的假数，VOT < 5 ms 时也要加一句提醒。
+- **圈大了不能静默取第一个**：范围内第一段浊音之后若还有 ≥20 毫秒无声、再出现
+  连续两帧以上的浊音，就在结果末尾补一句"范围偏大：后面还有第 2 段浊音从 x 秒开始，
+  本次只报了第一个候选"。它只是提示范围该收紧，不改报出来的那个 VOT，也不加提示词
+  （纯脚本逻辑，避免把 planner 提示词撑大触发 433）。
+- **编辑器圈选范围**：`chat_context.tsv` 的表头是
+  `id / class / name / selected / sel_start / sel_end`，后两列只在对应对象开着编辑器时
+  才有值，来自 `FunctionEditor::startSelection/endSelection`，由
+  `FunctionEditor_selectionMarksChanged()` 推给 `PraatAiControl_noteEditorSelection()`。
+  `endSelection <= startSelection`（只点了个光标）不算选区；编辑器关掉后
+  `editors[]` 里的指针会变成 null，写上下文时会自动忽略那两列，不会残留旧范围。
+  前端只在用户没在话里给范围时用它，并回一句"按编辑器圈选 x–y 秒"，避免静默换范围。
+  模型常把这两列原样抄进 `from`/`to`：数值和选区对得上（±2 ms）时仍按圈选报，
+  否则回话里就丢了范围出处。
+  这条链路不只 VOT 用：`_range_lines()`（`pitch_statistics`、`intensity_statistics`、
+  `formant_statistics`、`harmonicity_statistics` 四个按区间统计的工具）、
+  `_build_extract_part()`（"把这段截出来"）和 `_build_textgrid_set_interval()`
+  （"把这段标成 a"，用 TextGrid 编辑器里拖的选区）都走同一个 `_selection_range()`，
+  点查询（`pitch`/`intensity`/`formant_frequency`）没给 `time` 时改用选区中点，
+  不再是整个对象的中点；有选区时回话里一定带"按编辑器圈选"，纯脚本逻辑，不加提示词。
+  没圈选、话里也没给范围时行为不变（统计整段 / 报错要 end）。
+  `textgrid_insert_boundary` 故意不接：单个时刻插边界时选区的起点、中点都能说得通，
+  猜错了是改数据，不如让模型问清楚。
+  顺手修掉 `extract_part` 的 `finish` 别名：以前只检查了别名、取值只读 `end`，
+  写 `finish` 会被当成没给而误报"开始时间必须小于结束时间"（`textgrid_set_interval` 同样的问题）。
 - 回归用例：`ai/tests/test_chat_tools.py`、`ai/tests/test_chat_window.py`；
   真机链路用 `python ai/tests/verify_chat_live.py`（临时开一个 Praat，
   验证建对象、改名后对象列表会刷新、基频查询和截取片段）。

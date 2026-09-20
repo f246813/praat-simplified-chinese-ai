@@ -164,6 +164,7 @@ JSON 结构：
 11. 只有用户给出了新名字时才填 name / new_name；「复制一份」这类请求不要抄原来的名字。
 12. 用户说「这个声音」「当前对象」时指的就是下面标着「当前选中」的那一个；它往往不是 1 号对象，别习惯性写 1。
 13. 用户说法里带对象类型时按类型选：说「这个 TextGrid」就用 TextGrid，说「这个声音」就用 Sound；不要因为另一个类型的对象是当前选中就写错。
+14. 没有对应工具的测量（例如 CPP）绝不能拿别的量代替；reply 里直说做不到，并说明还缺什么。
 """.strip()
         examples = """
 示例：
@@ -183,6 +184,8 @@ JSON 结构：
 输出：{"reply": "新建 1 秒的 220 Hz 纯音。", "tool": "create_sound", "arguments": {"duration": 1, "frequency": 220}, "script": ""}
 用户：把这个声音保存成 D:/out/a.wav
 输出：{"reply": "保存为 WAV 文件。", "tool": "save_sound", "arguments": {"path": "D:/out/a.wav"}, "script": ""}
+用户：在 0.28 到 0.45 秒之间找 VOT
+输出：{"reply": "在这个范围里估计 VOT。", "tool": "vot", "arguments": {"from": 0.28, "to": 0.45}, "script": ""}
 用户：导入 D:/in/a.wav
 输出：{"reply": "读取 wav 文件。", "tool": "custom_script", "arguments": {}, "script": "Read from file: \\"D:/in/a.wav\\""}
 """.strip()

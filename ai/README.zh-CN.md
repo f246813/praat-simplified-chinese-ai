@@ -148,7 +148,9 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 在 Praat 菜单「前端 → 启动前端」成功启动模型后，会自动弹出独立的
 「Praat AI 对话」窗口。它的执行链路是：
 
-1. Praat 把当前对象列表写到 `ai/runtime/chat_context.tsv`（id、类、名称、是否选中）。
+1. Praat 把当前对象列表写到 `ai/runtime/chat_context.tsv`（id、类、名称、是否选中）；
+   某个对象开着编辑器时，还会在它的行尾多写 `sel_start`/`sel_end` 两列，也就是用户
+   在波形上手动拖出来的选区（只点了光标就是空的，不算选区）。
 2. 对话窗口把用户请求交给本地 Qwen3.5-0.8B；模型只负责选择工具并填写参数。
 3. Praat 脚本由 `ai/praat_ai/tools.py` 的固定模板渲染，不直接执行模型自由文本。
 4. 脚本通过 `Praat.exe --FULL-TRUST --send` 送到正在运行的 Praat 里执行。
@@ -164,10 +166,17 @@ IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需�
 | 编辑 | `select_object`、`rename_object`、`duplicate_object`、`remove_object`、`resample_sound` |
 | 生成与导出 | `create_sound`（纯音/静音）、`extract_part`、`concatenate_sounds`、`spectrogram`、`save_sound`（WAV，缺目录会先建好） |
 | TextGrid | `textgrid_info`（层、区间、标签）、`textgrid_set_interval`（标注时间段，自动补边界）、`textgrid_insert_boundary` |
+| 测量 | `vot`：给了 `burst`/`voicing` 两个时刻就直接相减（TextGrid 会补边界）；只给 `from`/`to`（大概范围）就在范围里分两步自动估计——先按 2–8 kHz 带通包络的上升沿定爆破，再按自相关基频定浊音起始，结果里分别写明依据，属于估计值；范围里还包含第二个音素时只报第一个，并提示范围偏大、建议收紧；话里完全没给范围时，直接用在波形上拖出来的选区，并注明「按编辑器圈选」（模型把选区抄成 from/to 时也照样注明） |
 | 交互 | `view_edit`、`play` |
 
 一次问多个时刻也支持：`time` 可以写 `0.25,0.75`，「查询 0.25 秒和 0.75 秒的基频」
 会一次返回两行结果；`formant` 同样可以写 `1,2`。
+
+在编辑器里拖出选区后，话里没给范围时这些工具都用它：`pitch_statistics`、
+`intensity_statistics`、`formant_statistics`、`harmonicity_statistics`（「选区的 F1–F4 平均」）、
+`extract_part`（「把这段截出来」）和 `textgrid_set_interval`（「把这段标成 a」）
+都取选区，回话里注明「按编辑器圈选 x–y 秒」；`pitch`、`intensity`、`formant_frequency`
+没给 `time` 时用选区中点，而不是整个对象的中点（`vot` 本来就走这条路）。
 
 只对某类对象有效的工具（TextGrid 标注、播放/另存/重采样等）在模型指错对象类型时，
 会退回到列表里唯一的合格对象，并把实际用到的对象名写进结果，不会直接报错。

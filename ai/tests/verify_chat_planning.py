@@ -61,8 +61,16 @@ REQUESTS: tuple[str, ...] = (
     "看看这个 TextGrid 有几个区间",
     "把这个 TextGrid 的第一层 0.3 到 0.6 秒标成 b",
     "在 TextGrid 的 0.7 秒处加一个边界",
+    "提取这段语音的 vot",
+    "爆破是 0.30 秒，浊音起始是 0.42 秒，帮我算 VOT",
+    "在 0.25 到 0.5 秒之间找一下 VOT",
     "删除 1 号对象",
 )
+
+# 这些请求只能走 vot 工具或直接回答：v1 曾把「提取 vot」静默换成「第 1 共振峰带宽」。
+NO_SUBSTITUTION = {
+    "提取这段语音的 vot": {"vot", tools.CUSTOM_SCRIPT_TOOL},
+}
 
 
 def requests_for(directory: Path) -> tuple[str, ...]:
@@ -140,7 +148,18 @@ def main() -> int:
             if not tool_name and custom.strip():
                 tool_name = tools.CUSTOM_SCRIPT_TOOL
             if not tool_name:
-                print(f"CHAT {text} -> 不执行脚本：{plan.get('reply', '')}")
+                if text in NO_SUBSTITUTION:
+                    print(f"CHAT {text} -> 没有对应工具时的回答：{plan.get('reply', '')}")
+                else:
+                    print(f"CHAT {text} -> 不执行脚本：{plan.get('reply', '')}")
+                continue
+            allowed = NO_SUBSTITUTION.get(text)
+            if allowed is not None and tool_name not in allowed:
+                print(
+                    f"FAIL {text} -> 拿别的工具顶替了：{tool_name}"
+                    f"（允许：{'/'.join(sorted(allowed))} 或直接回答）"
+                )
+                failures += 1
                 continue
             context = tools.ToolContext(
                 tools.parse_object_context(CONTEXT),

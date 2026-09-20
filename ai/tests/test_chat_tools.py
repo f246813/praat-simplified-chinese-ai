@@ -21,6 +21,13 @@ MIXED_CONTEXT = (
 
 GRID_CONTEXT = "id\tclass\tname\tselected\n1\tTextGrid\tTextGrid grid\t1\n"
 
+# 打开了编辑器、并在波形上拖选了 0.25–0.5 秒时的上下文（多出两列）。
+SELECTED_CONTEXT = (
+    "id\tclass\tname\tselected\tsel_start\tsel_end\n"
+    "1\tSound\tSound tone\t1\t0.250000\t0.500000\n"
+    "2\tSound\tSound tone2\t0\t\t\n"
+)
+
 
 class ObjectContextTests(unittest.TestCase):
     def test_context_is_parsed(self) -> None:
@@ -45,6 +52,21 @@ class ObjectContextTests(unittest.TestCase):
         context = tools.ToolContext(rows, Path("r.tsv"), Path("s.txt"))
         with self.assertRaises(tools.ToolError):
             context.resolve_object("Sound missing")
+
+    def test_editor_selection_columns_are_parsed(self) -> None:
+        # Praat 打开编辑器后会多写 sel_start/sel_end 两列；旧的四列写法也要照旧能读。
+        rows = tools.parse_object_context(SELECTED_CONTEXT)
+        self.assertEqual(rows[0].selection, (0.25, 0.5))
+        self.assertIsNone(rows[1].selection)
+        legacy = tools.parse_object_context(CONTEXT)
+        self.assertIsNone(legacy[0].selection)
+
+    def test_cursor_without_a_dragged_range_is_not_a_selection(self) -> None:
+        rows = tools.parse_object_context(
+            "id\tclass\tname\tselected\tsel_start\tsel_end\n"
+            "1\tSound\tSound tone\t1\t0.300000\t0.300000\n"
+        )
+        self.assertIsNone(rows[0].selection)
 
 
 class ScriptRenderingTests(unittest.TestCase):
@@ -116,6 +138,7 @@ class ScriptRenderingTests(unittest.TestCase):
                 "label": "a",
             },
             "textgrid_insert_boundary": {"object": 3, "time": 0.5},
+            "vot": {"object": 3, "burst": 0.3, "voicing": 0.42},
         }
         for tool in tools.TOOLS:
             arguments: dict[str, object] = dict(extra.get(tool.name, {}))
@@ -564,6 +587,248 @@ class TextGridToolTests(unittest.TestCase):
         self.assertIn("层号", str(caught.exception))
         with self.assertRaises(tools.ToolError):
             tools.render("textgrid_set_interval", {"tier": "第一层"}, self.context)
+
+
+class VotToolTests(unittest.TestCase):
+    """VOT 必须按给定的两个时刻算，不能拿别的测量值顶替。"""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        base = Path(self.directory.name)
+        self.grid_context = tools.ToolContext(
+            tools.parse_object_context(GRID_CONTEXT),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+        self.sound_context = tools.ToolContext(
+            tools.parse_object_context("id\tclass\tname\tselected\n1\tSound\tSound tone\t1\n"),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_textgrid_path_adds_boundaries_and_reports_ms(self) -> None:
+        script = tools.render(
+            "vot",
+            {"burst": 0.30, "voicing": 0.42},
+            self.grid_context,
+        )
+        self.assertIn("t1 = 0.300000", script)
+        self.assertIn("t2 = 0.420000", script)
+        self.assertIn("vot = t2 - t1", script)
+        self.assertIn("Insert boundary: 1, t1", script)
+        self.assertIn("Insert boundary: 1, t2", script)
+        self.assertIn("fixed$ (vot * 1000, 1)", script)
+        self.assertIn("秒（爆破）", script)
+        self.assertIn("并在该层补上了边界", script)
+
+    def test_sound_path_only_subtracts(self) -> None:
+        script = tools.render(
+            "vot",
+            {"burst": 0.30, "voicing": 0.42},
+            self.sound_context,
+        )
+        self.assertIn("vot = t2 - t1", script)
+        self.assertNotIn("Insert boundary", script)
+        self.assertIn("未做自动检测", script)
+
+    def test_missing_or_bad_times_are_rejected(self) -> None:
+        # 两个时刻都不给 = 自动估计模式；只给一个才是参数错误。
+        auto = tools.render("vot", {}, self.sound_context)
+        self.assertIn("自动", auto)
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("vot", {"burst": 0.3}, self.grid_context)
+        self.assertIn("voicing", str(caught.exception))
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("vot", {"burst": 0.4, "voicing": 0.3}, self.grid_context)
+        self.assertIn("必须晚于", str(caught.exception))
+
+    def test_onset_alias_works(self) -> None:
+        script = tools.render(
+            "vot",
+            {"burst": 0.1, "onset": 0.25},
+            self.sound_context,
+        )
+        self.assertIn("t2 = 0.250000", script)
+
+    def test_auto_mode_detects_within_the_given_range(self) -> None:
+        script = tools.render(
+            "vot",
+            {"from": 0.25, "to": 0.5},
+            self.sound_context,
+        )
+        self.assertIn("tmin = 0.250000", script)
+        self.assertIn("tmax = 0.500000", script)
+        # 爆破和浊音起始分开测：前者看 2–8 kHz 带通包络的上升沿，后者看谐噪比。
+        self.assertIn("Filter (pass Hann band): 2000, 8000, 100", script)
+        self.assertIn('To Intensity: 2000, 0.001, "yes"', script)
+        self.assertIn('To Harmonicity (cc): 0.002, 75.000000', script)
+        self.assertIn('To Pitch (ac): 0.002, 75.000000', script)
+        self.assertIn("burstTime", script)
+        self.assertIn("burstRise", script)
+        self.assertIn("firstVoicedTime", script)
+        self.assertIn("VOT 估计值", script)
+        self.assertIn("爆破与浊音起始分开估计", script)
+        self.assertIn("请对着语图核对", script)
+
+    def test_editor_selection_note_survives_the_model_echoing_it(self) -> None:
+        # 模型把圈选原样抄进 from/to 时，回话里仍要写清楚这段范围是圈出来的。
+        context = tools.ToolContext(
+            tools.parse_object_context(SELECTED_CONTEXT),
+            self.sound_context.result_path,
+            self.sound_context.state_path,
+        )
+        script = tools.render("vot", {"from": 0.25, "to": 0.5}, context)
+        self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
+        self.assertNotIn("未指定范围", script)
+
+    def test_auto_mode_warns_when_the_range_holds_two_phonemes(self) -> None:
+        # 圈大了（后面还有第二个音素）时不能静默只报第一个。
+        script = tools.render("vot", {"from": 0.25, "to": 1.0}, self.sound_context)
+        self.assertIn("secondVoicingTime", script)
+        self.assertIn("第 2 段浊音", script)
+        self.assertIn("建议收紧范围", script)
+
+    def test_auto_mode_uses_the_range_dragged_in_the_editor(self) -> None:
+        context = tools.ToolContext(
+            tools.parse_object_context(SELECTED_CONTEXT),
+            self.sound_context.result_path,
+            self.sound_context.state_path,
+        )
+        script = tools.render("vot", {}, context)
+        self.assertIn("tmin = 0.250000", script)
+        self.assertIn("tmax = 0.500000", script)
+        self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
+        self.assertNotIn("未指定范围", script)
+
+    def test_explicit_range_beats_the_editor_selection(self) -> None:
+        context = tools.ToolContext(
+            tools.parse_object_context(SELECTED_CONTEXT),
+            self.sound_context.result_path,
+            self.sound_context.state_path,
+        )
+        script = tools.render("vot", {"from": 0.6, "to": 0.8}, context)
+        self.assertIn("tmin = 0.600000", script)
+        self.assertIn("tmax = 0.800000", script)
+        self.assertNotIn("按编辑器圈选", script)
+
+    def test_auto_mode_needs_a_sound_not_a_textgrid(self) -> None:
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("vot", {"from": 0.1, "to": 0.3}, self.grid_context)
+        self.assertIn("Sound", str(caught.exception))
+
+
+class EditorSelectionRangeTests(unittest.TestCase):
+    """拖出来的选区要能接到所有"按一段时间统计"的工具上，而不是只有 VOT。"""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        base = Path(self.directory.name)
+        self.selected = tools.ToolContext(
+            tools.parse_object_context(SELECTED_CONTEXT),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+        self.plain = tools.ToolContext(
+            tools.parse_object_context(CONTEXT),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_statistics_tools_use_the_editor_selection(self) -> None:
+        for name in (
+            "pitch_statistics",
+            "intensity_statistics",
+            "formant_statistics",
+            "harmonicity_statistics",
+        ):
+            script = tools.render(name, {}, self.selected)
+            self.assertIn("tmin = 0.250000", script, name)
+            self.assertIn("tmax = 0.500000", script, name)
+            self.assertIn("按编辑器圈选 0.250–0.500 秒", script, name)
+            self.assertIn("appendFileLine:", script, name)
+            # 回话的最后一句就是范围出处，不能只写数字。
+            written = [
+                line for line in script.splitlines() if "chat_result.tsv" in line
+            ]
+            self.assertTrue(written[-1].endswith("rangeNote$"), name)
+
+    def test_statistics_note_survives_the_model_echoing_the_selection(self) -> None:
+        # 模型把 sel_start/sel_end 抄成 from/to 时，回话里仍要写清范围出处。
+        script = tools.render(
+            "formant_statistics",
+            {"formant": 1, "from": 0.25, "to": 0.5},
+            self.selected,
+        )
+        self.assertIn("tmin = 0.250000", script)
+        self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
+
+    def test_explicit_range_beats_the_editor_selection(self) -> None:
+        script = tools.render(
+            "intensity_statistics",
+            {"from": 0.6, "to": 0.8},
+            self.selected,
+        )
+        self.assertIn("tmin = 0.600000", script)
+        self.assertIn("tmax = 0.800000", script)
+        self.assertNotIn("按编辑器圈选", script)
+
+    def test_without_a_selection_the_whole_object_is_still_the_default(self) -> None:
+        script = tools.render("pitch_statistics", {}, self.plain)
+        self.assertIn("tmin = 0", script)
+        self.assertIn("tmax = duration", script)
+        self.assertNotIn("按编辑器圈选", script)
+        self.assertIn('rangeNote$ = ""', script)
+
+    def test_point_query_falls_back_to_the_selection_middle(self) -> None:
+        # 圈了 0.25–0.5 再问「这一刻的基频」：问的应该是圈里那一段，不是整个对象的中点。
+        for name in ("pitch", "intensity", "formant_frequency"):
+            script = tools.render(name, {}, self.selected)
+            self.assertIn("time = 0.375000", script, name)
+        explicit = tools.render("pitch", {"time": 0.9}, self.selected)
+        self.assertIn("time = 0.900000", explicit)
+        self.assertNotIn("time = 0.375000", explicit)
+
+    def test_extract_part_uses_the_editor_selection(self) -> None:
+        script = tools.render("extract_part", {}, self.selected)
+        self.assertIn("t1 = 0.250000", script)
+        self.assertIn("t2 = 0.500000", script)
+        self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
+        # 没圈选也没有 end 时仍然报错，不能猜一个范围。
+        with self.assertRaises(tools.ToolError):
+            tools.render("extract_part", {}, self.plain)
+
+    def test_extract_part_honours_the_finish_alias(self) -> None:
+        # finish 是 end 的别名；以前取值漏了别名，会误报「开始时间必须小于结束时间」。
+        script = tools.render(
+            "extract_part",
+            {"object": 1, "start": 0.1, "finish": 0.4},
+            self.plain,
+        )
+        self.assertIn("t2 = 0.400000", script)
+
+    def test_textgrid_label_uses_the_editor_selection(self) -> None:
+        # 在 TextGrid 编辑器里拖一段再让 AI 标注：范围就用拖出来的那一段。
+        context = tools.ToolContext(
+            tools.parse_object_context(
+                "id\tclass\tname\tselected\tsel_start\tsel_end\n"
+                "1\tTextGrid\tTextGrid grid\t1\t0.250000\t0.500000\n"
+            ),
+            self.plain.result_path,
+            self.plain.state_path,
+        )
+        script = tools.render("textgrid_set_interval", {"label": "a"}, context)
+        self.assertIn("t1 = 0.250000", script)
+        self.assertIn("t2 = 0.500000", script)
+        self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
+        # 没圈选时照旧报错，不能自己编一个区间。
+        with self.assertRaises(tools.ToolError):
+            tools.render("textgrid_set_interval", {"label": "a"}, self.plain)
 
 
 class PythonScriptRejectionTests(unittest.TestCase):

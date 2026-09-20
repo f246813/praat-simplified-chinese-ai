@@ -28,12 +28,30 @@ PRAAT = PROJECT / "Praat.exe"
 
 SOUND = 'Create Sound from formula: "tone", 1, 0, 1, 44100, ~ 0.5 * sin (2*pi*220*x)'
 SILENT = 'Create Sound from formula: "silence", 1, 0, 1, 44100, ~ 0'
+# 合成一个 VOT ≈ 30 ms 的音：0–0.30 闭音、0.30–0.33 爆破噪声、0.33 起浊音。
+VOT_SOUND = (
+    'Create Sound from formula: "vot", 1, 0, 1, 44100, '
+    '~ if x < 0.3 then 0 else (if x < 0.33 then 0.3 * randomGauss (0, 1) '
+    'else 0.5 * sin (2*pi*220*x) fi) fi'
+)
 HALF_SILENT = (
     'Create Sound from formula: "half", 1, 0, 1, 44100, '
     '~ if x < 0.4 then 0 else 0.5 * sin (2*pi*220*x) fi'
 )
+# 两个音素：0–0.30 闭音、0.30–0.33 爆破、0.33–0.60 浊音、0.60–0.75 静音、0.75 起又浊音。
+TWO_PHONEME_SOUND = (
+    'Create Sound from formula: "vot2", 1, 0, 1, 44100, '
+    '~ if x < 0.3 then 0 else (if x < 0.33 then 0.3 * randomGauss (0, 1) '
+    'else (if x < 0.6 then 0.5 * sin (2*pi*220*x) else (if x < 0.75 then 0 '
+    'else 0.5 * sin (2*pi*220*x) fi) fi) fi) fi'
+)
 
 ONE_SOUND = "id\tclass\tname\tselected\n1\tSound\tSound tone\t1\n"
+# 编辑器开着、并在波形上拖选了 0.25–0.5 秒（Praat 会多写两列）。
+ONE_SOUND_SELECTED = (
+    "id\tclass\tname\tselected\tsel_start\tsel_end\n"
+    "1\tSound\tSound tone\t1\t0.250000\t0.500000\n"
+)
 TEXTGRID = 'Create TextGrid: 0, 1, "words", ""'
 # 已经标好一个区间、并且 0.5 秒处已经有边界，用来验证重复插入会被跳过。
 TEXTGRID_ANNOTATED = "\n".join(
@@ -46,6 +64,11 @@ TEXTGRID_ANNOTATED = "\n".join(
     ]
 )
 ONE_TEXTGRID = "id\tclass\tname\tselected\n1\tTextGrid\tTextGrid grid\t1\n"
+# TextGrid 编辑器开着并拖选了 0.25–0.5 秒。
+ONE_TEXTGRID_SELECTED = (
+    "id\tclass\tname\tselected\tsel_start\tsel_end\n"
+    "1\tTextGrid\tTextGrid grid\t1\t0.250000\t0.500000\n"
+)
 TWO_SOUNDS = (
     "id\tclass\tname\tselected\n"
     "1\tSound\tSound tone\t1\n"
@@ -120,6 +143,102 @@ CASES: tuple[Case, ...] = (
         ONE_TEXTGRID,
         "已经有边界",
         tool="textgrid_insert_boundary",
+    ),
+    Case(
+        "vot",
+        {"burst": 0.3, "voicing": 0.42},
+        TEXTGRID,
+        ONE_TEXTGRID,
+        "VOT = 0.1200 秒（120.0 毫秒）",
+    ),
+    Case(
+        "vot-sound",
+        {"burst": 0.3, "voicing": 0.42},
+        SOUND,
+        ONE_SOUND,
+        "VOT = 0.1200 秒（120.0 毫秒）",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto",
+        {"from": 0.25, "to": 0.5},
+        VOT_SOUND,
+        ONE_SOUND,
+        "VOT 估计值 = 0.03",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto-no-range",
+        {},
+        VOT_SOUND,
+        ONE_SOUND,
+        "未指定范围",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto-no-burst",
+        {"from": 0.4, "to": 0.9},
+        VOT_SOUND,
+        ONE_SOUND,
+        "已经是浊音",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto-two-phonemes",
+        {"from": 0.25, "to": 1.0},
+        TWO_PHONEME_SOUND,
+        ONE_SOUND,
+        "第 2 段浊音",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto-editor-selection",
+        {},
+        VOT_SOUND,
+        ONE_SOUND_SELECTED,
+        "按编辑器圈选 0.250–0.500 秒",
+        tool="vot",
+    ),
+    # 选区不只 VOT 用：区间统计和截取片段取的是同一个选区，回话里都得注明出处。
+    Case(
+        "pitch_statistics-editor-selection",
+        {},
+        SOUND,
+        ONE_SOUND_SELECTED,
+        "按编辑器圈选 0.250–0.500 秒",
+        tool="pitch_statistics",
+    ),
+    Case(
+        "formant_statistics-editor-selection",
+        {"formant": "1,2"},
+        SOUND,
+        ONE_SOUND_SELECTED,
+        "按编辑器圈选 0.250–0.500 秒",
+        tool="formant_statistics",
+    ),
+    Case(
+        "extract_part-editor-selection",
+        {},
+        SOUND,
+        ONE_SOUND_SELECTED,
+        "按编辑器圈选 0.250–0.500 秒",
+        tool="extract_part",
+    ),
+    Case(
+        "pitch-editor-selection",
+        {},
+        SOUND,
+        ONE_SOUND_SELECTED,
+        "0.375 秒处",
+        tool="pitch",
+    ),
+    Case(
+        "textgrid_set_interval-editor-selection",
+        {"label": "b"},
+        TEXTGRID,
+        ONE_TEXTGRID_SELECTED,
+        "按编辑器圈选 0.250–0.500 秒",
+        tool="textgrid_set_interval",
     ),
     Case("select_object", {}, SOUND, ONE_SOUND, "已选中"),
     Case("rename_object", {"new_name": "改名测试"}, SOUND, ONE_SOUND, "已重命名"),
