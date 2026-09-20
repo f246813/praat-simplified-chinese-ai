@@ -18,6 +18,8 @@
    - Windows 文件拖拽：看 `sys/motifEmulator.cpp`、`sys/GuiMenu.cpp`、`sys/praat_objectMenus.cpp`。
    - 启动时图像窗口隐藏：看 `sys/praat_picture.cpp` 和 `sys/praat_objectMenus.cpp`。
    - 发布打包：看 `.github/workflows/release-windows.yml`、`README.txt`。
+   - 本地 AI 纠音前端（对话窗口、工具模板、编辑器选区链路）：看 `ai/praat_ai/`，
+     交接要点见 `ai/HANDOFF.md`（选区数据流、VOT 算法取舍、验证命令）。
 
 3. 修改前先读相关上下文。不要只凭英文字符串全局替换；Praat 有大量手写宏、菜单别名和旧拼写，错误替换很容易导致启动时报错或 UI 不匹配。
 
