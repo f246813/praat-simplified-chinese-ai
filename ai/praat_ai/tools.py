@@ -2886,6 +2886,9 @@ def _run_external_script(
 ) -> tuple[bool, list[str], str]:
     """跑一个现成的 ``.praat`` 脚本，把它的输出读回来。"""
 
+    cancelled = environment.cancelled
+    if cancelled is not None and cancelled():
+        raise ToolError("已取消：这个脚本没有开始跑。")
     raw_path = str(arguments.get("path", "") or "").strip()
     if not raw_path:
         raise ToolError("要跑哪个脚本？请给出 .praat 文件的完整路径（path）。")
@@ -2943,6 +2946,7 @@ def _run_external_script(
         wrapper,
         timeout=timeout,
         working_directory=work,
+        cancelled=cancelled,
     )
     after = external_script.folder_snapshot(target.parent)
 
@@ -3005,6 +3009,8 @@ class LocalEnvironment:
     execute: Callable[[str], tuple[bool, list[str], str]]
     praat_executable: str
     runtime_directory: Path
+    #: 用户按了「停止」没有（C7）：批处理、多步流程每一步都问一次。
+    cancelled: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True, slots=True)

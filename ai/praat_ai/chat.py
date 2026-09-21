@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -210,6 +211,26 @@ def object_context() -> str:
         return f"（读取对象列表失败：{error}）"
 
 
+#: Praat 写在对象列表文件末尾的进程标记（见 sys/PraatAiControl.cpp）。
+CONTEXT_PID_PATTERN = re.compile(r"^#\s*praat-pid=(\d+)\s*$", re.MULTILINE)
+
+
+def context_pid(text: str | None = None) -> int:
+    """对象列表是哪一次 Praat 进程写的（没有标记返回 0）。
+
+    有了它，前端就不必每条消息都先投一条空脚本「刷一遍」对象列表（C5）：标记就是
+    当前这个 Praat，说明文件是最新的。对方的 Praat 不写标记（老版本、或者别人的
+    Praat），返回值是 0，调用方会退回「刷一次」的老行为。
+
+    ``text=None``（默认）时读 ``chat_context.tsv``；传字符串时只解析这份文本。
+    """
+
+    if text is None:
+        text = object_context()
+    match = CONTEXT_PID_PATTERN.search(text or "")
+    return int(match.group(1)) if match else 0
+
+
 def selected_object_label() -> str:
     rows = tools.parse_object_context(object_context())
     if not rows:
@@ -262,6 +283,13 @@ def _blocked_reason() -> str:
     )
 
 
+def _cancelled_reason() -> str:
+    return (
+        "已取消：不再等这一条的结果。脚本可能已经在 Praat 里跑完了，"
+        "结果文件里会有它的输出。"
+    )
+
+
 def _read_started_marker() -> str:
     """最后一次开始执行的请求编号（``chat_started.txt`` 里最后一个 ``started`` 行）。"""
 
@@ -301,9 +329,16 @@ def _discard_stale_output() -> None:
 
 
 def _wait_for_result(
-    process: subprocess.Popen[bytes] | None, *, request_id: str = ""
+    process: subprocess.Popen[bytes] | None,
+    *,
+    request_id: str = "",
+    cancel: threading.Event | None = None,
 ) -> tuple[bool, str]:
-    """轮询 ``chat_state.txt``；``process`` 只在那条 ``--send`` 兜底路径里非空。"""
+    """轮询 ``chat_state.txt``；``process`` 只在那条 ``--send`` 兜底路径里非空。
+
+    ``cancel``（C7）是对话窗口「停止」按钮置的那个事件：一置上就不再等，并且把
+    排队中的 WM_APP 换成空脚本（否则它以后醒来会执行**下一条**指令的脚本）。
+    """
 
     deadline = time.monotonic() + EXECUTION_TIMEOUT_SEC
     notes = ""
@@ -313,6 +348,18 @@ def _wait_for_result(
             if process is not None:
                 _close_send_process(process)
             return True, notes.strip()
+        if cancel is not None and cancel.is_set():
+            # 结果已经到了就不打断（上面的 ready 分支已经返回）；这里说明还没来。
+            ready, _ = _completion_state(request_id)
+            if ready:
+                if process is not None:
+                    _close_send_process(process)
+                return True, notes.strip()
+            if process is not None:
+                _close_send_process(process)
+            else:
+                sendpraat.cancel_pending()
+            return False, _join_notes(notes, _cancelled_reason())
         if stale_note:
             # 完成标记是别人的：连同它的结果一起丢掉，继续等本次指令。
             notes = stale_note
@@ -597,6 +644,7 @@ def _run_agent_turn(
     max_steps: int = MAX_AGENT_STEPS,
     allow_followup_mutations: bool = False,
     environment: tools.LocalEnvironment | None = None,
+    cancel: threading.Event | None = None,
 ) -> TurnOutcome:
     """循环本体：规划 → 执行 → 回灌 → 再规划（planner 负责具体接口）。
 
@@ -614,12 +662,20 @@ def _run_agent_turn(
     executed: dict[str, str] = {}
     steps_done = 0
     stopped_early = False
+    cancelled = False
     for round_index in range(1, max_rounds + 1):
+        if cancel is not None and cancel.is_set():
+            # 用户在等上一轮结果时按了「停止」：不再规划、不再执行。
+            cancelled = True
+            break
         actions, reply = planner.next()
         if not actions:
             outcome.reply = reply or _summary_of(outcome)
             return outcome
         for action in actions:
+            if cancel is not None and cancel.is_set():
+                cancelled = True
+                break
             signature = _action_signature(action)
             tool_name = str(action.get("tool", "") or "")
             if signature in executed:
@@ -688,8 +744,12 @@ def _run_agent_turn(
             planner.observe(action, step.observation)
             if on_progress is not None:
                 on_progress(_progress_text(step))
-        if stopped_early:
+        if stopped_early or cancelled:
             break
+    if cancelled:
+        outcome.notes.append("已取消：后面的步骤没有再执行。")
+        outcome.reply = "已取消这次操作（已经执行完的那几步结果还在下面）。"
+        return outcome
     outcome.reply = planner.wrap_up() or _summary_of(outcome)
     return outcome
 
@@ -837,26 +897,67 @@ def run_turn(
     native: bool | None = None,
     max_rounds: int = MAX_AGENT_ROUNDS,
     environment: tools.LocalEnvironment | None = None,
+    cancel: threading.Event | None = None,
 ) -> TurnOutcome:
     """跑一轮用户请求：先规划，执行，把结果回灌，再规划（见 ``MAX_AGENT_ROUNDS``）。
 
     ``execute(脚本)`` 由调用方提供，返回 ``(是否成功, 结果行, 失败说明)``——对话窗口
     用它投递给正在运行的 Praat，验证脚本用它跑批处理。
+
+    ``cancel``（C7）是「停止」按钮的事件；``context_text`` / ``history`` 会按
+    token 预算裁一遍（A5），被省掉的部分写进 ``TurnOutcome.notes``。
     """
 
     use_native = (
         qwen.planner_mode() != qwen.JSON_MODE if native is None else native
     )
+    schemas = tools.tool_schemas() if use_native else []
+    # A5：先扣掉工具 schema、系统提示、用户这句话和回答预留，剩下的才是
+    # 「现场信息 + 对话历史」能用的额度；对象列表最多拿三分之一（它得让模型看到
+    # 当前选中，但不该把历史挤光）。
+    # 老的 JSON 规划把工具清单写在提示词里，那份开销也要算进去。
+    instructions = (
+        qwen.TOOL_PLANNER_INSTRUCTIONS if use_native else tools.catalog_text()
+    )
+    budget = qwen.history_budget(
+        client.config.max_context_tokens,
+        instructions=instructions,
+        tool_schemas=schemas,
+        user_text=user_text,
+        response_tokens=client.config.plan_max_tokens,
+    )
+    trimmed_context, hidden_rows = qwen.trim_object_context(
+        context_text, max_tokens=max(120, budget // 3)
+    )
+    trimmed_history, dropped_turns = qwen.trim_history(
+        history, max_tokens=max(0, budget - qwen.estimate_tokens(trimmed_context))
+    )
+    notes: list[str] = []
+    if hidden_rows:
+        notes.append(
+            f"对象列表太长，这次只列了一部分给模型（还有 {hidden_rows} 个没列出）。"
+            "先说清要操作哪个对象更稳。"
+        )
+    if dropped_turns:
+        overhead = qwen.estimate_tokens(instructions) + qwen.estimate_tokens(
+            json.dumps(schemas, ensure_ascii=False)
+        )
+        notes.append(
+            f"对话太长：这一轮只带了最近 {len(trimmed_history)} 条历史"
+            f"（省掉更早的 {dropped_turns} 条）。本机上下文窗口 "
+            f"{client.config.max_context_tokens}，工具说明加系统提示约占 "
+            f"{overhead} token——想多带历史可以在模型预设里把 context_tokens 调大。"
+        )
     planner_class = _NativePlanner if use_native else _JsonPlanner
     planner = planner_class(
         client,
         user_text=user_text,
-        context_text=context_text,
-        history=history,
+        context_text=trimmed_context,
+        history=trimmed_history,
         result_path=str(context.result_path),
         state_path=str(context.state_path),
     )
-    return _run_agent_turn(
+    outcome = _run_agent_turn(
         planner,
         context=context,
         execute=execute,
@@ -864,11 +965,19 @@ def run_turn(
         max_rounds=2 if not use_native else max_rounds,
         allow_followup_mutations=wants_second_step(user_text),
         environment=environment,
+        cancel=cancel,
     )
+    outcome.notes[:0] = notes
+    return outcome
 
 
 def _send_script(
-    executable: str, script: str, *, request_id: str = ""
+    executable: str,
+    script: str,
+    *,
+    request_id: str = "",
+    cancel: threading.Event | None = None,
+    process_id: int | None = None,
 ) -> tuple[bool, str]:
     """Hand the script to the running Praat and wait for its result files.
 
@@ -883,6 +992,9 @@ def _send_script(
 
     每条指令写一个自己的脚本文件，并在开头带上请求编号（:func:`script_preamble`）：
     这是「投递出去的那条」和「真的执行了的那条」对得上的凭据。
+
+    ``process_id`` 指定送给哪一个 Praat（默认最新打开的那个，和 ``--send`` 一致）；
+    验证脚本用它把自己开的那个实例和用户开着的实例区分开。
     """
 
     request_id = request_id or new_request_id()
@@ -891,15 +1003,19 @@ def _send_script(
     target.write_text(script_preamble(request_id) + script, encoding="utf-8")
     prune_command_scripts()
     if sendpraat.send_mode() == sendpraat.ARGV_MODE:
-        return _send_script_via_argv(executable, target, request_id)
-    delivered, note = sendpraat.deliver(ai_directory(), target)
+        return _send_script_via_argv(executable, target, request_id, cancel=cancel)
+    delivered, note = sendpraat.deliver(ai_directory(), target, process_id=process_id)
     if not delivered:
         return False, note
-    return _wait_for_result(None, request_id=request_id)
+    return _wait_for_result(None, request_id=request_id, cancel=cancel)
 
 
 def _send_script_via_argv(
-    executable: str, target: Path, request_id: str = ""
+    executable: str,
+    target: Path,
+    request_id: str = "",
+    *,
+    cancel: threading.Event | None = None,
 ) -> tuple[bool, str]:
     """排障兜底：``Praat.exe --FULL-TRUST --send``（会激活 Praat 的一个子窗口）。"""
 
@@ -923,7 +1039,7 @@ def _send_script_via_argv(
             )
     except OSError as error:
         return False, f"调用 Praat 失败：{error}"
-    return _wait_for_result(process, request_id=request_id)
+    return _wait_for_result(process, request_id=request_id, cancel=cancel)
 
 
 def _read_send_log() -> str:
@@ -1064,13 +1180,27 @@ def model_status_text(config) -> str:
 
 
 def refresh_object_context(
-    executable: str, process_ids: list[int] | None = None
+    executable: str,
+    process_ids: list[int] | None = None,
+    *,
+    force: bool = False,
+    assume_fresh: bool = False,
 ) -> tuple[bool, str]:
     """让正在运行的 Praat 重新写一次对象列表，返回 ``(是否成功, 说明)``。
 
     ``chat_context.tsv`` 由 Praat 维护：Praat 重启、换会话或对象被改动之后，
     对话窗口手里的列表可能是旧的。旧 id 会让脚本报「没有编号为 1」这种看不懂
     的错误，所以每次执行前先送一条空脚本刷新，顺带确认 Praat 还在响应用户。
+
+    **C5**：Praat 会在文件末尾写 ``# praat-pid=<进程号>``。标记就是当前这个
+    Praat 时说明列表是最新的（Praat 自己会在每条 app 消息之后、以及用户改选中或
+    增删对象之后重写它），这时**一条消息都不发**；只有标记对不上（Praat 重启过）、
+    文件缺失、或者对方的 Praat 不写标记时才真的投一条刷新。``force=True`` 强制刷。
+
+    ``assume_fresh=True`` 是给「老版本 Praat（不写标记）」用的同一条捷径：Praat
+    每执行完一条 app 消息都会重写对象列表（``cb_userMessage()`` 里那句），所以只要
+    这一轮之前已经成功投递过一条脚本、而且还是同一个 Praat 进程，列表就是新的。
+    对话窗口自己记着这件事（``ChatWindow.context_ready_pids``）。
     """
 
     if not executable:
@@ -1079,10 +1209,28 @@ def refresh_object_context(
         process_ids = praat_process_ids(executable)
     if not praat_process_running_from(process_ids):
         return False, ""
+    if not force and context_path().is_file():
+        if assume_fresh or context_belongs_to(process_ids):
+            return True, ""
     ok, output = _send_script(executable, context_ping_script())
     if ok:
         return True, ""
     return False, output or "Praat 没有响应，无法刷新对象列表。"
+
+
+def context_belongs_to(process_ids: list[int] | None) -> bool:
+    """对象列表文件是不是这几个正在跑的 Praat 之一写的。"""
+
+    if not process_ids:
+        return False
+    path = context_path()
+    if not path.is_file():
+        return False
+    try:
+        marker = context_pid(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return False
+    return marker != 0 and marker in set(process_ids)
 
 
 def resolve_preset_id(presets: list[dict], label: str) -> str:
@@ -1131,6 +1279,10 @@ class ChatWindow:
         self.history: list[dict[str, str]] = []
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy = False
+        #: C7：点「停止」时置上，正在等的投递/批处理/多轮循环都会看到。
+        self.cancel_event = threading.Event()
+        #: C5：已经投递过脚本的 Praat 进程集合——之后不用再送那条 ping 往返。
+        self.context_ready_pids: frozenset[int] = frozenset()
 
         style = ttk.Style(self.root)
         if "vista" in style.theme_names():
@@ -1283,11 +1435,23 @@ class ChatWindow:
             width=10,
         )
         self.send_button.grid(row=0, column=1, sticky="ns", padx=(10, 0))
+        # C7：等待可以取消。Praat 卡住、社区脚本跑太久时不用干等 25 秒。
+        self.stop_button = ttk.Button(
+            composer,
+            text="停止",
+            command=self.cancel_turn,
+            width=8,
+            state="disabled",
+        )
+        self.stop_button.grid(row=0, column=2, sticky="ns", padx=(6, 0))
         ttk.Label(
             composer,
-            text="Enter 发送，Shift+Enter 换行；脚本在正在运行的 Praat 里执行，结果会回到这里",
+            text=(
+                "Enter 发送，Shift+Enter 换行；脚本在正在运行的 Praat 里执行，结果会回到这里；"
+                "「停止」= 不再等这一步（Praat 里已经在跑的脚本不受影响）"
+            ),
             foreground="#6B7280",
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         self.append("assistant", "请直接用自然语言描述要执行的 Praat 操作。")
         self.append_hint(
@@ -1410,7 +1574,9 @@ class ChatWindow:
             return "break"
         self.entry.delete("1.0", "end")
         self.busy = True
+        self.cancel_event.clear()
         self.send_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
         self.preset_button.configure(state="disabled")
         self.status.set("Praat AI  |  正在处理请求…")
         self.append("user", text)
@@ -1420,6 +1586,15 @@ class ChatWindow:
             daemon=True,
         ).start()
         return "break"
+
+    def cancel_turn(self) -> None:
+        """C7：不再等这一步。已经在 Praat 里跑的脚本不受影响（它可能已经跑完）。"""
+
+        if not self.busy:
+            return
+        self.cancel_event.set()
+        self.stop_button.configure(state="disabled")
+        self.append_hint("已请求停止：不再等这一步；Praat 里已经在跑的脚本不受影响。")
 
     def run_user_turn(self, text: str, executable: str) -> TurnOutcome:
         """规划并执行一轮用户请求（可能多步），返回最终回答和每一步的结果。
@@ -1437,7 +1612,7 @@ class ChatWindow:
         )
 
         def execute(script: str) -> tuple[bool, list[str], str]:
-            ok, output = _send_script(executable, script)
+            ok, output = _send_script(executable, script, cancel=self.cancel_event)
             if not ok:
                 return False, [], output or _blocked_reason()
             failure = _read_failure()
@@ -1448,11 +1623,12 @@ class ChatWindow:
             return True, _read_results(), ""
 
         # 本地工具（跑现成 .praat 脚本那种）需要：往开着的 Praat 投递脚本、
-        # 批处理用的 Praat 路径、以及放临时文件的地方。
+        # 批处理用的 Praat 路径、放临时文件的地方，以及「用户点停止了吗」。
         environment = tools.LocalEnvironment(
             execute=execute,
             praat_executable=executable,
             runtime_directory=runtime_dir(),
+            cancelled=self.cancel_event.is_set,
         )
 
         return run_turn(
@@ -1464,6 +1640,7 @@ class ChatWindow:
             execute=execute,
             on_progress=lambda line: self.messages.put(("hint", line)),
             environment=environment,
+            cancel=self.cancel_event,
         )
 
     def process_message(self, text: str) -> None:
@@ -1476,10 +1653,16 @@ class ChatWindow:
                 warning = praat_instance_warning_from(process_ids)
                 if warning:
                     self.messages.put(("hint", warning))
-                # 先刷新对象列表，免得拿着过期 id 去规划。
-                refreshed, note = refresh_object_context(executable, process_ids)
+                # 先刷新对象列表，免得拿着过期 id 去规划。C5：已经确认过、而且还是
+                # 同一个 Praat 进程时，这一步一次往返都不花。
+                already_ready = self.context_ready_pids == frozenset(process_ids or [])
+                refreshed, note = refresh_object_context(
+                    executable, process_ids, assume_fresh=already_ready
+                )
                 if not refreshed and note:
                     self.messages.put(("hint", note))
+                elif refreshed:
+                    self.context_ready_pids = frozenset(process_ids or [])
 
             if not executable:
                 raise OSError(
@@ -1545,7 +1728,9 @@ class ChatWindow:
                 role, text = self.messages.get_nowait()
                 if role == "done":
                     self.busy = False
+                    self.cancel_event.clear()
                     self.send_button.configure(state="normal")
+                    self.stop_button.configure(state="disabled")
                     self.preset_button.configure(
                         state="normal" if self.presets else "disabled"
                     )

@@ -121,6 +121,26 @@ def main() -> int:
         print(f"· 预设说明：{window.preset_hint.get()}")
         print(f"· 对象提示：{window.context_label.get()}")
         print(f"· 输入框可用：{window.entry.cget('state')}")
+        # C7：等待可以取消。这里只验按钮和事件接上了（真投递的取消在
+        # verify_cancel_live.py 里用真 Praat 跑）。
+        try:
+            print(
+                "· 停止按钮：初始 "
+                f"{window.stop_button.cget('state')}，事件 "
+                f"{window.cancel_event.is_set()}"
+            )
+            if str(window.stop_button.cget("state")) != "disabled":
+                problems.append("停止按钮初始应该是禁用状态")
+            window.busy = True
+            window.stop_button.configure(state="normal")
+            window.cancel_turn()
+            if not window.cancel_event.is_set():
+                problems.append("点「停止」没有把取消事件置上")
+            window.cancel_event.clear()
+            window.busy = False
+            window.stop_button.configure(state="disabled")
+        except AttributeError as error:
+            problems.append(f"对话窗口没有停止按钮：{error}")
         window.flush_messages()
 
         if switch and len(labels) >= 2:

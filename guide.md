@@ -877,3 +877,80 @@ Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COM
 回归：`python ai/tests/verify_error_dialog.py`（真机，4 条：准备对象、报错后没有
 模态框、报错 0.x 秒内回到结果文件、报错之后的下一条指令不被挡）。改之前是
 2/4（报错那条永远等满 25 秒）。
+
+### 8.10 不再每条消息都刷一次对象列表（C5）
+
+原来每条用户消息都先投一条空脚本「刷一遍」对象列表（投递 + 等完成标记 = 一次完整
+往返，Praat 卡住时还要白等 25 秒）。现在：
+
+- Praat 在 `chat_context.tsv` 末尾写自己的进程号（`# praat-pid=<pid>`，
+  `sys/PraatAiControl.cpp` 的 `writeChatContext`；解析在 `chat.context_pid()`，
+  `praat_ai.tools.parse_object_context` 会忽略这一行）；
+- `chat.refresh_object_context()` 看到标记就是正在跑的这个 Praat 就**一条消息都
+  不发**；标记对不上（Praat 重启过）、文件缺失、对方的 Praat 不写标记时才真的刷
+  一次。`force=True` 强制刷（验证脚本用）；
+- 老版本 Praat 还有一条同样管用的捷径：`assume_fresh=True`
+  （`ChatWindow.context_ready_pids` 记着「这个进程集合已经投递过脚本」，而 Praat
+  每执行完一条 app 消息都会重写对象列表）。
+
+**两个坑**：① `context_pid(text=None)` 的默认参数要读文件——第一版写成
+`text if text is not None else object_context()`，传空串时解析的是空字符串，于是
+「永远认为没有标记、永远 ping」，是 `verify_context_marker.py` 抓出来的，现在有
+单测守着（`test_default_argument_reads_the_context_file`）；
+② 对象列表文件**所有 Praat 共用一个**：同时开着第二个 Praat 时它会覆盖标记，这时
+前端按「标记对不上」处理（回到刷一次的老行为），只是省不下那一趟。
+
+回归：`python ai/tests/verify_context_marker.py`（2 条：Praat 真的写自己的进程号、
+标记对上后不再投 ping）、`verify_chat_live.py`（单实例时顺带验一次）、
+`ai/tests/test_context_freshness.py`（13 条单测）。
+
+### 8.11 上下文按 token 预算裁，裁掉什么要看得见（A5）
+
+原来历史只带最近 8 条（`qwen.history_messages` 里的 `history[-8:]`）、对象列表整份
+塞进 system prompt。可 `ctx` 只有 8192，**光工具 schema 就占 ~6.6k token**（实测
+`estimate_tokens`：36 个工具的 JSON ≈ 18k 字符），所以长对话/长对象列表时会被服务端
+静默截掉，表现为模型突然「忘了」前面说过什么。
+
+现在 `chat.run_turn()` 先算预算：
+
+```
+预算 = ctx − 工具 schema − 系统提示 − 用户这句话 − 回答预留(plan_max_tokens) − 安全余量(200)
+对象列表 ≤ 预算 / 3（它必须让模型看到「当前选中」）；剩下的给历史
+```
+
+- `qwen.estimate_tokens()` 只求够准：CJK 1 字 ≈ 1 token，其余 ≈ 4 字符 1 token；
+- `qwen.trim_history()` 从最近往回留，只留「从某句 user 开始」的完整后段；
+- `qwen.trim_object_context()` 一定留表头和「当前选中」那一行，省掉的行数写在文本里
+  （`（对象列表一共 N 个…还有 M 个没列出。当前选中是 …）`）；
+- 省掉的东西写进 `TurnOutcome.notes`（对话窗口显示成提示行），例如
+  「对话太长：这一轮只带了最近 2 条历史（省掉更早的 6 条）」，**不静默**。
+
+本机的现实：8192 的窗口里工具说明占了大头，所以历史预算很小（实测约 80 token）。
+想多带历史就调大预设里的 `context_tokens`（`ai_config.json` 的 `server.presets`），
+或者精简工具说明。
+
+回归：`ai/tests/test_token_budget.py`（14 条：估算、预算扣减、按轮裁剪、对象列表
+裁剪、`run_turn` 的提示行）。
+
+### 8.12 等 Praat、等批处理都可以取消（C7）
+
+以前点了「发送」就只能等：Praat 卡住要等满 25 秒，跑社区脚本时更久。现在对话窗口
+输入框旁边多一个「停止」按钮：
+
+- `ChatWindow.cancel_event`（`threading.Event`）→ `chat._send_script(cancel=…)` →
+  `_wait_for_result()` 每 0.15 秒看一次，置上就立刻返回「已取消」，并把排队中的
+  `WM_APP` 换成空脚本（`sendpraat.cancel_pending()`），免得它以后醒来执行**下一条**
+  指令的脚本；
+- 多轮循环（`_run_agent_turn`）每一轮、每一步之前也看这个标记，取消后不再规划、
+  不再执行，reply 直接说「已取消」；
+- 本地工具（跑社区脚本的 `run_praat_script`）把 `environment.cancelled` 传给
+  `external_script.run_batch()`：批处理进程每 0.2 秒问一次，取消就 `terminate` 它
+  ——一个自己循环很久的脚本不必等到超时。
+
+注意语义：取消是「不再等」，**不是**把 Praat 里已经在跑的脚本停下来（Praat 没有
+提供这种能力给外部程序）；脚本可能已经跑完、也可能根本还没被 Praat 取走（消息已经
+被换成空脚本）。所以结果文件里可能还有它的输出。
+
+回归：`ai/tests/test_cancel.py`（9 条单测）、`python ai/tests/verify_cancel_live.py`
+（3 条真机：取消等结果、取消之后还能继续投递、取消一个自己循环很久的批处理）、
+`verify_chat_window_ui.py`（顺带验「停止」按钮接上了事件）。

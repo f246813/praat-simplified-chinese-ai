@@ -291,6 +291,14 @@ Praat 里自己点运行。
   还在响应，所以 Praat 重启过、对象改过名字之后仍然按最新列表规划，不会拿着旧 id
   去操作。每条指令有独立编号（`runtime/commands/chat_command_<编号>.praat`），
   配上消息文件「自消费」，超时的旧指令不会被执行两遍、也不会顶掉新指令。
+- 对象列表**不再每条消息都刷**：Praat 会在 `chat_context.tsv` 末尾写自己的进程号
+  （`# praat-pid=…`），标记就是正在跑的这个 Praat 时前端一条消息都不发（省一次
+  往返）；Praat 重启过、或者对方是不写标记的老版本时才刷一次。
+- 输入框旁边有「停止」：等 Praat 的结果、等社区脚本的批处理都能中途取消，不用干等
+  25 秒。取消只是「不再等」，Praat 里已经在跑的脚本不受影响。
+- 对话历史/对象列表按 **token 预算**裁剪（`ctx` 只有 8192，工具说明就占 ~6.6k），
+  被省掉的部分会在窗口里提示一句，不再静默丢；想多带历史就在预设里把
+  `context_tokens` 调大。
 - 每次发送最多等 25 秒。如果 Praat 里有没关掉的错误对话框或模态窗口，脚本会卡在
   队列里，窗口会明确提示「Praat 在 25 秒内没有执行这个脚本」并告诉你关掉那些窗口，
   不会一直挂着（超时后前端会把排队中的消息换成空脚本，免得它稍后执行下一条指令）。
@@ -319,6 +327,8 @@ python ai/tests/verify_chat_no_popup.py         # 发指令时 Praat 的窗口�
 python ai/tests/verify_plugin.py                # 原生插件（B2）：菜单注册 + 33 个参数在真 Praat 里算一遍
 python ai/tests/verify_external_script.py       # 现成社区脚本当批处理跑（C3）：表单默认值、输出、报错
 python ai/tests/verify_error_dialog.py          # 脚本报错不弹模态框、不挡后面的消息（会临时起一个 GUI Praat）
+python ai/tests/verify_context_marker.py        # 对象列表里的进程标记（C5）：不再每条消息都刷列表
+python ai/tests/verify_cancel_live.py           # 「停止」真的能停住等 Praat / 等批处理（C7）
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
 ```
 

@@ -6,7 +6,7 @@
 
 它会：
 
-1. 启动 ``Praat.exe``（如果已经有 Praat 在跑就直接用）；
+1. 新起一个 ``Praat.exe``（用户开着的那些不受影响，脚本只操作自己这个）；
 2. 用对话窗口真正的发送函数 ``praat_ai.chat._send_script`` 送一个建声音的脚本；
 3. 检查 Praat 有没有写出 ``ai/runtime/chat_context.tsv``（对象列表回传）；
 4. 让本地 Qwen 规划「把选中的声音改名为 ...」「查询 0.5 秒处的基频」等请求，
@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from praat_ai import chat, tools   # noqa: E402
+from praat_ai import chat, sendpraat, tools   # noqa: E402
 from praat_ai.config import load_config   # noqa: E402
 from praat_ai.qwen import QwenClient   # noqa: E402
 
@@ -48,18 +48,28 @@ def praat_running() -> bool:
     return chat.praat_process_running(str(PRAAT))
 
 
+#: 本次用的那个 Praat 的进程号：用户可能也开着一个 Praat，脚本只碰自己启动的这个。
+TARGET_PID: int | None = None
+
+
 def start_praat() -> subprocess.Popen[bytes] | None:
-    if praat_running():
-        print("· 已经有 Praat 在运行，直接使用它")
-        return None
+    global TARGET_PID
     if not PRAAT.is_file():
         raise SystemExit(f"没有找到 {PRAAT}")
-    print("· 启动 Praat.exe")
+    others = chat.praat_process_ids(str(PRAAT)) or []
+    if others:
+        print(f"· 另外还开着 {len(others)} 个 Praat；这里只操作本次启动的那个")
+    print("· 启动 Praat.exe（总是新起一个，免得动到用户开着的窗口）")
     process = subprocess.Popen([str(PRAAT)])
-    deadline = time.time() + 30
+    deadline = time.time() + 60
     while time.time() < deadline:
-        if praat_running():
-            time.sleep(6.0)   # 等窗口把消息回调挂好并进入空闲状态
+        if any(
+            window.process_id == process.pid
+            and window.title == sendpraat.PRAAT_OBJECTS_TITLE
+            for window in sendpraat.praat_windows()
+        ):
+            time.sleep(1.0)   # 等窗口把消息回调挂好并进入空闲状态
+            TARGET_PID = process.pid
             return process
         time.sleep(0.5)
     raise SystemExit("Praat 启动超时")
@@ -69,12 +79,30 @@ def context_rows() -> tuple[tools.ObjectRow, ...]:
     return tools.parse_object_context(chat.object_context())
 
 
+def newest_command_script() -> str:
+    """最近投递出去的那条命令脚本（``名字:纳秒``）。用来判断「有没有再投一条」。
+
+    不能数文件个数：``runtime/commands`` 到上限会顺手删旧的（``prune_command_scripts``），
+    数量会停在 40 不动。
+    """
+
+    files = sorted(
+        chat.command_dir().glob("chat_command_*.praat"),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    if not files:
+        return ""
+    stat = files[0].stat()
+    return f"{files[0].name}:{stat.st_mtime_ns}"
+
+
 def send(script: str) -> tuple[bool, str]:
     executable = chat.praat_executable()
     if not executable:
         raise SystemExit("没有找到 Praat 可执行文件")
     script = script.replace("@STATE@", chat.state_path().as_posix())
-    ok, output = chat._send_script(executable, script)
+    ok, output = chat._send_script(executable, script, process_id=TARGET_PID)
     results = chat._read_results()
     return ok, ("；".join(results) if results else output.strip())
 
@@ -93,7 +121,7 @@ def ask(client: QwenClient, text: str) -> tuple[str, str, bool]:
     executable = chat.praat_executable()
 
     def execute(script: str) -> tuple[bool, list[str], str]:
-        ok, output = chat._send_script(executable, script)
+        ok, output = chat._send_script(executable, script, process_id=TARGET_PID)
         if not ok:
             return False, [], output or "Praat 没有响应"
         return True, chat._read_results(), ""
@@ -119,10 +147,9 @@ def main() -> int:
     instances = chat.praat_process_ids(str(PRAAT)) or []
     if len(instances) > 1:
         print(
-            f"!! 检测到 {len(instances)} 个 Praat 在运行（{instances}）："
-            "--send 只会送给最新打开的那个，请先关掉多余的窗口再跑这个验证。"
+            f"（检测到 {len(instances)} 个 Praat 在运行：{instances}；"
+            "这个验证只操作它自己新起的那个，别的窗口不会被动到）"
         )
-        return 2
     started = start_praat()
     config = load_config()
     client = QwenClient(config.qwen)
@@ -130,11 +157,45 @@ def main() -> int:
         print("!! 本地模型服务没响应，请先启动前端")
         failures += 1
     try:
-        print("· 先刷新一次对象列表")
-        refreshed, note = chat.refresh_object_context(str(PRAAT))
-        print(f"  刷新{'成功' if refreshed else '失败'}：{note}")
-        if not refreshed:
-            failures += 1
+        # C5：强制刷一次（这一次会真的投一条 ping，Praat 顺手会把进程标记写进
+        # 对象列表），然后再刷一次——第二次必须一条消息都不发。
+        #
+        # 注意：对象列表文件是所有 Praat 共用的一个文件，同时开着第二个 Praat
+        # （例如用户自己的那个）时会互相覆盖，这条检查只有在「只剩本次这个
+        # Praat」时才说得清——多实例时跳过，但别的检查照样跑。
+        # ``instances`` 是**启动本次实例之前**数到的 Praat：只要当时还有别人的
+        # Praat 在跑，对象列表文件就是两个实例共用的，这一条说不清，跳过。
+        if not instances:
+            print("· 先强制刷新一次对象列表（这一步会投一条 ping）")
+            before = newest_command_script()
+            refreshed, note = chat.refresh_object_context(
+                str(PRAAT), [TARGET_PID], force=True
+            )
+            forced = newest_command_script()
+            print(f"  刷新{'成功' if refreshed else '失败'}：{note}")
+            if not refreshed or forced == before:
+                print("  !! 强制刷新没有真的投出去")
+                failures += 1
+
+            marker = chat.context_pid()
+            refreshed, note = chat.refresh_object_context(str(PRAAT), [TARGET_PID])
+            after = newest_command_script()
+            print(
+                f"· C5：第二条消息没有再投 ping（{forced == after}）；"
+                f"对象列表里的进程标记 {marker}（本次 Praat 是 {TARGET_PID}）"
+            )
+            if not refreshed or after != forced:
+                print("  !! C5 没生效：第二条消息又投了一次 ping")
+                failures += 1
+            if marker != TARGET_PID:
+                print("  !! 对象列表里的进程标记对不上（Praat.exe 需要重编？）")
+                failures += 1
+        else:
+            print(
+                "· C5：另外还开着 Praat，对象列表文件被两个实例共用，"
+                "这条检查跳过（单独跑时才有意义；标记本身的检查见 "
+                "verify_cancel_live.py 的说明）"
+            )
 
         print("· 送一个建声音的脚本，检查对象列表回传")
         ok, detail = send(CREATE_SOUND)

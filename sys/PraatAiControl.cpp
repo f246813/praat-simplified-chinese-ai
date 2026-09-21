@@ -23,6 +23,7 @@
 	#include <windows.h>
 #else
 	#include <cstdlib>
+	#include <unistd.h>
 #endif
 
 namespace {
@@ -245,6 +246,18 @@ namespace {
 		return result;
 	}
 
+	long praatProcessId () {
+		/*
+			当前 Praat 的进程号：写进 chat_context.tsv，供对话窗口判断这份列表
+			是不是正在跑的这个 Praat 写的（C5）。
+		*/
+		#if defined (_WIN32)
+			return static_cast <long> (GetCurrentProcessId ());
+		#else
+			return static_cast <long> (getpid ());
+		#endif
+	}
+
 	std::string buildChatContext () {
 		std::ostringstream text;
 		text << "id\tclass\tname\tselected\tsel_start\tsel_end\n";
@@ -272,7 +285,14 @@ namespace {
 
 	void writeChatContext (bool force = false) {
 		static std::string previousContext;
-		const std::string context = buildChatContext ();
+		/*
+			末尾写上自己的进程号（C5）：对话窗口看到标记就是当前这个 Praat，就
+			知道这份列表是最新的，不用每条消息再投一条空脚本刷新——省一次完整
+			往返（投递 + 等待），也少一次被模态窗口挡住的机会。
+			对这个文件的解析会忽略这一行（praat_ai.tools.parse_object_context）。
+		*/
+		const std::string context = buildChatContext ()
+			+ "# praat-pid=" + std::to_string (praatProcessId ()) + "\n";
 		if (! force && context == previousContext)
 			return;   // 选中对象没有变化时不重复写盘
 		previousContext = context;

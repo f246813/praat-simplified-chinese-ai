@@ -69,15 +69,141 @@ TOOL_PLANNER_INSTRUCTIONS = """
 
 
 def history_messages(history: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """把对话历史转成 messages（只留最近几轮，接口不认的字段一律丢掉）。"""
+    """把对话历史转成 messages（接口不认的字段一律丢掉）。"""
 
     messages: list[dict[str, Any]] = []
-    for item in history[-8:]:
+    for item in history:
         role = str(item.get("role", ""))
         content = str(item.get("content", "") or "")
         if role in {"user", "assistant"} and content:
             messages.append({"role": role, "content": content})
     return messages
+
+
+# ---------------------------------------------------------------------------
+# A5：上下文的 token 预算。
+#
+# 以前是死规矩：历史只带最近 8 条、对象列表整份塞进 system prompt。可 ctx 只有
+# 8192，而光工具 schema 就有 18k 字符（≈5k token），所以长对话或长对象列表时会被
+# 服务端**静默**截掉——用户看到的是模型突然「忘了」前面说过什么。现在按预算算，
+# 并且把「省掉了什么」写出来（prompt 里 + 对话窗口的提示行）。
+# ---------------------------------------------------------------------------
+
+#: 给服务端留的余量（消息包装、工具调用回灌这些零碎开销）。
+SAFETY_TOKENS = 200
+
+
+def estimate_tokens(text: str) -> int:
+    """粗略估 token 数：中日韩字符 ≈ 1 字 1 个，其余（ASCII/JSON 结构）≈ 4 字符 1 个。
+
+    只要「够准」就行：用来决定该丢多少历史，不需要和分词器完全一致（真按词表算得
+    拉一个 tokenizer，而本地只有 llama-server 的 HTTP 接口）。
+    """
+
+    if not text:
+        return 0
+    wide = 0
+    narrow = 0
+    for character in text:
+        if ord(character) >= 0x2E80:   # CJK 部首/汉字/全角标点/假名/谚文…
+            wide += 1
+        else:
+            narrow += 1
+    return wide + (narrow + 3) // 4
+
+
+def history_budget(
+    max_context_tokens: int,
+    *,
+    instructions: str = "",
+    tool_schemas: Any = (),
+    user_text: str = "",
+    response_tokens: int = 700,
+) -> int:
+    """这次请求还能给对话历史留多少 token。
+
+    ``max_context_tokens`` 是配置里的上下文窗口；工具 schema、系统提示、用户这句话
+    和留给模型的回答都要先扣掉，剩下的才是历史能用的。
+    """
+
+    overhead = (
+        estimate_tokens(instructions or "")
+        + estimate_tokens(user_text or "")
+        + int(response_tokens)
+        + SAFETY_TOKENS
+    )
+    schemas = list(tool_schemas or ())
+    if schemas:
+        overhead += estimate_tokens(json.dumps(schemas, ensure_ascii=False))
+    return max(0, int(max_context_tokens) - overhead)
+
+
+def trim_history(
+    history: list[dict[str, str]], *, max_tokens: int
+) -> tuple[list[dict[str, Any]], int]:
+    """按预算从**最近**往回留对话历史，返回 ``(messages, 丢掉的条数)``。
+
+    只留「从某句用户消息开始」的完整后段：如果留下来的第一句是 assistant 的回答，
+    说明它对应的那句用户消息被截掉了，把它也丢掉——宁可少带一轮，也别给模型半截
+    上下文。
+    """
+
+    messages: list[dict[str, Any]] = []
+    used = 0
+    for item in reversed(list(history or [])):
+        role = str(item.get("role", ""))
+        content = str(item.get("content", "") or "")
+        if role not in {"user", "assistant"} or not content:
+            continue
+        cost = estimate_tokens(content) + 4
+        if used + cost > max_tokens:
+            break
+        messages.append({"role": role, "content": content})
+        used += cost
+    messages.reverse()
+    if messages and messages[0]["role"] != "user":
+        messages.pop(0)
+    return messages, max(0, len(history or []) - len(messages))
+
+
+def trim_object_context(context_text: str, *, max_tokens: int) -> tuple[str, int]:
+    """对象列表太长时只列一部分，并写清楚省掉了多少个（返回 ``(文本, 省掉的行数)``）。
+
+    表头和**当前选中**那一行一定留着：提示词第 6 条（「当前对象往往不是 1 号」）就
+    靠这一行；如果选中对象排得很靠后，会把它单独补进来。
+    """
+
+    lines = [line for line in (context_text or "").splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return context_text, 0
+    header, rows = lines[0], lines[1:]
+    if estimate_tokens(context_text) <= max_tokens:
+        return context_text, 0
+
+    kept: list[str] = []
+    used = estimate_tokens(header) + 4
+    for row in rows:
+        cost = estimate_tokens(row) + 1
+        if kept and used + cost > max_tokens:
+            break
+        kept.append(row)
+        used += cost
+
+    selected = ""
+    for row in rows:
+        cells = row.split("\t")
+        if len(cells) >= 4 and cells[3] == "1":
+            selected = f"{cells[0]} 号「{cells[2]}」"
+            if row not in kept:
+                kept.append(row)
+            break
+    hidden = len(rows) - len(kept)
+    note = (
+        f"（对象列表一共 {len(rows)} 个，这里只列了 {len(kept)} 个；"
+        f"还有 {hidden} 个没列出"
+    )
+    note += f"。当前选中是 {selected}）" if selected else "）"
+    return "\n".join([header, *kept, note]), hidden
 
 
 def _parse_tool_arguments(raw: Any) -> dict[str, Any]:

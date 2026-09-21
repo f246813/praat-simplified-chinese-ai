@@ -30,8 +30,10 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 
 class ExternalScriptError(ValueError):
@@ -69,6 +71,9 @@ VECTOR_KINDS = frozenset(
 )
 #: 不占 `runScript` 参数的字段（Praat 自己也会跳过它们）。
 IGNORED_KINDS = frozenset({"comment", "button", "option"})
+
+#: 用户按了「停止」时批处理这边的说明。
+CANCELLED_BATCH = "已取消：这个脚本不再等结果（批处理进程已经结束）。"
 
 FORM_OPEN = re.compile(r"^\s*form\s*:\s*(?P<title>.*)$", re.IGNORECASE)
 FORM_CLOSE = re.compile(r"^\s*endform\s*$", re.IGNORECASE)
@@ -244,28 +249,68 @@ def run_batch(
     *,
     timeout: float = 60.0,
     working_directory: Path | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[bool, str]:
-    """跑批处理，返回 ``(是否成功, 输出/错误文本)``。"""
+    """跑批处理，返回 ``(是否成功, 输出/错误文本)``。
+
+    ``cancelled`` 是对话窗口那个「停止」按钮的回调：每 0.2 秒问一次，用户一按就
+    把批处理进程结束掉——不然跑一个卡住的社区脚本要一直等到超时（C7）。
+    """
 
     creation_flags = 0
     if os.name == "nt":
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if cancelled is not None and cancelled():
+        return False, CANCELLED_BATCH
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             [praat_executable, "--FULL-TRUST", "--run", str(wrapper)],
             cwd=str(working_directory) if working_directory else None,
-            capture_output=True,
-            timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             creationflags=creation_flags,
         )
-    except subprocess.TimeoutExpired:
-        return False, f"脚本在 {timeout:.0f} 秒内没有跑完（它可能自己弹了对话框），已经结束它。"
     except OSError as error:
         return False, f"启动批处理 Praat 失败：{error}"
-    output = decode_console(completed.stdout + completed.stderr)
-    if completed.returncode != 0:
-        return False, output or f"Praat 以退出码 {completed.returncode} 结束。"
-    return True, output
+    deadline = time.monotonic() + timeout
+    output = b""
+    while True:
+        try:
+            output, _stderr = process.communicate(timeout=0.2)
+            break
+        except subprocess.TimeoutExpired:
+            if cancelled is not None and cancelled():
+                _stop_process(process)
+                return False, CANCELLED_BATCH
+            if time.monotonic() >= deadline:
+                _stop_process(process, kill=True)
+                return False, (
+                    f"脚本在 {timeout:.0f} 秒内没有跑完（它可能自己弹了对话框），"
+                    "已经结束它。"
+                )
+    text = decode_console(output or b"")
+    if process.returncode != 0:
+        return False, text or f"Praat 以退出码 {process.returncode} 结束。"
+    return True, text
+
+
+def _stop_process(process, *, kill: bool = False) -> None:
+    """结束一个还开着的批处理进程（先温和、再强杀）。"""
+
+    try:
+        if kill:
+            process.kill()
+        else:
+            process.terminate()
+    except OSError:
+        return
+    try:
+        process.wait(timeout=5)
+    except Exception:   # noqa: BLE001 - 已经要结束了，尽力而为
+        try:
+            process.kill()
+        except Exception:   # noqa: BLE001
+            pass
 
 
 def read_script(path: Path, *, maximum_bytes: int = 2_000_000) -> str:

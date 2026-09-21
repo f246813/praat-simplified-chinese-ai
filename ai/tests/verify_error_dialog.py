@@ -39,14 +39,24 @@ WM_CLOSE = 0x0010
 DELIVERY_TIMEOUT_SEC = 25.0
 
 
-def wait_for_praat(timeout: float = 60.0) -> bool:
+def wait_for_praat(process_id: int, timeout: float = 60.0) -> bool:
+    """等**自己启动的那个** Praat 出现对象窗口（用户可能也开着 Praat）。"""
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if sendpraat.praat_windows():
-            time.sleep(0.5)
+        if any(
+            window.process_id == process_id
+            and window.title == sendpraat.PRAAT_OBJECTS_TITLE
+            for window in sendpraat.praat_windows()
+        ):
+            time.sleep(1.0)
             return True
         time.sleep(0.3)
     return False
+
+
+#: 本次用的那个 Praat 的进程号：只碰自己启动的实例，不打扰用户开着的窗口。
+TARGET_PID: int | None = None
 
 
 def deliver(script: str, name: str, directory: Path) -> float:
@@ -56,7 +66,7 @@ def deliver(script: str, name: str, directory: Path) -> float:
     path.write_text(script, encoding="utf-8")
     chat._clear_result_files()
     started = time.monotonic()
-    delivered, note = sendpraat.deliver(AI_DIRECTORY, path)
+    delivered, note = sendpraat.deliver(AI_DIRECTORY, path, process_id=TARGET_PID)
     if not delivered:
         raise RuntimeError(note)
     deadline = started + DELIVERY_TIMEOUT_SEC
@@ -68,9 +78,9 @@ def deliver(script: str, name: str, directory: Path) -> float:
 
 
 def modal_dialogs() -> list[sendpraat.WindowInfo]:
-    """Praat 进程里的模态对话框（``#32770``）。"""
+    """**本次这个** Praat 进程里的模态对话框（``#32770``）。"""
 
-    process_ids = {window.process_id for window in sendpraat.praat_windows()}
+    process_ids = {TARGET_PID} if TARGET_PID else set()
     return [
         window
         for window in sendpraat.list_windows()
@@ -96,7 +106,7 @@ def deliver_foreign(statements: str) -> None:
     path.write_text(
         "\n# --FULL-TRUST\n" + statements + "\n", encoding="utf-8", newline=""
     )
-    window = sendpraat.choose_window(sendpraat.praat_windows())
+    window = sendpraat.choose_window(sendpraat.praat_windows(), TARGET_PID)
     ctypes.windll.user32.PostMessageW(window.handle, sendpraat.WM_APP, 0, 0)
 
 
@@ -106,19 +116,20 @@ def result_text() -> str:
 
 
 def main() -> int:
+    global TARGET_PID
     if not PRAAT.is_file():
         print(f"没有找到 {PRAAT}，请先构建 Praat.exe。")
         return 2
     if sendpraat.praat_windows():
-        print("已经有一个 Praat 在跑，请先关掉它再跑这个回归。")
-        return 2
+        print("（另外还开着 Praat；这个脚本只操作自己启动的那个实例）")
 
     process = subprocess.Popen([str(PRAAT)], cwd=str(PROJECT))
     failures = 0
     try:
-        if not wait_for_praat():
-            print("Praat 没有起来。")
+        if not wait_for_praat(process.pid):
+            print("自己启动的 Praat 没有出现对象窗口，超时。")
             return 2
+        TARGET_PID = process.pid
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             prepare = (
