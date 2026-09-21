@@ -999,9 +999,9 @@ OpenAI 兼容服务**，真走 HTTP 跑完一轮 `run_turn`——工具 schema 7
   `sys/praat_python.cpp` 的 `handlePythonOutputLine` 接住 → `Melder_progress` →
   Praat 自己的进度窗口（标题「正在处理中」，一根进度条 + 一个「中断」按钮，
   `waitWhileProgress` 会抽消息队列，所以窗口能刷新、Praat 也不僵）；
-  进度点是 `control._progress`：准备启动 0.05 → 启动进程 0.12 →
-  `QwenServerManager._wait_for_endpoint` 里按等待时间从 0.2 爬到 0.9 →
-  就绪 0.95 → 1.0；停止是 0.1 停服务 → 0.6 等端口 → 1.0；
+  进度点是 `control._progress`：查显卡/运行参数 0.05 → 准备启动 0.08 → 查端口 0.10
+  → 启动进程 0.15 → `QwenServerManager._wait_for_endpoint` 里按等待时间从 0.2 爬到
+  0.95 → 就绪 1.0；停止是 0.1 停服务 → 0.6 等端口 → 1.0；
 - **对话窗口那一路**（点「应用预设」，以及切到 API 模式后自动停本地服务）：
   `praat_ai/progress_popup.py` 的 `MiniProgress`——一个只有一句话 + 一根进度条的
   迷你窗（不可缩放、置顶、不给中途关），数据走同一个进度回调
@@ -1013,3 +1013,49 @@ OpenAI 兼容服务**，真走 HTTP 跑完一轮 `run_turn`——工具 schema 7
 **加载过程中确实出现了进度窗口「正在处理中」、加载完自己关掉**；再点「停止前端」
 同样看到进度窗口、端口释放）、`verify_chat_window_ui.py`（进度消息 → 迷你窗出现/
 更新/关闭，以及「API 配置…」按钮能开出窗口）。
+
+#### 8.14.1 「窗口打开时没有进度条、闪一下就没了」是怎么来的（2026-09-21）
+
+用户实测：点「启动前端」后窗口先是没有进度条，随后进度条闪一下，窗口跟着就关了。
+这是三个独立原因叠出来的，每一个单独都能造成那个观感：
+
+1. **C++ 里「先显示、后填内容」**（`sys/Gui_messages.cpp` 的 `gui_progress`）：
+   原来是 `GuiThing_show (dia)` 之后才设标签和进度条，设完只做一次 `GdiFlush ()`
+   ——它只把 GDI 调用刷出去，**不抽消息队列**，所以第一帧画的是空窗口；进度到
+   1.0 又直接 `GuiThing_hide`，用户就只看到「闪一下」。现在：先把标签/进度条设好
+   再 `show`；满格时先画满格那一帧再隐藏；显示之后抽一次消息队列，再用
+   `RedrawWindow`（父窗口）+ `UpdateWindow`（进度条控件）强制重画两遍。
+   - **坑**：`GuiObject->d_widget` 不是 HWND，HWND 在 `structGuiObject::window`
+     字段里（见 `sys/GuiP.h`）；窗口还没真正显示就先 `UpdateWindow`，会把重画请求
+     消费掉，第一帧依旧是空的。
+2. **进度根本没送到 Praat**（`ai/praat_ai/control.py`）：`QwenServerManager` 的进度
+   只回调给了对话窗口，没走 `_progress` → `PRAAT_PROGRESS` 那条路，于是 8 秒加载
+   期间 Praat 那边停在 0.05，最后一下跳到 1.0。现在 manager 的 `progress` 传的是
+   `lambda fraction, message: _progress(fraction, message, progress)`，两个界面同时涨。
+3. **启动前两次 HTTP 探测各卡满 2 秒超时**（`ai/praat_ai/server.py`）：
+   `ensure_started` 上来先问 `server_model_state` / `endpoint_available`，而**本机端口
+   是静默丢包**（不是立刻拒绝），一次探测要等满 2 秒，两次就是 4 秒，进度条就定在
+   原地。现在先花 0.25 秒做一次纯 socket 的 `_endpoint_port_is_open`（按 `base_url`
+   解析 host/port；取不出地址时返回 `True`＝「当它开着」，保持原来的 HTTP 探测行为），
+   端口没开就跳过那两次 HTTP 探测；`_wait_for_endpoint` 也改成「**先报进度** → 再快速
+   探端口 → 端口开了才用 0.8 秒短超时问一句」，`expected` 从 30 秒改成 15 秒。
+   - 顺手修的：`_spawn` 里 `Popen` 失败（llama-server 路径不对、那个文件不是可执行
+     文件……）时，原来会漏出原始 `OSError`，还会把 `qwen-server.log` 的句柄留在手里
+     （Windows 上这个文件之后连删都删不掉）；现在先关句柄，再报
+     `无法启动 llama-server：…`。
+4. **太快结束也像「闪一下」**：加载完那一下补了 `finishProgressWindow ()`
+   （`sys/praat_python.cpp`：先 `Melder_progress (0.999)` + 停 250 毫秒 + `1.0`，
+   让满格那一帧真的画出来）；对话窗口那一路的迷你窗（`progress_popup.MiniProgress`）
+   有 `MINIMUM_VISIBLE_SEC = 0.8`，打开不足 0.8 秒时 `hide_progress` 用
+   `root.after` 延后关，不在弹出的同一瞬间消失。
+
+实测数据（2026-09-21，0.8B 预设）：冷启动从 7.9 秒降到 4.1 秒，进度每 0.25 秒前进
+一格；逐帧数绿色像素：第一帧 0 px（只有轨道和文字）→ 0.2 秒后 14 px → 3.2 秒 73 px
+→ 4.2 秒 119 px。也就是说窗口**第一帧就有进度条（轨道 + 文字标签）**，绿色填充在
+0.2 秒内跟上——Win32 进度条在被映射的那一帧仍按旧位置画，这个滞后在控件内部，
+C++ 已经重画两遍，剩下的属于截图工具会放大的观感。
+
+回归：`ai/tests/test_frontend_model.py`（新增「端口上没东西在听时跳过两次慢探测、
+而且一开始就报进度」和「llama-server 路径不对时报中文错误、不泄漏日志句柄」）、
+`ai/tests/progress_window_utils.py` + `verify_model_progress_live.py`
+（真机抓两张 PNG 数像素：第一帧必须有进度条，0.5 秒后填充必须变多）。

@@ -16,13 +16,56 @@ class QwenServerError(RuntimeError):
     pass
 
 
-def endpoint_available(base_url: str) -> bool:
+def endpoint_available(base_url: str, timeout: float = 2.0) -> bool:
     request = urllib.request.Request(f"{base_url.rstrip('/')}/models")
     try:
-        with urllib.request.urlopen(request, timeout=2) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return 200 <= response.status < 300
     except (OSError, urllib.error.URLError):
         return False
+
+
+def _port_is_open(host: str, port: int, timeout: float = 0.25) -> bool:
+    """端口开没开（快速探测）：模型加载期间它的 HTTP 还没起来，用它把循环跑细一点。"""
+
+    import socket
+
+    try:
+        with socket.create_connection((host or "127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _endpoint_host_port(base_url: str) -> tuple[str, int] | None:
+    """从 base_url 里取出 (host, port)；取不出来时返回 None。"""
+
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(base_url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    if port is None:
+        port = 443 if parts.scheme == "https" else 80
+    return host, int(port)
+
+
+def _endpoint_port_is_open(base_url: str, timeout: float = 0.25) -> bool:
+    """base_url 的端口开没开（快速探测）。
+
+    探测的就是下面要做 HTTP 请求的那个地址：取不出地址时返回 True，
+    也就是「拿不准就当它开着」，别把原来的 HTTP 探测跳过去。
+    """
+
+    address = _endpoint_host_port(base_url)
+    if address is None:
+        return True
+    return _port_is_open(address[0], address[1], timeout=timeout)
 
 
 def _normalize_model_reference(value: str | Path) -> str:
@@ -159,20 +202,26 @@ class QwenServerManager:
         self.last_warning = ""
 
     def ensure_started(self) -> bool:
-        state = server_model_state(
-            self.config.qwen.base_url,
-            self.config.server.model_path,
-        )
-        if state is True:
-            return False   # 已经在跑同一个模型
-        if state is None and endpoint_available(self.config.qwen.base_url):
-            return False   # 服务在跑但读不到模型列表：保持原行为，不擅自重启
-        if state is False:
-            raise QwenServerError(
-                "The running Qwen server already serves a different model. "
-                "Stop it first, or use the frontend menu so it can be restarted: "
-                f"{self.config.server.model_path}"
+        # 先花 0.25 秒看一眼 base_url 的端口：端口没开就不可能在跑「同一个模型」，
+        # 可以直接跳过下面两次 HTTP 探测——本机的端口是**静默丢包**（不是立刻拒绝），
+        # 一次探测要等满 2 秒超时，两次就是 4 秒，用户看到的正是「进度条不动」。
+        self._report(0.10, "检查本机是否已在运行模型服务…")
+        if _endpoint_port_is_open(self.config.qwen.base_url):
+            state = server_model_state(
+                self.config.qwen.base_url,
+                self.config.server.model_path,
             )
+            if state is True:
+                self._report(0.95, "模型服务已经在跑，直接用。")
+                return False   # 已经在跑同一个模型
+            if state is None and endpoint_available(self.config.qwen.base_url):
+                return False   # 服务在跑但读不到模型列表：保持原行为，不擅自重启
+            if state is False:
+                raise QwenServerError(
+                    "The running Qwen server already serves a different model. "
+                    "Stop it first, or use the frontend menu so it can be restarted: "
+                    f"{self.config.server.model_path}"
+                )
         if not self.config.server.auto_start:
             return False
 
@@ -193,6 +242,12 @@ class QwenServerManager:
         last_error = ""
         for use_vision, command in attempts:
             try:
+                self._report(
+                    0.15,
+                    "正在启动 llama-server（读取模型文件）…"
+                    if use_vision
+                    else "正在启动 llama-server（纯文本模式）…",
+                )
                 self._spawn(command)
                 self._wait_for_endpoint()
             except QwenServerError as error:
@@ -270,37 +325,52 @@ class QwenServerManager:
         return command
 
     def _spawn(self, command: list[str]) -> None:
-        self._report(0.12, "正在启动 llama-server（读取模型文件）…")
         self.log_handle = (log_dir() / "qwen-server.log").open("ab")
-        self.process = subprocess.Popen(
-            command,
-            stdout=self.log_handle,
-            stderr=subprocess.STDOUT,
-            creationflags=(
-                getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            ),
-        )
+        try:
+            self.process = subprocess.Popen(
+                command,
+                stdout=self.log_handle,
+                stderr=subprocess.STDOUT,
+                creationflags=(
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                ),
+            )
+        except OSError as error:
+            # 启动失败（llama-server 路径不对、那个文件不是可执行文件……）时别把
+            # 日志句柄留着：Windows 上它会一直占着 qwen-server.log，连删都删不掉，
+            # 而且异常类型换成 QwenServerError，用户看到的中文提示才对得上。
+            self.log_handle.close()
+            self.log_handle = None
+            raise QwenServerError(f"无法启动 llama-server：{error}") from error
 
     def _wait_for_endpoint(self) -> None:
         started = time.time()
         deadline = started + 60
-        #: 加载一个 2B 模型实测 5–20 秒；按 30 秒铺开进度条，永远不越过 0.95。
-        expected = 30.0
+        #: 加载一个 0.8B 模型实测 8 秒、2B 十几秒；按 15 秒铺开进度条，
+        #: 永远不越过 0.95（最后那一下由「已就绪」那一条补上）。
+        expected = 15.0
         while time.time() < deadline:
             if self.process is None:
                 raise QwenServerError("Qwen server is not running.")
             if self.process.poll() is not None:
                 raise QwenServerError("Qwen server exited while starting.")
-            if endpoint_available(self.config.qwen.base_url):
-                self._report(0.95, "模型服务已就绪。")
-                return
+            # 先报进度、再探测：探测有可能卡满超时（端口是静默丢包），
+            # 先报一下用户才能看到进度条在动。
             elapsed = time.time() - started
             self._report(
                 0.2 + 0.7 * min(1.0, elapsed / expected),
                 f"正在加载模型…（已等待 {elapsed:.0f} 秒）",
             )
-            time.sleep(0.5)
+            # 先看 base_url 的端口开没开（0.25 秒的快速探测），开上了再做一次
+            # 完整的 HTTP 检查。直接做 HTTP 检查时，模型还没监听，每次连接都要
+            # 等满 2 秒超时，循环就变成 2.5 秒才报一次进度（进度条一顿一顿的）。
+            if _endpoint_port_is_open(self.config.qwen.base_url):
+                # 端口开了：用短超时问一句，能答上就算就绪（模型已经在监听了）。
+                if endpoint_available(self.config.qwen.base_url, timeout=0.8):
+                    self._report(0.95, "模型服务已就绪。")
+                    return
+            time.sleep(0.25)
         self.stop()
         raise QwenServerError("Timed out waiting for the Qwen server.")
 

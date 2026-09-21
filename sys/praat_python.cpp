@@ -74,6 +74,23 @@ static bool handlePythonOutputLine (
 	return true;
 }
 
+/*
+	Python 调用跑完时的收尾：先把「满格 + 完成」那一帧画出来，停一小会儿再关窗口。
+
+	不然一个几秒就跑完的操作（模型已经在跑、或者本来就快）在用户眼里只剩
+	「窗口闪一下就没了」——2026-09-21 用户报的。这里只在这条 Python 调用链上等
+	一下，不影响 Praat 自己的其它进度窗口。
+*/
+static void finishProgressWindow () {
+	Melder_progress (0.999, U"完成。");
+	#if defined (_WIN32)
+		Sleep (250);
+	#else
+		usleep (250000);
+	#endif
+	Melder_progress (1.0);
+}
+
 static std::string escape_json_string (const std::string &str) {
 	std::ostringstream oss;
 	for (unsigned char c : str) {
@@ -907,7 +924,7 @@ static void praat_runPythonScriptFile_impl (conststring32 filePath, conststring3
 		if (! pendingOutput. empty ())
 			handlePythonOutputLine (pendingOutput, outputAccum, progressWasShown);
 		if (progressWasShown)
-			Melder_progress (1.0);
+			finishProgressWindow ();
 
 		WaitForSingleObject (pi.hProcess, INFINITE);
 		DWORD exitCode = 0;
@@ -989,7 +1006,7 @@ static void praat_runPythonScriptFile_impl (conststring32 filePath, conststring3
 			handlePythonOutputLine (line, outputAccum, progressWasShown);
 		}
 		if (progressWasShown)
-			Melder_progress (1.0);
+			finishProgressWindow ();
 		int status = pclose (pipe);
 		int exitCode = WIFEXITED (status) ? WEXITSTATUS (status) : -1;
 

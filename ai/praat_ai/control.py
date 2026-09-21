@@ -312,6 +312,7 @@ def _launch_server(
     *,
     progress: ProgressSink | None = None,
 ) -> dict[str, Any]:
+    _progress(0.05, "检查显卡与运行参数…", progress)
     gpu = detect_gpu()
     preset = active_preset(config)
     vision_requested = (
@@ -323,8 +324,16 @@ def _launch_server(
     )
     profile = apply_preset_to_profile(profile, preset)
     config.server.auto_start = True
-    _progress(0.05, "准备启动本地模型服务…", progress)
-    manager = QwenServerManager(config, profile, progress=progress)
+    _progress(0.08, "准备启动本地模型服务…", progress)
+    # manager 的进度要同时「打印给 Praat」和「回调给对话窗口」：加载一个模型实测要
+    # 8 秒左右，这段时间里进度条必须一直在涨。（2026-09-21 用户报的「窗口打开时没有
+    # 进度条、随后闪一下就没了」有一半原因在这里：以前只回传给了对话窗口，
+    # Praat 那条路一个中间进度都没有。）
+    manager = QwenServerManager(
+        config,
+        profile,
+        progress=lambda fraction, message: _progress(fraction, message, progress),
+    )
     manager.ensure_started()
     if manager.process and manager.process.pid:
         pid_path().write_text(str(manager.process.pid), encoding="utf-8")

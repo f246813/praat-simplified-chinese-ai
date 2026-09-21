@@ -18,6 +18,7 @@ from __future__ import annotations
 import ctypes
 import subprocess
 import sys
+import tempfile
 import time
 from ctypes import wintypes
 from pathlib import Path
@@ -28,6 +29,7 @@ sys.path.insert(0, str(TESTS_DIR))
 
 from praat_ai import chat, control, sendpraat   # noqa: E402
 import verify_ai_menu_no_crash as menu_helper   # noqa: E402
+import progress_window_utils as progress_utils   # noqa: E402
 
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -57,22 +59,9 @@ def wait_for(predicate, timeout: float, label: str):
     raise SystemExit(f"等待超时：{label}")
 
 
-def progress_windows() -> list[sendpraat.WindowInfo]:
-    """**可见的**进度小窗。
-
-    Praat 的进度窗口用完是「隐藏」而不是销毁（`XtUnmanageChild`），所以必须只看
-    可见的那些，否则会一直以为它还开着。
-    """
-
-    return [
-        window
-        for window in sendpraat.list_windows()
-        if window.visible
-        and (
-            window.title.strip() in PROGRESS_TITLES
-            or window.title.strip().startswith(tuple(PROGRESS_TITLES))
-        )
-    ]
+def progress_windows(process_id: int | None = None) -> list[sendpraat.WindowInfo]:
+    window = progress_utils.find_progress_window(process_id or 0)
+    return [window] if window is not None else []
 
 
 def click_menu(handle: int, labels: tuple[str, ...], problems: list[str]) -> None:
@@ -138,6 +127,10 @@ def main() -> int:
         # ---- 加载：进度小窗必须出现，加载完必须消失 ----
         click_menu(editor.handle, ("启动前端", "Start frontend"), problems)
         seen: list[str] = []
+        #: 首次可见那一帧的截图（用来验「窗口打开时进度条就在」）。
+        first_frame: Path | None = None
+        #: 0.5 秒之后再截一张（验填充确实开始长出来）。
+        second_frame: Path | None = None
         deadline = time.time() + 90
         finished = False
         while time.time() < deadline:
@@ -145,6 +138,14 @@ def main() -> int:
             for window in windows:
                 if window.title not in seen:
                     seen.append(window.title)
+                if first_frame is None:
+                    shot = Path(tempfile.gettempdir()) / "praat-progress-first.png"
+                    if progress_utils.capture_png(window.handle, shot):
+                        first_frame = shot
+                        time.sleep(0.5)
+                        again = Path(tempfile.gettempdir()) / "praat-progress-second.png"
+                        if progress_utils.capture_png(window.handle, again):
+                            second_frame = again
             if control.endpoint_available(control.load_config().qwen.base_url):
                 finished = True
                 break
@@ -154,6 +155,27 @@ def main() -> int:
             problems.append("加载模型时没有看到进度小窗口")
         if not finished:
             problems.append("模型服务在 90 秒内没有就绪")
+
+        # 「窗口打开时就有进度条」：第一帧里必须有进度条（填充或轨道），
+        # 而且 0.5 秒后填充要比第一帧多（说明真的在涨）。
+        if first_frame is not None and second_frame is not None:
+            try:
+                first_green, first_track, width = progress_utils.bar_metrics(first_frame)
+                later_green, _later_track, _width = progress_utils.bar_metrics(second_frame)
+                print(
+                    f"· 第一帧进度条：填充 {first_green} px、轨道 {first_track} px"
+                    f"（窗口宽 {width}）；0.5 秒后填充 {later_green} px"
+                )
+                if first_green + first_track <= 0:
+                    problems.append("窗口第一帧里看不到进度条")
+                if later_green <= first_green:
+                    problems.append(
+                        f"进度条没有在涨（{first_green} → {later_green} px）"
+                    )
+            except ImportError:
+                print("· （没装 Pillow，跳过像素检查）")
+        else:
+            print("· （没截到进度窗口的图，跳过像素检查）")
         wait_for(lambda: not progress_windows(), 20, "进度小窗消失")
         print("· 加载完：进度小窗自己关掉了")
 

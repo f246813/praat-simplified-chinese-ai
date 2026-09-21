@@ -1858,9 +1858,17 @@ class ChatWindow:
         self.progress_window.update(fraction, message or None)
 
     def hide_progress(self) -> None:
-        if self.progress_window is not None:
-            self.progress_window.close()
-            self.progress_window = None
+        window = self.progress_window
+        if window is None:
+            return
+        # 太快结束的操作（例如模型已经在跑时点「应用预设」）也让小窗露个脸再关，
+        # 不然用户只看到「闪一下」。
+        remaining = window.remaining_minimum_seconds()
+        if remaining > 0.0:
+            self.root.after(int(remaining * 1000) + 20, self.hide_progress)
+            return
+        window.close()
+        self.progress_window = None
 
     def close(self) -> None:
         pid_path = runtime_dir() / "chat.pid"

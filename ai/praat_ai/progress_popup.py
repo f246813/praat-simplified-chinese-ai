@@ -11,6 +11,11 @@
 
 from __future__ import annotations
 
+import time
+
+#: 小窗最少显示多久：一次「应用预设」有时几百毫秒就完了，不兜一下用户只看到一闪。
+MINIMUM_VISIBLE_SEC = 0.8
+
 
 class MiniProgress:
     """挂在对话窗口上的迷你进度窗（简约：一句话 + 一根进度条 + 自动消失）。"""
@@ -21,6 +26,7 @@ class MiniProgress:
 
         self._tk = tk
         self.root = root
+        self.shown_at = time.monotonic()
         self.window = tk.Toplevel(root)
         self.window.title(title)
         self.window.resizable(False, False)
@@ -44,7 +50,13 @@ class MiniProgress:
             frame, mode="determinate", maximum=100.0, length=280
         )
         self.bar.pack(fill="x", pady=(8, 0))
+        # 一开始就画出进度条（0%），别让用户先看到一个空窗口。
+        self.bar.configure(value=0.0)
         self._place_near_parent()
+        try:
+            self.window.update_idletasks()
+        except Exception:   # noqa: BLE001
+            pass
 
     def _place_near_parent(self) -> None:
         """显示在对话窗口中间偏上一点（不遮住输入框）。"""
@@ -77,3 +89,9 @@ class MiniProgress:
             self.window.destroy()
         except Exception:   # noqa: BLE001
             pass
+
+    def remaining_minimum_seconds(self) -> float:
+        """还要等多久才允许关闭（不够 MINIMUM_VISIBLE_SEC 就返回剩下的秒数）。"""
+
+        elapsed = time.monotonic() - self.shown_at
+        return max(0.0, MINIMUM_VISIBLE_SEC - elapsed)

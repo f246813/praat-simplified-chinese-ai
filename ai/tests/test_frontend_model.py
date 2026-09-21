@@ -312,13 +312,21 @@ class EnsureStartedTests(unittest.TestCase):
             item.stop()
         self._temp.cleanup()
 
-    def build_manager(self, profile_vision: bool = True) -> QwenServerManager:
+    def build_manager(
+        self,
+        profile_vision: bool = True,
+        progress: object = None,
+    ) -> QwenServerManager:
         config = control.load_config(self.config_path())
         config.server.llama_server = str(self.server_exe)
         config.server.model_path = str(self.model)
         config.server.mmproj_path = str(self.mmproj)
         config.server.auto_start = True
-        return QwenServerManager(config, select_runtime_profile(None, profile_vision))
+        return QwenServerManager(
+            config,
+            select_runtime_profile(None, profile_vision),
+            progress=progress,
+        )
 
     def config_path(self) -> Path:
         path = self.directory / "ai_config.json"
@@ -358,6 +366,43 @@ class EnsureStartedTests(unittest.TestCase):
         manager = self.build_manager(profile_vision=False)
         command = manager._build_command(self.server_exe, self.model, None)
         self.assertIn("--jinja", command)
+
+    def test_port_check_skips_the_slow_http_probes_and_reports_progress(self) -> None:
+        """端口上没东西在听时，跳过两轮 2 秒超时的 HTTP 探测，而且一开始就报进度。
+
+        用户看到的「窗口打开时没有进度条」就是这两轮超时（4 秒）害的：以前
+        `ensure_started` 上来先问两遍 `http://127.0.0.1:8000/v1/models`，
+        本机端口是静默丢包，每遍都等满 2 秒，进度条 4 秒不动。
+        """
+
+        notes: list[str] = []
+        manager = self.build_manager(
+            profile_vision=False,
+            progress=lambda fraction, message: notes.append(message),
+        )
+        with (
+            patch.object(server_module, "endpoint_available") as endpoint,
+            patch.object(server_module, "server_model_state") as state,
+            patch.object(QwenServerManager, "_spawn"),
+            patch.object(QwenServerManager, "_wait_for_endpoint"),
+        ):
+            self.assertTrue(manager.ensure_started())
+        endpoint.assert_not_called()
+        state.assert_not_called()
+        self.assertIn("检查本机是否已在运行模型服务…", notes)
+
+    def test_bad_server_executable_reports_an_error_without_leaking_the_log(self) -> None:
+        """llama-server 路径不对时要报中文错误，而且不能把日志文件句柄留在手里。
+
+        以前这里漏出去的是原始 OSError，日志句柄也没关：Windows 上
+        `qwen-server.log` 会一直被占着（连删都删不掉）。
+        """
+
+        manager = self.build_manager(profile_vision=False)
+        with self.assertRaises(QwenServerError) as caught:
+            manager.ensure_started()
+        self.assertIn("llama-server", str(caught.exception))
+        self.assertIsNone(manager.log_handle)
 
 
 class VisionFallbackTests(unittest.TestCase):
