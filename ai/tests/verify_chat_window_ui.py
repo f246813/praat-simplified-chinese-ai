@@ -186,6 +186,54 @@ def main() -> int:
                 pump(window, 1)
         except Exception as error:   # noqa: BLE001
             problems.append(f"API 配置窗口检查失败：{error}")
+
+        # 「可以输入 api key」这件事要真的验一遍：填 key → 保存 → 写进配置。
+        # 用**临时配置**，绝不碰真实的 ai_config.json。
+        try:
+            import json
+            import tempfile
+
+            from praat_ai import api_settings
+
+            with tempfile.TemporaryDirectory() as raw:
+                path = Path(raw) / "ai_config.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "qwen": {"base_url": "http://127.0.0.1:8000/v1", "model": "local.gguf"},
+                            "server": {"model_path": "D:/models/local.gguf"},
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                dialog = api_settings.ApiSettingsDialog(window.root, config_path=path)
+                print(f"· API 配置窗口的 key 输入框：show = {dialog.key_entry.cget('show')!r}")
+                if str(dialog.key_entry.cget("show")) != "•":
+                    problems.append("API key 输入框默认没有打码")
+                dialog.provider.set("DeepSeek")
+                dialog._on_provider()
+                dialog.model.set("deepseek-chat")
+                dialog.api_key.set("sk-live-test")
+                dialog.enabled.set(True)
+                dialog.save()
+                pump(window, 1)
+                saved = json.loads(path.read_text(encoding="utf-8")).get("api", {})
+                ok = (
+                    saved.get("api_key") == "sk-live-test"
+                    and saved.get("enabled") is True
+                    and saved.get("model") == "deepseek-chat"
+                    and saved.get("base_url", "").startswith("https://")
+                )
+                print(
+                    f"· 填 key 并保存：{'成功' if ok else '失败'} "
+                    f"（enabled={saved.get('enabled')}, model={saved.get('model')}, "
+                    f"key 长度={len(saved.get('api_key', ''))}）"
+                )
+                if not ok:
+                    problems.append(f"「填 API key 并保存」没有写进配置：{saved}")
+        except Exception as error:   # noqa: BLE001
+            problems.append(f"API key 保存检查失败：{error}")
         window.flush_messages()
 
         if switch and len(labels) >= 2:
