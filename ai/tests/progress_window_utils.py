@@ -40,6 +40,42 @@ def find_progress_window(process_id: int = 0) -> sendpraat.WindowInfo | None:
     return None
 
 
+PROGRESS_CLASS = "msctls_progress32"
+PBM_GETPOS = 0x0408
+
+
+def progress_bar_handle(handle: int) -> int | None:
+    """窗口里那个进度条控件（Class ``msctls_progress32``）的句柄。"""
+
+    found: list[int] = []
+
+    @WNDENUMPROC
+    def visit(child, _param):   # type: ignore[no-untyped-def]
+        name = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(child, name, 64)
+        if name.value == PROGRESS_CLASS:
+            found.append(int(child))
+            return False
+        return True
+
+    user32.EnumChildWindows(handle, visit, 0)
+    return found[0] if found else None
+
+
+def bar_position(handle: int) -> int | None:
+    """进度条**当前值**（``PBM_GETPOS``）。
+
+    比「数绿色像素」稳得多：不受主题、粗细、DPI 影响，也不会把还没画上的填充
+    当成「没在涨」。返回 ``None`` 表示窗口里没有进度条控件。
+    """
+
+    bar = progress_bar_handle(handle)
+    if bar is None:
+        return None
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    return int(user32.SendMessageW(bar, PBM_GETPOS, 0, 0))
+
+
 def child_texts(handle: int) -> list[str]:
     """窗口里的子控件文字（标签、按钮）。"""
 

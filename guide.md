@@ -1159,3 +1159,22 @@ Praat 主线程整个被堵住：
 默认/高/关、被拒后不带重试、`400` 不点名也要降级）、
 `python ai/tests/verify_api_mode.py`（假服务端里真发一遍，断言系统提示有
 「语言学」、默认档位是 `medium`、改成 `high` 之后请求里就是 `high`）。
+
+#### 8.15.5 真机回归自带临时配置（`PRAAT_AI_CONFIG_PATH`）
+
+用户把前端切成 API 模式之后，「启动前端」就**不会**再拉起本地 llama-server，
+于是所有跑本地模型的真机回归（进度窗口、预设切换…）都会「跑不过」——其实是被
+配置挡住的。
+
+现在 `config.default_config_path()` 也认 `PRAAT_AI_CONFIG_PATH`（以前只有
+`control.main` 认，对话窗口不认，两边会读到不同的配置），真机回归可以整份换掉
+配置文件：`verify_model_progress_live.py` 发现当前配置是 API 模式时，会复制一份
+**去掉 API 开关和 key** 的临时配置，设好环境变量再起 Praat——用户的
+`ai/ai_config.json` 一个字都不动（Praat 子进程继承环境，所以菜单那条路也走临时
+配置）。
+
+同一条回归里「进度条在涨」的判据也换掉了：以前数绿色像素（第一帧 1 px、0.5 秒后
+0 px 这种抖动会误报），现在直接读进度条控件的值
+（`progress_window_utils.bar_position` → Win32 `PBM_GETPOS`），不受主题和 DPI
+影响。实测：第一帧 `PBM_GETPOS=500`（= 0.05）且窗口里已有「检查显卡与运行参数…」
+和进度条轨道，之后 2705，加载完小窗自己关掉。

@@ -139,6 +139,21 @@ class ApiConfigParsingTests(unittest.TestCase):
         self.assertEqual(config.qwen.model, "qwen-max")
 
 
+    def test_config_path_can_be_overridden_by_the_environment(self) -> None:
+        """``PRAAT_AI_CONFIG_PATH`` 整份换配置文件。
+
+        真机回归要跑本地模型时，用户可能已经切到了 API 模式；这条开关让回归自己
+        带一份临时配置，不用动用户的 ai_config.json（以前只有菜单那条路认它）。
+        """
+
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), LOCAL_ONLY)
+            with patch.dict(os.environ, {"PRAAT_AI_CONFIG_PATH": str(path)}):
+                self.assertEqual(config_module.default_config_path(), path)
+                config = load_config()
+        self.assertEqual(config.qwen.model, "Qwen3.5-0.8B-Q4_K_M.gguf")
+
+
 class ClientPayloadTests(unittest.TestCase):
     def setUp(self) -> None:
         # 「哪个服务端不认哪个字段」是模块级记忆（按 base_url 分），

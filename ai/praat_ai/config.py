@@ -161,6 +161,13 @@ class AppConfig:
 
 
 def default_config_path() -> Path:
+    # ``PRAAT_AI_CONFIG_PATH`` 可以整份换掉配置文件（真机回归自己带一份临时配置
+    # 时用，免得动用户的 ai_config.json——比如用户已经切成 API 模式时，
+    # 本地模型那几条回归就没法跑了）。以前只有 control.main 认这个变量，
+    # 对话窗口不认，两边会读到不同的配置。
+    override = os.getenv("PRAAT_AI_CONFIG_PATH", "").strip()
+    if override:
+        return Path(override)
     return Path(__file__).resolve().parents[1] / "ai_config.json"
 
 

@@ -16,6 +16,8 @@ llama-server（如果你本来就开着它，跑完请自己再启动一次）�
 from __future__ import annotations
 
 import ctypes
+import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -82,6 +84,29 @@ def main() -> int:
         print("已经有一个 Praat 在跑，请先关掉它再跑这个回归。")
         return 2
 
+    # 这条回归跑的是**本地**模型：用户的配置要是切到了 API 模式，「启动前端」就
+    # 不会再拉起 llama-server（也就没有加载进度可看）。这时自己带一份临时配置
+    # （PRAAT_AI_CONFIG_PATH，只关掉 API 开关、不带 key），绝不动用户的 ai_config.json。
+    from praat_ai import config as config_module
+
+    temporary_directory = None
+    real_config = config_module.default_config_path()
+    if real_config.is_file():
+        payload = json.loads(real_config.read_text(encoding="utf-8"))
+        if payload.get("api", {}).get("enabled"):
+            temporary_directory = tempfile.TemporaryDirectory()
+            local_path = Path(temporary_directory.name) / "ai_config.json"
+            payload.setdefault("api", {})["enabled"] = False
+            payload["api"]["api_key"] = ""   # 临时副本里不留 key
+            local_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            os.environ["PRAAT_AI_CONFIG_PATH"] = str(local_path)
+            print(
+                "· 你的配置现在是 API 模式：本次回归改用一份临时配置（只关掉 API 开关），"
+                "不动 ai/ai_config.json"
+            )
+
     # 先确保本地服务是停的，这样「启动前端」会真的走一遍加载流程。
     print("· 先把本机模型服务停掉（这样下面才能看到完整的加载进度）")
     control.stop_frontend()
@@ -131,6 +156,9 @@ def main() -> int:
         first_frame: Path | None = None
         #: 0.5 秒之后再截一张（验填充确实开始长出来）。
         second_frame: Path | None = None
+        #: 每看到一次窗口就读一遍进度条当前值（PBM_GETPOS，比数像素稳）。
+        positions: list[int] = []
+        first_labels: list[str] = []
         deadline = time.time() + 90
         finished = False
         while time.time() < deadline:
@@ -138,7 +166,11 @@ def main() -> int:
             for window in windows:
                 if window.title not in seen:
                     seen.append(window.title)
+                position = progress_utils.bar_position(window.handle)
+                if position is not None:
+                    positions.append(position)
                 if first_frame is None:
+                    first_labels = progress_utils.child_texts(window.handle)
                     shot = Path(tempfile.gettempdir()) / "praat-progress-first.png"
                     if progress_utils.capture_png(window.handle, shot):
                         first_frame = shot
@@ -164,18 +196,32 @@ def main() -> int:
                 later_green, _later_track, _width = progress_utils.bar_metrics(second_frame)
                 print(
                     f"· 第一帧进度条：填充 {first_green} px、轨道 {first_track} px"
-                    f"（窗口宽 {width}）；0.5 秒后填充 {later_green} px"
+                    f"（窗口宽 {width}）；0.5 秒后填充 {later_green} px；"
+                    f"PBM_GETPOS 采样 {positions[:6]}{'…' if len(positions) > 6 else ''}"
                 )
                 if first_green + first_track <= 0:
                     problems.append("窗口第一帧里看不到进度条")
-                if later_green <= first_green:
-                    problems.append(
-                        f"进度条没有在涨（{first_green} → {later_green} px）"
-                    )
             except ImportError:
                 print("· （没装 Pillow，跳过像素检查）")
         else:
             print("· （没截到进度窗口的图，跳过像素检查）")
+        # 「窗口打开时就有进度条」的硬判据：第一帧就能读到进度条控件，
+        # 而且后面采样到的值要比第一帧大（真的在涨）。
+        if not positions:
+            problems.append("进度窗口里读不到进度条控件（PBM_GETPOS 拿不到值）")
+        elif len(positions) < 2:
+            print(
+                f"· （这次只采到一次进度条读数 {positions[0]}，跳过「在涨」的判断）"
+            )
+        elif max(positions) <= positions[0]:
+            problems.append(f"进度条没有在涨（PBM_GETPOS 一直是 {positions[0]}）")
+        else:
+            print(
+                f"· 进度条真的在涨：{positions[0]} → {max(positions)}"
+                f"（共 {len(positions)} 次采样）"
+            )
+        if first_labels:
+            print(f"· 第一帧窗口里的文字：{first_labels}")
         wait_for(lambda: not progress_windows(), 20, "进度小窗消失")
         print("· 加载完：进度小窗自己关掉了")
 
@@ -219,6 +265,9 @@ def main() -> int:
                 process.kill()
         menu_helper.close_chat_window()
         control.stop_frontend()
+        if temporary_directory is not None:
+            os.environ.pop("PRAAT_AI_CONFIG_PATH", None)
+            temporary_directory.cleanup()
 
     if problems:
         print("")
