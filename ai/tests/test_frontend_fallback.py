@@ -41,7 +41,7 @@ class StopByPortTests(unittest.TestCase):
         self.pid_file = Path(self._temp.name) / "qwen.pid"   # 故意不存在，模拟 pid 丢失
         self.config = AppConfig()
         self.config.server.llama_server = (
-            r"D:\llama.cpp-Qwen\llama.cpp b11030cuda12\llama-server.exe"
+            r"D:\llama.cpp\llama-server.exe"
         )
         self.config.server.port = 8000
         self.patch_pid = patch.object(control, "pid_path", return_value=self.pid_file)

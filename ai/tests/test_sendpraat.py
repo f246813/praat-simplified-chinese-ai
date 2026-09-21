@@ -70,16 +70,16 @@ class MessageTests(unittest.TestCase):
 
     def test_message_starts_with_the_trust_marker_and_the_script(self) -> None:
         message = sendpraat.build_message(
-            Path("D:/Praat-work/praat-simplified-chinese/ai"),
-            Path("D:/Praat-work/praat-simplified-chinese/ai/runtime/chat_command.praat"),
+            Path("D:/praat/praat-simplified-chinese/ai"),
+            Path("D:/praat/praat-simplified-chinese/ai/runtime/chat_command.praat"),
         )
         # praat_executeScript_noGUI() 靠这一行给完全信任（脚本要写 runtime/ 之外的路径）。
         self.assertTrue(message.startswith("\n# --FULL-TRUST\n"))
         self.assertIn(
-            'setWorkingDirectory: "D:/Praat-work/praat-simplified-chinese/ai"', message
+            'setWorkingDirectory: "D:/praat/praat-simplified-chinese/ai"', message
         )
         self.assertIn(
-            'runScript: "D:/Praat-work/praat-simplified-chinese/ai/runtime/chat_command.praat"',
+            'runScript: "D:/praat/praat-simplified-chinese/ai/runtime/chat_command.praat"',
             message,
         )
 

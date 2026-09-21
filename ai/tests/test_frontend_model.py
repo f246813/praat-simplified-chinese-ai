@@ -21,7 +21,7 @@ from praat_ai.vram import select_runtime_profile
 
 
 SMALL_MODEL = r"D:\models\Qwen3.5-0.8B-Q4_K_M.gguf"
-BIG_MODEL = r"D:\llama.cpp-Qwen\Qwen3.5-2B-UD-Q5_K_XL.gguf"
+BIG_MODEL = r"D:\llama.cpp\Qwen3.5-2B-UD-Q5_K_XL.gguf"
 
 
 class _ModelsHandler(BaseHTTPRequestHandler):

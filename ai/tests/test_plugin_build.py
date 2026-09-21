@@ -112,8 +112,8 @@ class ChatLauncherTests(unittest.TestCase):
     def test_install_writes_the_expected_folder(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             target = build_plugin.install(
-                project_directory=Path("D:/Praat-work/praat-simplified-chinese"),
-                python_executable="D:/Praat-work/venv-ai/Scripts/python.exe",
+                project_directory=Path("D:/praat/praat-simplified-chinese"),
+                python_executable="D:/py/venv/Scripts/python.exe",
                 destination=Path(raw) / "plugin_praat_ai",
                 quiet=True,
             )

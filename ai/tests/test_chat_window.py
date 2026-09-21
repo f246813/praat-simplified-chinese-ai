@@ -83,7 +83,7 @@ class PraatProcessTests(unittest.TestCase):
         with patch.object(chat.subprocess, "run") as run, patch.object(
             chat, "praat_process_running_from", return_value=True
         ), patch.object(chat, "_send_script", return_value=(True, "")) as send:
-            chat.refresh_object_context("D:/Praat-work/Praat.exe", [1234])
+            chat.refresh_object_context("D:/praat/Praat.exe", [1234])
         run.assert_not_called()
         send.assert_called_once()
 
@@ -97,7 +97,7 @@ class PraatProcessTests(unittest.TestCase):
         with patch.object(chat.subprocess, "run", return_value=completed) as run, patch.object(
             chat, "_send_script", return_value=(True, "")
         ):
-            chat.refresh_object_context("D:/Praat-work/Praat.exe")
+            chat.refresh_object_context("D:/praat/Praat.exe")
         self.assertEqual(run.call_count, 1)
 
     def test_multiple_instances_produce_a_warning(self) -> None:
@@ -111,8 +111,8 @@ class PraatProcessTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(chat.subprocess, "run", return_value=completed):
-            self.assertEqual(chat.praat_process_ids("D:/Praat-work/Praat.exe"), [1234, 5678])
-            self.assertIn("2 个 Praat", chat.praat_instance_warning("D:/Praat-work/Praat.exe"))
+            self.assertEqual(chat.praat_process_ids("D:/praat/Praat.exe"), [1234, 5678])
+            self.assertIn("2 个 Praat", chat.praat_instance_warning("D:/praat/Praat.exe"))
 
     def test_single_instance_has_no_warning(self) -> None:
         completed = CompletedProcess(
@@ -132,7 +132,7 @@ class PraatProcessTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(chat.subprocess, "run", return_value=completed):
-            self.assertFalse(chat.praat_process_running("D:/Praat-work/Praat.exe"))
+            self.assertFalse(chat.praat_process_running("D:/praat/Praat.exe"))
 
     def test_running_process_is_detected(self) -> None:
         completed = CompletedProcess(
@@ -142,11 +142,11 @@ class PraatProcessTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(chat.subprocess, "run", return_value=completed):
-            self.assertTrue(chat.praat_process_running("D:/Praat-work/Praat.exe"))
+            self.assertTrue(chat.praat_process_running("D:/praat/Praat.exe"))
 
     def test_tasklist_failure_does_not_block_sending(self) -> None:
         with patch.object(chat.subprocess, "run", side_effect=OSError("no tasklist")):
-            self.assertTrue(chat.praat_process_running("D:/Praat-work/Praat.exe"))
+            self.assertTrue(chat.praat_process_running("D:/praat/Praat.exe"))
 
     def test_missing_executable_is_not_a_blocker(self) -> None:
         self.assertTrue(chat.praat_process_running(""))
@@ -380,14 +380,14 @@ class SendScriptTests(unittest.TestCase):
 class StatusTextTests(unittest.TestCase):
     def make_config(self) -> AppConfig:
         config = AppConfig()
-        config.server.model_path = r"D:\llama.cpp-Qwen\Qwen3.5-2B-UD-Q5_K_XL.gguf"
+        config.server.model_path = r"D:\llama.cpp\Qwen3.5-2B-UD-Q5_K_XL.gguf"
         config.qwen.base_url = "http://127.0.0.1:9/v1"
         return config
 
     def test_status_uses_live_model_and_vision(self) -> None:
         config = self.make_config()
         info = {
-            "id": r"D:\llama.cpp-Qwen\Qwen3.5-2B-UD-Q5_K_XL.gguf",
+            "id": r"D:\llama.cpp\Qwen3.5-2B-UD-Q5_K_XL.gguf",
             "capabilities": ["completion", "multimodal"],
         }
         with patch.object(chat, "running_model_info", return_value=info):

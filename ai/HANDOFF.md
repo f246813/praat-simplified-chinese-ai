@@ -13,11 +13,11 @@
 - 验证命令（必须用项目自带的 Python，PATH 里的 `python` 缺依赖）：
 
   ```powershell
-  cd D:\Praat-work\praat-simplified-chinese
+  cd <仓库根目录>
   $env:PYTHONPATH='ai'; $env:PYTHONIOENCODING='utf-8'; $env:PYTHONDONTWRITEBYTECODE='1'
-  & D:\Praat-work\venv-ai\Scripts\python.exe -m unittest discover -s ai/tests    # 185 个，约 53 秒
-  & D:\Praat-work\venv-ai\Scripts\python.exe ai/tests/verify_chat_templates.py  # 43 个，真 Praat，约 4 秒
-  & D:\Praat-work\venv-ai\Scripts\python.exe ai/tests/verify_chat_no_popup.py   # 真机：发指令不许动窗口
+  & <venv>\Scripts\python.exe -m unittest discover -s ai/tests    # 185 个，约 53 秒
+  & <venv>\Scripts\python.exe ai/tests/verify_chat_templates.py  # 43 个，真 Praat，约 4 秒
+  & <venv>\Scripts\python.exe ai/tests/verify_chat_no_popup.py   # 真机：发指令不许动窗口
   ```
 
   第二种会反复启动 `Praat.exe`（每个用例一个新进程），会写 `ai/runtime/`；

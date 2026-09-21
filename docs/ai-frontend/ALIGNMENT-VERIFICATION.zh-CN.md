@@ -4,10 +4,10 @@
 
 ## 环境
 
-- Miniforge：`C:\Users\f2468\miniforge3`
+- Miniforge：`%USERPROFILE%\miniforge3`
 - MFA 环境：`aligner`
 - MFA 版本：3.4.2
-- Python 属性环境：`D:\Praat-work\venv-ai`
+- Python 属性环境：`<venv>`
 - wav2vec2：`facebook/wav2vec2-lv-60-espeak-cv-ft`
 
 已安装 MFA、Kalpy、Kaldi、OpenFST、NGram、Baum-Welch、Pynini，以及中文

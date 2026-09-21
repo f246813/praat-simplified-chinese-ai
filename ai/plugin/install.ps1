@@ -3,7 +3,7 @@
 #
 # Usage (from the repository root):
 #     powershell -ExecutionPolicy Bypass -File ai\plugin\install.ps1
-#     powershell -ExecutionPolicy Bypass -File ai\plugin\install.ps1 -Python D:\Praat-work\venv-ai\Scripts\pythonw.exe
+#     powershell -ExecutionPolicy Bypass -File ai\plugin\install.ps1 -Python <venv>\Scripts\pythonw.exe
 #
 # It does two things:
 #   1. regenerates praatAiMeasure.praat from ai/praat_ai/measures.tsv;

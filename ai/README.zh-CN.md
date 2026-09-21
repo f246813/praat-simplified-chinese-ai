@@ -8,7 +8,7 @@
    本机已经创建好独立环境，可直接填写：
 
    ```text
-   D:\Praat-work\venv-ai\Scripts\python.exe
+   <venv>\Scripts\python.exe
    ```
 
 2. 安装基础依赖：
@@ -61,8 +61,8 @@ llama-server：只要端口上运行的不是配置里的模型，前端会先�
   {
     "id": "qwen3.5-2b-vision",
     "label": "Qwen3.5-2B（视觉，操作更准）",
-    "model_path": "D:\\llama.cpp-Qwen\\Qwen3.5-2B-UD-Q5_K_XL.gguf",
-    "mmproj_path": "D:/models/mmproj-2B-F16.gguf",
+    "model_path": "D:\\<llama.cpp 目录>\\Qwen3.5-2B-UD-Q5_K_XL.gguf",
+    "mmproj_path": "<模型目录>/mmproj-2B-F16.gguf",
     "vision": true,
     "context_tokens": 8192,
     "qwen": {"plan_max_tokens": 900}
@@ -98,10 +98,10 @@ mmproj 配 2B），前端会自动按纯文本模式启动并在 `ai/logs/qwen-s
 
 ```json
 "server": {
-  "mmproj_path": "D:/models/mmproj-F16.gguf",
+  "mmproj_path": "<模型目录>/mmproj-F16.gguf",
   "mmproj_by_model": {
-    "D:\\models\\Qwen3.5-0.8B-Q4_K_M.gguf": "D:/models/mmproj-F16.gguf",
-    "D:\\llama.cpp-Qwen\\Qwen3.5-2B-UD-Q5_K_XL.gguf": "D:/models/mmproj-2B-F16.gguf"
+    "D:\\models\\Qwen3.5-0.8B-Q4_K_M.gguf": "<模型目录>/mmproj-F16.gguf",
+    "D:\\<llama.cpp 目录>\\Qwen3.5-2B-UD-Q5_K_XL.gguf": "<模型目录>/mmproj-2B-F16.gguf"
   }
 }
 ```

@@ -13,9 +13,9 @@
     "plan_temperature": 0.1
   },
   "server": {
-    "llama_server": "D:/llama.cpp-Qwen/llama.cpp b11030cuda12/llama-server.exe",
-    "model_path": "D:/models/Qwen3.5-0.8B-Q4_K_M.gguf",
-    "mmproj_path": "D:/models/mmproj-F16.gguf",
+    "llama_server": "D:/llama.cpp/llama-server.exe",
+    "model_path": "<模型目录>/Qwen3.5-0.8B-Q4_K_M.gguf",
+    "mmproj_path": "<模型目录>/mmproj-F16.gguf",
     "host": "127.0.0.1",
     "port": 8000,
     "n_gpu_layers": -1,
@@ -23,15 +23,15 @@
     "parallel": 1,
     "auto_start": true,
     "mmproj_by_model": {
-      "Qwen3.5-0.8B-Q4_K_M.gguf": "D:/models/mmproj-F16.gguf"
+      "Qwen3.5-0.8B-Q4_K_M.gguf": "<模型目录>/mmproj-F16.gguf"
     },
     "active_preset": "qwen3.5-0.8b",
     "presets": [
       {
         "id": "qwen3.5-0.8b",
         "label": "Qwen3.5-0.8B（快速）",
-        "model_path": "D:/models/Qwen3.5-0.8B-Q4_K_M.gguf",
-        "mmproj_path": "D:/models/mmproj-F16.gguf",
+        "model_path": "<模型目录>/Qwen3.5-0.8B-Q4_K_M.gguf",
+        "mmproj_path": "<模型目录>/mmproj-F16.gguf",
         "vision": true,
         "context_tokens": 8192,
         "qwen": {
@@ -42,8 +42,8 @@
       {
         "id": "qwen3.5-2b",
         "label": "Qwen3.5-2B（更准，显存占用更大）",
-        "model_path": "D:/llama.cpp-Qwen/Qwen3.5-2B-UD-Q5_K_XL.gguf",
-        "mmproj_path": "D:/models/mmproj-2B-F16.gguf",
+        "model_path": "D:/llama.cpp/Qwen3.5-2B-UD-Q5_K_XL.gguf",
+        "mmproj_path": "<模型目录>/mmproj-2B-F16.gguf",
         "vision": true,
         "context_tokens": 8192,
         "qwen": {

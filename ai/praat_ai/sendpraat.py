@@ -187,7 +187,7 @@ def build_message(directory: Path, script: Path, *, consume: bool = True) -> str
         writeFileLine: "…/Message.txt", ""
         appendFileLine: "…/Message.txt", "# --FULL-TRUST"
         appendFileLine: "…/Message.txt", "# praat-ai: 这条消息已经消费过"
-        setWorkingDirectory: "D:/Praat-work/praat-simplified-chinese/ai"
+        setWorkingDirectory: "D:/praat/praat-simplified-chinese/ai"
         runScript: "D:/…/ai/runtime/chat_command.praat"
 
     前三行是 :func:`consume_statement()` 加的自消费语句（见那里的说明）；
