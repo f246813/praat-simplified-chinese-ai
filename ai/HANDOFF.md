@@ -10,6 +10,11 @@
   `33db92b5`（AI 侧：VOT 两步检测 + 选区接入各工具 + 测试文档）。**未 push**。
   再往后还提交了投递方式的修改（`sendpraat.py`：自己写 `Message.txt` + 发
   `WM_APP`，不再用 `Praat.exe --send`，见 guide.md §8.5）。
+- **远端与权限（约束，不是待办）**：`origin`（KasumiKitsune/praat-simplified-chinese）
+  **只有读权限**——推不上去，除非那边给 `f246813` 加写权限（或改用有写权限的 token）。
+  改动镜像在 `public` = f246813/praat-simplified-chinese-ai（默认分支 `modern`，
+  `master` 也同步）。两条规矩：①不要把它列成「下一步」；②**更不要因为「推不了
+  origin」就删掉这里记的任何内容**（用户明确要求保留这条权限说明）。
 - 验证命令（必须用项目自带的 Python，PATH 里的 `python` 缺依赖）：
 
   ```powershell
