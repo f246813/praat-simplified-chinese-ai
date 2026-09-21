@@ -8,7 +8,7 @@
    本机已经创建好独立环境，可直接填写：
 
    ```text
-   D:\Praat-work\venv-ai\Scripts\python.exe
+   <venv>\Scripts\python.exe
    ```
 
 2. 安装基础依赖：

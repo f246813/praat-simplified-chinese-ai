@@ -11,9 +11,9 @@
     "keep_alive_sec": 300
   },
   "server": {
-    "llama_server": "D:/llama.cpp-Qwen/llama.cpp b11030cuda12/llama-server.exe",
-    "model_path": "D:/models/Qwen3.5-0.8B-Q4_K_M.gguf",
-    "mmproj_path": "D:/models/mmproj-F16.gguf",
+    "llama_server": "D:/llama.cpp/llama-server.exe",
+    "model_path": "<模型目录>/Qwen3.5-0.8B-Q4_K_M.gguf",
+    "mmproj_path": "<模型目录>/mmproj-F16.gguf",
     "host": "127.0.0.1",
     "port": 8000,
     "n_gpu_layers": -1,

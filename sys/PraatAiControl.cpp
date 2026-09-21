@@ -155,7 +155,7 @@ namespace {
 				return;
 			switch (iterator -> second) {
 				case 1: setModelPath (U"D:/models/Qwen3.5-0.8B-Q4_K_M.gguf"); break;
-				case 2: setModelPath (U"D:/llama.cpp-Qwen/Qwen3.5-2B-UD-Q5_K_XL.gguf"); break;
+				case 2: setModelPath (U"D:/llama.cpp/Qwen3.5-2B-UD-Q5_K_XL.gguf"); break;
 				case 3: {
 					autoStringSet files = GuiFileSelect_getInfileNames (
 						nullptr,

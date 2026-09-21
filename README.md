@@ -1,3 +1,16 @@
+> [!IMPORTANT]
+> **这个仓库是 [`KasumiKitsune/praat-simplified-chinese`](https://github.com/KasumiKitsune/praat-simplified-chinese)
+> （Praat 7.0.02 简体中文汉化版）的副本，额外包含一套本地 AI 前端**
+> （自然语言操作 Praat 的对话窗口、表驱动的声学测量、Praat 原生插件、社区脚本包装）。
+>
+> - **基座仓库**：[KasumiKitsune/praat-simplified-chinese](https://github.com/KasumiKitsune/praat-simplified-chinese)（汉化与「现代版」界面都由它而来）
+> - **上游软件**：[praat/praat](https://github.com/praat/praat) / [praat.org](https://praat.org)，作者 **Paul Boersma & David Weenink**
+> - **借用的代码库、运行依赖与参考文献**：见 [CREDITS.zh-CN.md](CREDITS.zh-CN.md)
+> - **许可**：代码部分 GPL-3.0-or-later（[LICENSE](LICENSE)）；文档/图片部分见 [docs/LICENSE.txt](docs/LICENSE.txt)
+> - 本副本由 `f246813` 发布，与上游和基座仓库**没有隶属关系**；基座原有的署名与链接一律保留。
+> - AI 前端怎么用：[`ai/README.zh-CN.md`](ai/README.zh-CN.md)；踩过的坑：[`guide.md`](guide.md) §8。
+> - 想看 AI 前端最完整的状态用 `modern` 分支（本仓库默认分支就是它）。
+
 <div align="center">
   <img src="docs/pictures/icon.png" width="150" alt="Praat 汉化版 Logo" />
   <h1>Praat 汉化版</h1>
