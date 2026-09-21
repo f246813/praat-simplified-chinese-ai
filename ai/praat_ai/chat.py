@@ -1865,7 +1865,10 @@ class ChatWindow:
         # 不然用户只看到「闪一下」。
         remaining = window.remaining_minimum_seconds()
         if remaining > 0.0:
-            self.root.after(int(remaining * 1000) + 20, self.hide_progress)
+            try:
+                self.root.after(int(remaining * 1000) + 20, self.hide_progress)
+            except Exception:   # noqa: BLE001 - 窗口已经在关的时候别再排队
+                pass
             return
         window.close()
         self.progress_window = None

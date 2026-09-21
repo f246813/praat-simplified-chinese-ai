@@ -166,7 +166,10 @@ def main() -> int:
                 if abs(float(popup.bar.cget("value")) - 80.0) > 0.01:
                     problems.append(f"进度条没有更新（{popup.bar.cget('value')}）")
                 window.messages.put(("progress-done", ""))
-                pump(window, 2)
+                # 小窗有最短显示时间（progress_popup.MINIMUM_VISIBLE_SEC = 0.8 秒），
+                # 所以必须抽满事件循环再看它关没关：until_idle 会在窗口不忙时立刻
+                # 返回，那样还没到 0.8 秒就误判成「小窗没有关掉」。
+                pump(window, 2, until_idle=False)
                 if window.progress_window is not None:
                     problems.append("进度结束后小窗没有关掉")
         except Exception as error:   # noqa: BLE001 - 这一条只是 UI 冒烟
