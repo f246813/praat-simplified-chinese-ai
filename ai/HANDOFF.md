@@ -106,12 +106,11 @@ foned/FunctionEditor.cpp:2060      FunctionEditor_selectionMarksChanged()
 
 ## 4. 下一步（可选，按价值排序）
 
-1. 把 `modern` 推到 origin（用户还没说推）。
-2. 收尾 `praat_translate` 里几条中英混排的界面词条。
-3. 真机复核 VOT：用真实录音（不是合成音）人工对一遍语图，必要时给
+1. 收尾 `praat_translate` 里几条中英混排的界面词条。
+2. 真机复核 VOT：用真实录音（不是合成音）人工对一遍语图，必要时给
    `pitch_floor` 留个口径（默认 75 Hz，窗口 ≈ 3/pitch_floor）。
-4. 想继续扩选区链路的话，还剩两个候选：`spectrogram`（只对选区做频谱图，
-   会多出一个特定时长的对象）、`textgrid_insert_boundary`（见 §1 的取舍）。
-5. 5 个 `verify_*.py` 手动脚本各测一段链路、都被 `ai/README.zh-CN.md` 引用；
-   如果要合并（例如 `verify_chat_live.py` 与 `verify_chat_window_ui.py --ask`
-   有重叠），记得同步改文档里的引用。
+3. 想继续扩选区链路的话，还剩两个候选：`spectrogram`（只对选区做频谱图，
+  会多出一个特定时长的对象）、`textgrid_insert_boundary`（见 §1 的取舍）。
+4. 5 个 `verify_*.py` 手动脚本各测一段链路、都被 `ai/README.zh-CN.md` 引用；
+  如果要合并（例如 `verify_chat_live.py` 与 `verify_chat_window_ui.py --ask`
+  有重叠），记得同步改文档里的引用。
