@@ -159,6 +159,14 @@ namespace {
 		});
 	}
 
+	static void aiApiSettingsCallback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"API settings"), [me] {
+			PraatAiControl_configureApi();
+			updateAiToolbarStatus (me);
+		});
+	}
+
 	static void aiRunCallback (Thing boss, GuiMenuItemEvent /* event */) {
 		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
 		runAiMenuAction (praat_translate (U"Run AI tutor"), [me] {
@@ -218,6 +226,9 @@ namespace {
 		GuiMenu_addSeparator (me -> aiFrontendMenu);
 		GuiMenu_addItem (
 			me -> aiFrontendMenu, U"Add model path...", 0, aiFrontendAddModelCallback, me
+		);
+		GuiMenu_addItem (
+			me -> aiFrontendMenu, U"API settings...", 0, aiApiSettingsCallback, me
 		);
 		GuiMenu_addSeparator (me -> aiFrontendMenu);
 		GuiMenu_addItem (

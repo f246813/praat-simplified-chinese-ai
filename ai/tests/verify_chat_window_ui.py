@@ -141,6 +141,51 @@ def main() -> int:
             window.stop_button.configure(state="disabled")
         except AttributeError as error:
             problems.append(f"对话窗口没有停止按钮：{error}")
+
+        # 加载/停止模型时的「简约小窗口 + 进度条」（C7 那块 UI 之外的新东西）：
+        # 这里只验数据通路——队列里来一条进度就弹小窗，来一条 progress-done 就关掉。
+        try:
+            window.messages.put(("progress", "0.30|正在加载模型…"))
+            pump(window, 2)
+            popup = window.progress_window
+            print(
+                "· 进度小窗："
+                + (
+                    f"出现，进度 {popup.bar.cget('value')}，文案「{popup.message.get()}」"
+                    if popup is not None
+                    else "没有出现"
+                )
+            )
+            if popup is None:
+                problems.append("发进度消息之后没有出现小窗")
+            else:
+                if abs(float(popup.bar.cget("value")) - 30.0) > 0.01:
+                    problems.append(f"进度条没跟上（{popup.bar.cget('value')}）")
+                window.messages.put(("progress", "0.80|正在启动模型服务…"))
+                pump(window, 2)
+                if abs(float(popup.bar.cget("value")) - 80.0) > 0.01:
+                    problems.append(f"进度条没有更新（{popup.bar.cget('value')}）")
+                window.messages.put(("progress-done", ""))
+                pump(window, 2)
+                if window.progress_window is not None:
+                    problems.append("进度结束后小窗没有关掉")
+        except Exception as error:   # noqa: BLE001 - 这一条只是 UI 冒烟
+            problems.append(f"进度小窗检查失败：{error}")
+
+        # 「API 配置」入口：按钮在，点了能开出一个标题是「API 配置」的小窗。
+        try:
+            print(f"· API 配置按钮：{window.api_button.cget('text')}")
+            window.open_api_settings()
+            pump(window, 1)
+            dialog = getattr(window, "api_dialog", None)
+            if dialog is None:
+                problems.append("点「API 配置…」没有打开窗口")
+            else:
+                print(f"· API 配置窗口标题：{dialog.window.title()}")
+                dialog.close()
+                pump(window, 1)
+        except Exception as error:   # noqa: BLE001
+            problems.append(f"API 配置窗口检查失败：{error}")
         window.flush_messages()
 
         if switch and len(labels) >= 2:

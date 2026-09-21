@@ -187,9 +187,13 @@ class CollectStatusTests(unittest.TestCase):
 class FakeManager:
     instances: list["FakeManager"] = []
 
-    def __init__(self, config: object, profile: object) -> None:
+    def __init__(
+        self, config: object, profile: object, *, progress: object = None
+    ) -> None:
         self.config = config
         self.profile = profile
+        #: 进度回调（加载/停止模型时界面画进度条用）；这里只记下来。
+        self.progress = progress
         self.ensure_called = False
         self.process = None
         FakeManager.instances.append(self)

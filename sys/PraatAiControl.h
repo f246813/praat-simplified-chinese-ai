@@ -18,6 +18,9 @@ conststring32 PraatAiControl_getFrontendModel ();
 conststring32 PraatAiControl_getFrontendStatus ();
 conststring32 PraatAiControl_getVramText (bool *low);
 void PraatAiControl_chooseFrontendModel ();
+/* 「前端 → API 配置…」：打开填 API key 的小窗口（云端大模型，见
+   ai/praat_ai/api_settings.py）。 */
+void PraatAiControl_configureApi ();
 void PraatAiControl_startFrontend ();
 void PraatAiControl_stopFrontend ();
 void PraatAiControl_runAnalysis ();

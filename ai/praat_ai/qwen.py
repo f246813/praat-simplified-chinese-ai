@@ -22,6 +22,11 @@ TOOLS_MODE = "tools"
 JSON_MODE = "json"
 AUTO_MODE = "auto"
 
+#: ``QwenConfig.provider`` 的取值：``llama.cpp``（本地 llama-server）/
+#: ``api``（云端 OpenAI 兼容服务，见 :class:`praat_ai.config.ApiConfig`）。
+LOCAL_PROVIDER = "llama.cpp"
+API_PROVIDER = "api"
+
 #: 切换规划接口的环境变量：``tools`` / ``json`` / ``auto``（默认）。
 PLANNER_MODE_ENV = "PRAAT_AI_PLANNER"
 
@@ -432,15 +437,41 @@ class QwenClient:
             "temperature": temperature,
             "top_p": self.config.top_p,
             "presence_penalty": self.config.presence_penalty,
-            "chat_template_kwargs": {
-                "enable_thinking": self.config.enable_thinking,
-            },
         }
+        if self.config.provider != API_PROVIDER:
+            # llama.cpp 专有：用模型自带的 chat 模板（多轮里把工具结果作为
+            # role=tool 回灌，没有这一条小模型会跑偏，见 ADR-004）。
+            # 云端 OpenAI 兼容服务不认这个字段，所以 API 模式不带它。
+            payload["chat_template_kwargs"] = {
+                "enable_thinking": self.config.enable_thinking,
+            }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
+
+        try:
+            result = self._post(payload)
+        except QwenError as error:
+            # 新一点的云端模型不认 max_tokens（要 max_completion_tokens），
+            # 报错里提到它时换个字段名再试一次，别让用户自己去猜。
+            if "max_completion_tokens" not in str(error):
+                raise
+            payload.pop("max_tokens", None)
+            payload["max_completion_tokens"] = max_tokens
+            result = self._post(payload)
+
+        try:
+            message = result["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as error:
+            raise QwenError("Qwen returned an unexpected response.") from error
+        if not isinstance(message, dict):
+            raise QwenError("Qwen returned an unexpected response.")
+        return message
+
+    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """发一次 ``/chat/completions``，返回解析后的 JSON。"""
 
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
@@ -453,17 +484,18 @@ class QwenClient:
                 request,
                 timeout=self.config.request_timeout_sec,
             ) as response:
-                result = json.loads(response.read().decode("utf-8"))
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = ""
+            try:
+                detail = error.read().decode("utf-8", errors="replace")[:300]
+            except Exception:   # noqa: BLE001 - 读不到就算了
+                detail = ""
+            raise QwenError(
+                f"HTTP {error.code} {error.reason}：{detail or error}"
+            ) from error
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
             raise QwenError(f"Qwen request failed: {error}") from error
-
-        try:
-            message = result["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError) as error:
-            raise QwenError("Qwen returned an unexpected response.") from error
-        if not isinstance(message, dict):
-            raise QwenError("Qwen returned an unexpected response.")
-        return message
 
     def parse_analysis_request(
         self,
@@ -801,3 +833,40 @@ def _final_reasoning_fallback(reasoning: str) -> str:
         if marker in reasoning:
             return reasoning.rsplit(marker, 1)[-1].strip()
     return reasoning.strip()
+
+
+def probe_api(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    timeout: float = 20.0,
+) -> tuple[bool, str]:
+    """试一下这个 API 能不能用（「API 配置」窗口里的「测试连接」）。
+
+    只发一条极小的对话请求：能拿到回复就说明地址、key、模型名三样都对。比只查
+    ``/models`` 更靠得住——有些网关的 ``/models`` 是假的或者不列全部模型。
+    """
+
+    client = QwenClient(
+        QwenConfig(
+            base_url=(base_url or "").strip().rstrip("/"),
+            model=(model or "").strip(),
+            api_key=(api_key or "EMPTY"),
+            provider=API_PROVIDER,
+            request_timeout_sec=max(5, int(timeout)),
+            plan_max_tokens=16,
+        )
+    )
+    try:
+        message = client.chat_message(
+            [{"role": "user", "content": "ping"}],
+            max_tokens=16,
+            temperature=0.0,
+        )
+    except QwenError as error:
+        return False, str(error)
+    text = str(message.get("content") or message.get("reasoning_content") or "").strip()
+    if not text:
+        return True, f"连接成功（{model} 回了空内容，但接口是通的）。"
+    return True, f"连接成功：{model} 回了「{text[:40]}」。"

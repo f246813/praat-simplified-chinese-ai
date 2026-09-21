@@ -34,8 +34,8 @@ from pathlib import Path
 from tkinter import ttk
 from typing import Any, Callable, Mapping
 
-from . import praat_app, qwen, sendpraat, tools
-from .config import load_config
+from . import api_settings, praat_app, progress_popup, qwen, sendpraat, tools
+from .config import api_is_active, load_config
 from .presets import PresetError, active_preset, list_presets
 from .server import running_model_info
 
@@ -1159,6 +1159,9 @@ def praat_instance_warning(executable: str) -> str:
 def model_status_text(config) -> str:
     """状态栏文案：模型来自服务实际加载的模型，而不是配置里的文件名。"""
 
+    if api_is_active(config):
+        label = config.api.label or "云端 API"
+        return f"模型：{config.api.model}（{label}，API 模式，不需要本机服务）"
     info = running_model_info(config.qwen.base_url)
     live = Path(str(info.get("id", ""))).name if info else ""
     configured = (
@@ -1283,6 +1286,8 @@ class ChatWindow:
         self.cancel_event = threading.Event()
         #: C5：已经投递过脚本的 Praat 进程集合——之后不用再送那条 ping 往返。
         self.context_ready_pids: frozenset[int] = frozenset()
+        #: 加载/停止模型时的迷你进度小窗（懒创建，用完关掉）。
+        self.progress_window = None
 
         style = ttk.Style(self.root)
         if "vista" in style.theme_names():
@@ -1330,13 +1335,21 @@ class ChatWindow:
             command=self.apply_selected_preset,
         )
         self.preset_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        # API 配置：填 key 接云端大模型（更大的模型当后端），不用本地 llama-server。
+        self.api_button = ttk.Button(
+            preset_row,
+            text="API 配置…",
+            width=12,
+            command=self.open_api_settings,
+        )
+        self.api_button.grid(row=0, column=3, sticky="e", padx=(6, 0))
         self.preset_hint = tk.StringVar(value="")
         ttk.Label(
             preset_row,
             textvariable=self.preset_hint,
             style="Hint.TLabel",
             font=("Microsoft YaHei UI", 8),
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
         self.refresh_preset_widgets()
 
         self.context_label = tk.StringVar(value=selected_object_label())
@@ -1471,6 +1484,12 @@ class ChatWindow:
         return preset_label_text(preset)
 
     def preset_hint_text(self) -> str:
+        if api_is_active(self.config):
+            label = self.config.api.label or "云端 API"
+            return (
+                f"当前是 API 模式：{label} / {self.config.api.model}"
+                "（不需要本机 llama-server）；想回到本机模型就选一个预设再点「应用预设」。"
+            )
         if not self.presets:
             return (
                 "还没有配置模型预设：在 ai/ai_config.json 的 server.presets "
@@ -1526,7 +1545,7 @@ class ChatWindow:
         try:
             from . import control
 
-            result = control.apply_preset(preset_id)
+            result = control.apply_preset(preset_id, progress=self._progress_sink())
         except (PresetError, qwen.QwenError, OSError, ValueError) as error:
             self.messages.put(("assistant", f"切换模型预设失败：{error}"))
         else:
@@ -1537,8 +1556,75 @@ class ChatWindow:
                 ("assistant", f"已切换模型预设：{label}（{model}，{vision}）")
             )
         finally:
+            self.messages.put(("progress-done", ""))
             self.messages.put(("reload", ""))
             self.messages.put(("done", ""))
+
+    # ------------------------------------------------------------ API 配置
+
+    def _progress_sink(self):
+        """把「加载/停止模型」的进度送到界面线程（迷你进度条那张小窗）。"""
+
+        def sink(fraction: float, message: str) -> None:
+            self.messages.put(("progress", f"{fraction:.4f}|{message}"))
+
+        return sink
+
+    def open_api_settings(self) -> None:
+        """打开「API 配置」小窗口（填 key 接云端大模型）。"""
+
+        # 已经开着就把它提到前面，别开一堆同样的窗口。
+        existing = getattr(self, "api_dialog", None)
+        if existing is not None:
+            try:
+                if existing.window.winfo_exists():
+                    existing.window.lift()
+                    existing.window.focus_set()
+                    return
+            except tk.TclError:
+                pass
+        dialog = api_settings.ApiSettingsDialog(
+            self.root,
+            config=self.config,
+            on_saved=self.on_api_settings_saved,
+        )
+        self.api_dialog = dialog
+        self.append_hint(
+            "API 配置：填服务商、地址、模型名和 API key，点「测试连接」确认后保存，"
+            "前端就会改用它（本机 llama-server 的配置会保留）。"
+        )
+        try:
+            dialog.window.transient(self.root)
+        except tk.TclError:
+            pass
+
+    def on_api_settings_saved(self, values: dict) -> None:
+        """保存之后刷新界面；如果刚切到 API 模式，顺手停掉本机模型服务省显存。"""
+
+        self.reload_config()
+        if api_is_active(self.config):
+            self.append_hint(
+                f"已切到 API 模式：{self.config.api.label or '云端 API'} / "
+                f"{self.config.api.model}（对话走云端，不再需要本机模型服务）。"
+            )
+            self.messages.put(("stop-local-service", ""))
+        else:
+            self.append_hint("已关闭 API 模式：前端回到本地模型预设。")
+
+    def stop_local_service_worker(self) -> None:
+        """API 模式下把还在跑的本机 llama-server 停掉（主要目的是腾显存）。"""
+
+        from . import control
+
+        try:
+            result = control.stop_frontend(progress=self._progress_sink())
+        except (OSError, ValueError) as error:
+            self.messages.put(("hint", f"停止本机模型服务失败：{error}"))
+        else:
+            if result.get("api_enabled"):
+                self.messages.put(("hint", "本机模型服务已停（API 模式下不再需要它）。"))
+        finally:
+            self.messages.put(("progress-done", ""))
 
     def append(self, role: str, text: str) -> None:
         label = "你" if role == "user" else "Praat AI"
@@ -1739,6 +1825,14 @@ class ChatWindow:
                     self.entry.focus_set()
                 elif role == "reload":
                     self.reload_config()
+                elif role == "progress":
+                    self.show_progress(text)
+                elif role == "progress-done":
+                    self.hide_progress()
+                elif role == "stop-local-service":
+                    threading.Thread(
+                        target=self.stop_local_service_worker, daemon=True
+                    ).start()
                 elif role in {"result", "failure"}:
                     self.append_lines(role, text)
                 elif role == "hint":
@@ -1748,6 +1842,25 @@ class ChatWindow:
         except queue.Empty:
             pass
         self.root.after(100, self.flush_messages)
+
+    def show_progress(self, payload: str) -> None:
+        """更新（必要时创建）迷你进度窗。``payload`` 是 ``"0.42|说明"``。"""
+
+        fraction_text, _, message = payload.partition("|")
+        try:
+            fraction = float(fraction_text)
+        except ValueError:
+            fraction = 0.0
+        if self.progress_window is None:
+            self.progress_window = progress_popup.MiniProgress(
+                self.root, message=message or "正在加载模型…"
+            )
+        self.progress_window.update(fraction, message or None)
+
+    def hide_progress(self) -> None:
+        if self.progress_window is not None:
+            self.progress_window.close()
+            self.progress_window = None
 
     def close(self) -> None:
         pid_path = runtime_dir() / "chat.pid"

@@ -418,6 +418,18 @@ void PraatAiControl_chooseFrontendModel () {
 		setModelPath (files -> at [1] -> string. get());
 }
 
+void PraatAiControl_configureApi () {
+	/*
+		「前端 → API 配置…」：打开那个填 API key 的小窗口。
+
+		窗口本身是 Python + Tk 的（ai/praat_ai/api_settings.py）：填服务商、Base URL、
+		模型名和 key，点「测试连接」确认，保存后写进 ai_config.json 的 api 节，
+		前端下一次请求就改用云端模型（本地 llama-server 的配置原样留着）。
+	*/
+	runControlCommand (U"api-config");
+	PraatAiControl_refreshStatus ();
+}
+
 void PraatAiControl_startFrontend () {
 	runControlCommand (U"start");
 	PraatAiControl_refreshStatus();

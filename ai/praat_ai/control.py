@@ -7,9 +7,19 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from .config import AppConfig, default_config_path, load_config
+#: 进度回调：(0–1 的进度, 中文说明)。Praat 菜单那一路不用它——控制脚本把进度打到
+#: 标准输出（`PRAAT_PROGRESS\t...`），由 Praat 变成带进度条的小窗口；对话窗口那一路
+#: 自己弹一个迷你进度条，走这个回调。
+ProgressSink = Callable[[float, str], None]
+
+from .config import (
+    AppConfig,
+    api_is_active,
+    default_config_path,
+    load_config,
+)
 from .process import process_alive as _process_alive
 from .presets import (
     PresetError,
@@ -83,13 +93,43 @@ def configured_model_name(config: AppConfig | None = None) -> str:
 
 def collect_status(config_path: str | Path | None = None) -> dict[str, Any]:
     config = load_config(config_path)
-    process_id = _read_pid()
-    reachable = endpoint_available(config.qwen.base_url)
-    running = reachable or _process_alive(process_id)
     gpu = detect_gpu()
     free_gb = round(gpu.free_mb / 1024.0, 2) if gpu else None
     total_gb = round(gpu.total_mb / 1024.0, 2) if gpu else None
     low_vram = free_gb is not None and free_gb < 2.0
+
+    if api_is_active(config):
+        # API 模式（云端大模型）：不去探本地端口——那是远程地址，探它没意义，
+        # 也会让菜单里的状态变成「服务未响应」。key 一个字都不进状态文件。
+        status = {
+            "success": True,
+            "api_enabled": True,
+            "api_label": config.api.label,
+            "api_model": config.api.model,
+            "api_verified_at": config.api.verified_at,
+            "frontend_model": config.api.model,
+            "frontend_model_configured": config.api.model,
+            "frontend_model_mismatch": False,
+            "frontend_model_source": "api",
+            "frontend_vision": False,
+            "frontend_preset": "",
+            "frontend_preset_label": "",
+            "frontend_preset_matches_live": False,
+            "frontend_preset_configured": config.server.active_preset,
+            "presets": list_presets(config),
+            "frontend_running": True,
+            "frontend_status": "running (API)",
+            "alignment_mode": config.alignment.backend,
+            "vram_total_gb": total_gb,
+            "vram_free_gb": free_gb,
+            "vram_low": low_vram,
+            "error": "",
+        }
+        return _write_status(status)
+
+    process_id = _read_pid()
+    reachable = endpoint_available(config.qwen.base_url)
+    running = reachable or _process_alive(process_id)
     # 状态必须反映服务真正加载的模型，而不是配置里希望加载的模型。
     live_info = running_model_info(config.qwen.base_url) if reachable else {}
     live_model = str(live_info.get("id", ""))
@@ -124,6 +164,9 @@ def collect_status(config_path: str | Path | None = None) -> dict[str, Any]:
         "presets": preset_summaries,
         "frontend_running": running,
         "frontend_status": "running" if running else "stopped",
+        "api_enabled": False,
+        "api_label": config.api.label,
+        "api_model": config.api.model,
         "alignment_mode": config.alignment.backend,
         "vram_total_gb": total_gb,
         "vram_free_gb": free_gb,
@@ -266,6 +309,8 @@ def _wait_for_endpoint_gone(base_url: str, timeout: float = 20.0) -> None:
 def _launch_server(
     config: AppConfig,
     config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
 ) -> dict[str, Any]:
     gpu = detect_gpu()
     preset = active_preset(config)
@@ -278,42 +323,67 @@ def _launch_server(
     )
     profile = apply_preset_to_profile(profile, preset)
     config.server.auto_start = True
-    manager = QwenServerManager(config, profile)
+    _progress(0.05, "准备启动本地模型服务…", progress)
+    manager = QwenServerManager(config, profile, progress=progress)
     manager.ensure_started()
     if manager.process and manager.process.pid:
         pid_path().write_text(str(manager.process.pid), encoding="utf-8")
+    _progress(1.0, "模型服务已就绪。", progress)
     return collect_status(config_path)
 
 
 def _restart_service(
     config: AppConfig,
     config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
 ) -> dict[str, Any]:
     """Stop a service that loaded the wrong model and start it with the new config."""
 
+    _progress(0.05, "停止旧的模型服务…", progress)
     if not _stop_running_service(config):
         raise QwenServerError(
             f"{config.qwen.base_url} 上运行的服务不是本前端启动的，无法自动重启；"
             "请先手动停止该服务，再从菜单启动前端。"
         )
+    _progress(0.15, "等待端口释放…", progress)
     _wait_for_endpoint_gone(config.qwen.base_url)
-    return _launch_server(config, config_path)
+    return _launch_server(config, config_path, progress=progress)
 
 
-def start_frontend(config_path: str | Path | None = None) -> dict[str, Any]:
+def start_frontend(
+    config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
+) -> dict[str, Any]:
     config = load_config(config_path)
+    if api_is_active(config):
+        # API 模式不需要本地服务；状态里会说明用的是哪个云端模型。
+        return collect_status(config_path)
     if endpoint_available(config.qwen.base_url):
         state = server_model_state(config.qwen.base_url, config.server.model_path)
         if state is not False:
             # True：端口上就是配置里的模型；None：读不到模型列表，保持原行为。
             return collect_status(config_path)
         # 端口上有服务，但加载的是别的模型：重启成配置里的模型。
-        return _restart_service(config, config_path)
-    return _launch_server(config, config_path)
+        return _restart_service(config, config_path, progress=progress)
+    return _launch_server(config, config_path, progress=progress)
 
 
-def stop_frontend(config_path: str | Path | None = None) -> dict[str, Any]:
-    _stop_running_service(load_config(config_path))
+def stop_frontend(
+    config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
+) -> dict[str, Any]:
+    config = load_config(config_path)
+    if api_is_active(config):
+        # 云端模型没有「本地服务」可停；别去动本机端口上的东西。
+        return collect_status(config_path)
+    _progress(0.1, "正在停止模型服务…", progress)
+    _stop_running_service(config)
+    _progress(0.6, "等待端口释放…", progress)
+    _wait_for_endpoint_gone(config.qwen.base_url)
+    _progress(1.0, "已停止。", progress)
     return collect_status(config_path)
 
 
@@ -357,6 +427,8 @@ def set_frontend_model(
     model_path: str,
     mmproj_path: str = "",
     config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
 ) -> dict[str, Any]:
     model = Path(model_path)
     if not model.is_file():
@@ -383,15 +455,25 @@ def set_frontend_model(
         values["server"]["mmproj_by_model"] = mapping
     update_config(values, config_path)
     config = load_config(config_path)
+    if api_is_active(config):
+        # 现在用的是云端模型：只改本地配置（取消 API 之后生效），不要重启本地服务。
+        _progress(1.0, "已记住本地模型路径（当前是 API 模式）。", progress)
+        status = collect_status(config_path)
+        status["api_note"] = (
+            "API 模式已启用，这个本地模型路径要等取消 API 模式后才会用上。"
+        )
+        return status
     # 端口上已有服务却加载着旧模型时，必须重启，否则切换模型只是改了配置。
     if server_model_state(config.qwen.base_url, config.server.model_path) is False:
-        return _restart_service(config, config_path)
+        return _restart_service(config, config_path, progress=progress)
     return collect_status(config_path)
 
 
 def apply_preset(
     preset_key: str,
     config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
 ) -> dict[str, Any]:
     """切换到配置里声明的模型预设（必要时真正重启 llama-server）。"""
 
@@ -408,16 +490,28 @@ def apply_preset(
         )
         raise PresetError(f"没有找到预设「{preset_key}」。可用预设：{available}")
     values = preset_config_values(preset, config.server.mmproj_by_model)
+    if api_is_active(config):
+        # 「应用本地预设」= 回到本地模型：顺手把 API 模式关掉，否则改了也不生效。
+        values.setdefault("api", {})["enabled"] = False
+        _progress(0.02, "切回本地模型（关闭 API 模式）…", progress)
     update_config(values, config_path)
     config = load_config(config_path)
     # 端口上已有服务却加载着别的模型时，必须重启，否则切换预设只是改配置。
     if server_model_state(config.qwen.base_url, config.server.model_path) is False:
-        return _restart_service(config, config_path)
+        return _restart_service(config, config_path, progress=progress)
     return collect_status(config_path)
 
 
-def _progress(fraction: float, message: str) -> None:
+def _progress(
+    fraction: float,
+    message: str,
+    sink: ProgressSink | None = None,
+) -> None:
+    """报告一次进度：写给 Praat 的标准输出 + 回调给对话窗口（有的话）。"""
+
     print(f"PRAAT_PROGRESS\t{fraction:.4f}\t{message}", flush=True)
+    if sink is not None:
+        sink(float(fraction), message)
 
 
 def run_analysis(config_path: str | Path | None = None) -> dict[str, Any]:
@@ -442,6 +536,17 @@ def run_analysis(config_path: str | Path | None = None) -> dict[str, Any]:
         "overlay": str(outputs.overlay_path) if outputs.overlay_path else "",
         "error_count": len(outputs.result.errors),
     }
+
+
+def run_api_settings_dialog(config_path: str | Path | None = None) -> int:
+    """打开「API 配置」小窗口（Praat 菜单那一路）。
+
+    单独抽一层是为了能在测试里替换掉它——真开窗口会阻塞到用户点关闭。
+    """
+
+    from . import api_settings
+
+    return api_settings.run_standalone(config_path)
 
 
 def execute_command(
@@ -477,6 +582,8 @@ def execute_command(
         )
     if normalized == "set-alignment-mode":
         return set_alignment_mode(value, config_path)
+    if normalized in {"api-config", "api-settings"}:
+        return {"success": run_api_settings_dialog(config_path) == 0}
     if normalized == "run":
         return run_analysis(config_path)
     raise ValueError(f"Unknown control command: {command}")

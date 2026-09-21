@@ -12,6 +12,9 @@ class QwenConfig:
     base_url: str = "http://127.0.0.1:8000/v1"
     model: str = "Qwen/Qwen3.5-0.8B"
     api_key: str = "EMPTY"
+    #: 请求形状：``llama.cpp``（本地服务，可以带 ``chat_template_kwargs``）或
+    #: ``api``（云端 OpenAI 兼容服务，不能带 llama.cpp 专有字段）。
+    provider: str = "llama.cpp"
     request_timeout_sec: int = 60
     default_mode: str = "text"
     enable_thinking: bool = False
@@ -24,6 +27,29 @@ class QwenConfig:
     plan_temperature: float = 0.1
     top_p: float = 0.8
     presence_penalty: float = 1.5
+
+
+@dataclass(slots=True)
+class ApiConfig:
+    """云端（OpenAI 兼容）大模型：启用后前端不再依赖本地 llama-server。
+
+    API key 存在 ``ai_config.json`` 里（这个文件在 .gitignore 里、不会进仓库），
+    也可以只放在环境变量 ``PRAAT_AI_API_KEY`` 里，界面上的输入框留空即可。
+    """
+
+    enabled: bool = False
+    #: 显示用的名字（例如 DeepSeek / OpenAI），只影响界面和状态文案。
+    label: str = ""
+    base_url: str = ""
+    model: str = ""
+    api_key: str = ""
+    request_timeout_sec: int = 120
+    max_context_tokens: int = 32768
+    plan_max_tokens: int = 1500
+    plan_temperature: float = 0.1
+    vision_when_requested: bool = False
+    #: 最近一次「测试连接」成功的时间（只用于显示，不参与逻辑）。
+    verified_at: str = ""
 
 
 @dataclass(slots=True)
@@ -113,6 +139,7 @@ class AlignmentConfig:
 class AppConfig:
     qwen: QwenConfig = field(default_factory=QwenConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    api: ApiConfig = field(default_factory=ApiConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
 
@@ -175,6 +202,42 @@ def presets_from_raw(value: Any) -> list[ServerPreset]:
     return []
 
 
+def api_is_active(config: AppConfig) -> bool:
+    """API 模式是不是真的能用（启用了、而且地址和模型都填了）。"""
+
+    return bool(
+        config.api.enabled
+        and config.api.base_url.strip()
+        and config.api.model.strip()
+    )
+
+
+def apply_api_to_qwen(config: AppConfig) -> None:
+    """把 API 节的设置搬进 ``qwen``（只在 API 模式可用时）。
+
+    对话链路里到处是 ``config.qwen``（客户端、状态栏、token 预算），所以搬进这一节
+    之后**不用改别的地方**就能切到云端模型；本地 llama-server 的配置原样留着，
+    关掉 API 就能回去用。
+    """
+
+    if not api_is_active(config):
+        return
+    api = config.api
+    config.qwen.base_url = api.base_url.strip().rstrip("/")
+    config.qwen.model = api.model.strip()
+    config.qwen.api_key = api.api_key or "EMPTY"
+    config.qwen.provider = "api"
+    config.qwen.request_timeout_sec = int(api.request_timeout_sec)
+    config.qwen.max_context_tokens = int(api.max_context_tokens)
+    config.qwen.plan_max_tokens = int(api.plan_max_tokens)
+    config.qwen.plan_temperature = float(api.plan_temperature)
+    config.qwen.vision_when_requested = bool(api.vision_when_requested)
+    # 云端模型不用 llama.cpp 的 chat 模板开关（那是本地服务专有的）。
+    config.qwen.enable_thinking = False
+    # API 模式下不许悄悄拉起本地 llama-server。
+    config.server.auto_start = False
+
+
 def load_config(path: str | Path | None = None) -> AppConfig:
     config = AppConfig()
     candidate = Path(path) if path else default_config_path()
@@ -187,6 +250,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         if presets_value is not None:
             config.server.presets = presets_from_raw(presets_value)
         _merge_dataclass(config.analysis, raw.get("analysis", {}))
+        _merge_dataclass(config.api, raw.get("api", {}))
         alignment_values = raw.get("alignment", {})
         _merge_dataclass(
             config.alignment,
@@ -205,6 +269,11 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             alignment_values.get("wav2vec2", {}),
         )
 
+    # API 节的环境变量覆盖（key 不外放时用得上；地址/模型也留了口子）。
+    config.api.api_key = os.getenv("PRAAT_AI_API_KEY", config.api.api_key)
+    config.api.base_url = os.getenv("PRAAT_AI_API_BASE_URL", config.api.base_url)
+    config.api.model = os.getenv("PRAAT_AI_API_MODEL", config.api.model)
+
     config.qwen.base_url = os.getenv("PRAAT_AI_QWEN_BASE_URL", config.qwen.base_url)
     config.qwen.model = os.getenv("PRAAT_AI_QWEN_MODEL", config.qwen.model)
     config.qwen.api_key = os.getenv("PRAAT_AI_QWEN_API_KEY", config.qwen.api_key)
@@ -219,5 +288,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         config.server.model_path = env_model
     if env_mmproj:
         config.server.mmproj_path = env_mmproj
+
+    apply_api_to_qwen(config)
 
     return config

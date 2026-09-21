@@ -299,6 +299,14 @@ Praat 里自己点运行。
 - 对话历史/对象列表按 **token 预算**裁剪（`ctx` 只有 8192，工具说明就占 ~6.6k），
   被省掉的部分会在窗口里提示一句，不再静默丢；想多带历史就在预设里把
   `context_tokens` 调大。
+- **接更大的模型（API 配置）**：Praat 菜单「前端 → API 配置…」，或对话窗口里的
+  「API 配置…」按钮。填服务商/Base URL/模型名/API key，点「测试连接」确认后保存，
+  前端就改用云端模型（任何 OpenAI 兼容的 `/v1` 接口都行）；本地 llama-server 的配置
+  会留着，取消勾选或点「应用预设」就切回本地。key 只写进 `ai_config.json`
+  （已 gitignore），也可以只放在环境变量 `PRAAT_AI_API_KEY` 里。
+- **加载/停止模型有进度小窗口**：从菜单启动/停止时是 Praat 自己的进度窗口
+  （一根进度条 + 「中断」），从对话窗口点「应用预设」时是一个迷你进度窗
+  （一句话 + 一根进度条）。以前这段时间界面什么都不说。
 - 每次发送最多等 25 秒。如果 Praat 里有没关掉的错误对话框或模态窗口，脚本会卡在
   队列里，窗口会明确提示「Praat 在 25 秒内没有执行这个脚本」并告诉你关掉那些窗口，
   不会一直挂着（超时后前端会把排队中的消息换成空脚本，免得它稍后执行下一条指令）。
@@ -329,6 +337,9 @@ python ai/tests/verify_external_script.py       # 现成社区脚本当批处理
 python ai/tests/verify_error_dialog.py          # 脚本报错不弹模态框、不挡后面的消息（会临时起一个 GUI Praat）
 python ai/tests/verify_context_marker.py        # 对象列表里的进程标记（C5）：不再每条消息都刷列表
 python ai/tests/verify_cancel_live.py           # 「停止」真的能停住等 Praat / 等批处理（C7）
+python ai/tests/verify_api_mode.py              # API 模式：自己起假 OpenAI 服务，真跑一轮对话
+python ai/tests/verify_api_menu_live.py         # 真机：菜单「前端 / API 配置...」能弹出小窗口
+python ai/tests/verify_model_progress_live.py   # 真机：加载/停止模型时出现进度小窗口
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
 ```
 

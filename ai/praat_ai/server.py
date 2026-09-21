@@ -5,6 +5,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from typing import Callable
 from pathlib import Path
 
 from .config import AppConfig
@@ -140,9 +141,18 @@ def server_model_state(
 
 
 class QwenServerManager:
-    def __init__(self, config: AppConfig, profile: RuntimeProfile):
+    def __init__(
+        self,
+        config: AppConfig,
+        profile: RuntimeProfile,
+        *,
+        progress: Callable[[float, str], None] | None = None,
+    ):
         self.config = config
         self.profile = profile
+        #: 进度回调：(0–1, 中文说明)。加载模型要几十秒，界面靠它画进度条
+        #: （Praat 菜单那一路由控制脚本打到标准输出，对话窗口那一路直接回调）。
+        self.progress = progress
         self.process: subprocess.Popen[bytes] | None = None
         self.log_handle = None
         self.vision_active = False
@@ -260,6 +270,7 @@ class QwenServerManager:
         return command
 
     def _spawn(self, command: list[str]) -> None:
+        self._report(0.12, "正在启动 llama-server（读取模型文件）…")
         self.log_handle = (log_dir() / "qwen-server.log").open("ab")
         self.process = subprocess.Popen(
             command,
@@ -272,17 +283,33 @@ class QwenServerManager:
         )
 
     def _wait_for_endpoint(self) -> None:
-        deadline = time.time() + 60
+        started = time.time()
+        deadline = started + 60
+        #: 加载一个 2B 模型实测 5–20 秒；按 30 秒铺开进度条，永远不越过 0.95。
+        expected = 30.0
         while time.time() < deadline:
             if self.process is None:
                 raise QwenServerError("Qwen server is not running.")
             if self.process.poll() is not None:
                 raise QwenServerError("Qwen server exited while starting.")
             if endpoint_available(self.config.qwen.base_url):
+                self._report(0.95, "模型服务已就绪。")
                 return
+            elapsed = time.time() - started
+            self._report(
+                0.2 + 0.7 * min(1.0, elapsed / expected),
+                f"正在加载模型…（已等待 {elapsed:.0f} 秒）",
+            )
             time.sleep(0.5)
         self.stop()
         raise QwenServerError("Timed out waiting for the Qwen server.")
+
+    def _report(self, fraction: float, message: str) -> None:
+        if self.progress is not None:
+            try:
+                self.progress(float(fraction), message)
+            except Exception:   # noqa: BLE001 - 进度只影响显示，不能打断加载
+                pass
 
     def _log_warning(self) -> None:
         try:

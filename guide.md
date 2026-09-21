@@ -954,3 +954,62 @@ Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COM
 回归：`ai/tests/test_cancel.py`（9 条单测）、`python ai/tests/verify_cancel_live.py`
 （3 条真机：取消等结果、取消之后还能继续投递、取消一个自己循环很久的批处理）、
 `verify_chat_window_ui.py`（顺带验「停止」按钮接上了事件）。
+
+### 8.13 API 配置：填 key 就能接更大的云端模型
+
+本机跑得动的模型有限（8G 显存上 2B 就到顶）。「前端 → API 配置…」让用户改接一个
+**云端大模型**（任何 OpenAI 兼容的 ``/v1`` 接口：DeepSeek、OpenAI、百炼、
+智谱、Kimi、硅基流动，或者本机 Ollama/vLLM 这类网关）：
+
+- 窗口是 Python + Tk（`ai/praat_ai/api_settings.py`）：服务商下拉 + Base URL +
+  模型名 + API key（默认打码，可点「显示」）+ 超时/上下文/回复上限，
+  「测试连接」按钮、保存/取消。**测试连接**发一条极小的对话请求
+  （`qwen.probe_api`）——比只查 ``/models`` 靠得住，很多网关的 ``/models`` 是假的；
+- 保存写进 `ai_config.json` 的 **`api` 节**（这个文件在 .gitignore 里，key 不会进
+  仓库）；也可以用环境变量 `PRAAT_AI_API_KEY`（还有 `PRAAT_AI_API_BASE_URL` /
+  `PRAAT_AI_API_MODEL`）覆盖，界面里留空即可；
+- 勾上「使用云端 API 模型」之后，`config.load_config()` 会把 api 节的地址/模型/key/
+  上下文搬进 `config.qwen` 并把 `provider` 设成 `api`（`apply_api_to_qwen`）——
+  对话链路到处用的都是 `config.qwen`，所以**别的地方一行都不用改**；本地
+  llama-server 的配置原样留着，取消勾选就回到本地；
+- API 模式下：`server.auto_start` 被强制关掉（不许悄悄拉起 llama-server），
+  `control.start_frontend/stop_frontend` 都不碰本地服务（但「停止前端」仍会收掉
+  之前启动过的本机服务，腾显存），状态栏/菜单显示 `模型: <云端模型>` +
+  `状态: 运行中（API 模式）`；**key 一个字都不进 `runtime/status.json`**；
+- 请求形状随 `provider` 变：`llama.cpp` 带 `chat_template_kwargs`（多轮回灌靠它，
+  见 §8.4），`api` 不带——云端不认这个字段；遇到只认 `max_completion_tokens` 的
+  新模型会自动换字段重试一次（`QwenClient._post`）；
+- 对话窗口里也有同一个入口（「API 配置…」按钮）；点「应用预设」= 回到本地模型
+  （会顺手关掉 API 模式），这样两边都走得通。
+
+回归：`ai/tests/test_api_settings.py`（17 条：配置解析/环境变量/请求形状/key 不泄漏/
+校验/保存/探测）、`python ai/tests/verify_api_mode.py`（5 条：自己起一个**假的
+OpenAI 兼容服务**，真走 HTTP 跑完一轮 `run_turn`——工具 schema 78 个字段都在、
+没有 llama.cpp 专有字段、Authorization 头正确、工具调用被真的执行）、
+`python ai/tests/verify_api_menu_live.py`（真机：在编辑器菜单里找到
+「前端 / API 配置...」并触发它的回调，小窗口弹出、关掉之后 Praat 还活着）。
+
+### 8.14 加载/停止模型的进度小窗口
+
+加载一个 2B 模型要十几秒，以前这段时间界面什么都不说。现在两条入口都有**一个小窗口
+带一根进度条**：
+
+- **Praat 菜单那一路**（「启动前端 / 停止前端 / 添加模型路径…」）：控制脚本把进度打到
+  标准输出（`PRAAT_PROGRESS\t<0-1>\t<说明>`），Praat 侧由
+  `sys/praat_python.cpp` 的 `handlePythonOutputLine` 接住 → `Melder_progress` →
+  Praat 自己的进度窗口（标题「正在处理中」，一根进度条 + 一个「中断」按钮，
+  `waitWhileProgress` 会抽消息队列，所以窗口能刷新、Praat 也不僵）；
+  进度点是 `control._progress`：准备启动 0.05 → 启动进程 0.12 →
+  `QwenServerManager._wait_for_endpoint` 里按等待时间从 0.2 爬到 0.9 →
+  就绪 0.95 → 1.0；停止是 0.1 停服务 → 0.6 等端口 → 1.0；
+- **对话窗口那一路**（点「应用预设」，以及切到 API 模式后自动停本地服务）：
+  `praat_ai/progress_popup.py` 的 `MiniProgress`——一个只有一句话 + 一根进度条的
+  迷你窗（不可缩放、置顶、不给中途关），数据走同一个进度回调
+  （`control.*(progress=...)`），窗口线程只通过 `messages` 队列更新，不跨线程碰 Tk。
+
+回归：`ai/tests/test_model_progress.py`（8 条：`PRAAT_PROGRESS` 行与回调、
+加载/停止真的会发进度、顺序单调、API 模式不动本地服务）、
+`python ai/tests/verify_model_progress_live.py`（真机：从菜单点「启动前端」，
+**加载过程中确实出现了进度窗口「正在处理中」、加载完自己关掉**；再点「停止前端」
+同样看到进度窗口、端口释放）、`verify_chat_window_ui.py`（进度消息 → 迷你窗出现/
+更新/关闭，以及「API 配置…」按钮能开出窗口）。
