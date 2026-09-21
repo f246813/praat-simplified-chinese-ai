@@ -308,6 +308,10 @@ Praat 里自己点运行。
   在 API 模式下第一行就是当前云端模型。云端模型还可以在同一个窗口里选**思考档位**
   （自动/关闭/低/中/高，云端翻成 `reasoning_effort`、本地翻成 `enable_thinking`）、
   勾选「允许它用自己的语言学知识解释」——测量数字仍然只来自工具结果。
+  开了这一项之后，像「把这段和东京标准音比一下」这种请求会把参照系的常见范围
+  （说清是文献值）、你测到的数值、差在哪和怎么练都写出来，不会只回一句「已完成」。
+- **问它「你是谁」**：会答自己的模型名 + 「我被设置成 Praat 的前端」，不自称
+  「Praat 语音助手」。
 - **关掉 Praat，前端窗口跟着退**：启动时会记下是哪个 Praat 拉起的（进程号 +
   exe 路径），Praat 一关，对话窗口和 API 配置小窗都自己退出。
 - **加载/停止模型有进度小窗口**：从菜单启动/停止时是 Praat 自己的进度窗口
@@ -349,7 +353,8 @@ python ai/tests/verify_model_progress_live.py   # 真机：加载/停止模型�
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
 python ai/tests/verify_api_dialog_live.py       # 真机：开着 API 配置小窗时缩窗口，Praat 不许假死
 python ai/tests/verify_frontend_follows_praat.py # 真机：关掉 Praat 后对话窗口要跟着退（--menu 走真菜单）
-```
+python ai/tests/verify_cloud_knowledge_live.py --send   # 真发 2 次小请求：对比要用知识、身份报模型名
+``` 
 
 后五条需要本机装好模型、并且在没有沙箱限制的终端里执行；
 `verify_chat_no_popup.py --legacy` 是反证（用老路径跑，应当看到窗口被拽出来）。

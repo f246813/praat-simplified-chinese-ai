@@ -70,6 +70,8 @@ TOOL_PLANNER_INSTRUCTIONS = """
     结果里没有的信息就直说没有。
 11. 只做用户要求的那件事：不要顺手多做别的操作，也不要重复调用同一个工具；
    上一步的结果已经够回答时，直接回答，不要再调工具。
+12. 回复里必须有一句能独立读懂的话：结论、测到的数值，或者「为什么做不到、还缺什么」。
+    绝对不许只写「已完成」「好的」「已处理」这种空话——用户看不到任何信息。
 """.strip()
 
 #: 接云端大模型时追加的规则（``qwen.knowledge_mode == "open"``，API 模式默认如此）：
@@ -77,15 +79,38 @@ TOOL_PLANNER_INSTRUCTIONS = """
 #: 「文献里的常见范围」和「这次实测到的值」，实测会拿想象出来的数字当测量结果。
 WORLD_KNOWLEDGE_INSTRUCTIONS = """
 你现在接的是云端大模型，可以放心用自己的语言学/语音学知识：
-12. 用户问「为什么」「这是什么」「怎么练」这类问题时，直接用你自己的知识回答：
+13. 「对比 / 评价 / 判断」类请求（例如「把这段和东京标准音比一下」「我的发音标准吗」
+    「跟普通话母语者比呢」）：先把该测的测出来（需要就换着用两三个工具，比如基频、
+    共振峰、时长、强度），再**在回复里把对比写出来**——参照系（东京标准音、普通话
+    母语者……）的典型特征是什么样（要说清那是教科书/文献里的常见范围，不是你测的）、
+    这次测到的数值是什么、差在哪里、怎么练。这类请求的交付物就是那段比较文字，
+    只回一句「已完成」等于没做。为了做这个对比多测两三个量，不算「顺手多做」。
+14. 用户问「为什么」「这是什么」「怎么练」这类问题时，直接用你自己的知识回答：
     解释原理、举常见例子、给练习建议都可以，不必硬套工具，也不要一律回
     「结果里没有」。
-13. 但**这次录音的测量数字**仍然只能来自工具结果：不要凭空写出基频、共振峰、
+15. 但**这次录音的测量数字**仍然只能来自工具结果：不要凭空写出基频、共振峰、
     时长之类的数值。引用常识范围可以，要说清那是文献里的常见范围、不是本次测量
     结果（例如「普通话 /a/ 的 F1 常见在 700–900 Hz，这次测到的是 …」）。
-14. 做完操作之后，用一两句话说明结果意味着什么（发音或声学上怎么理解），
+16. 做完操作之后，用一两句话说明结果意味着什么（发音或声学上怎么理解），
     别只报数字。
 """.strip()
+
+
+def identity_instructions(config: QwenConfig | None) -> str:
+    """身份规则：问「你是谁」时报**自己的模型名**，不自称「Praat 语音助手」。
+
+    模型名从配置里取（云端是 `deepseek-chat` 这类名字，本地是 gguf 文件名），
+    所以这段提示必须按当前配置生成，不能写死。
+    """
+
+    model = str(getattr(config, "model", "") or "").strip() or "（未配置的模型）"
+    return (
+        f"你的身份：你现在跑在模型 {model} 上（用户在前端里选的）。\n"
+        "用户问「你是谁」「我是谁」「你是什么模型」时，**必须**照下面这个格式简短回答：\n"
+        f"「我是 {model}，我被设置成 Praat 的前端。」\n"
+        "上面第一行说的「Praat 桌面助手的操作规划器」只是分工说明，不是你自我介绍用的"
+        "名字；不要自称「Praat 语音助手」或别的名字，不要列功能清单，也不要长篇自我介绍。"
+    )
 
 
 def knowledge_is_open(config: QwenConfig | None) -> bool:
@@ -95,11 +120,32 @@ def knowledge_is_open(config: QwenConfig | None) -> bool:
 
 
 def planner_instructions(config: QwenConfig | None = None) -> str:
-    """规划用的系统提示：本地小模型用严格版，云端大模型追加知识条款。"""
+    """规划用的系统提示：业务规则 + 身份规则（+ 云端大模型的知识条款）。"""
 
+    parts = [TOOL_PLANNER_INSTRUCTIONS, identity_instructions(config)]
     if knowledge_is_open(config):
-        return TOOL_PLANNER_INSTRUCTIONS + "\n\n" + WORLD_KNOWLEDGE_INSTRUCTIONS
-    return TOOL_PLANNER_INSTRUCTIONS
+        parts.append(WORLD_KNOWLEDGE_INSTRUCTIONS)
+    return "\n\n".join(parts)
+
+
+def message_text(message: Mapping[str, Any] | None) -> str:
+    """从一次响应的 ``message`` 里取出要显示的正文。
+
+    ``content`` 为空时退回 ``reasoning_content``（思考型模型会把答案只放在那里），
+    两头都空就返回空字符串。以前只有 :meth:`QwenClient.chat` 这么做，原生工具那条
+    路（``_NativePlanner``）直接读 ``content``，于是模型把话说在 reasoning 里时
+    界面就显示成「已完成」（2026-09-21 用户报的）。
+    """
+
+    if not isinstance(message, Mapping):
+        return ""
+    content = message.get("content") or ""
+    if isinstance(content, str) and content.strip():
+        return content
+    reasoning = message.get("reasoning_content") or ""
+    if isinstance(reasoning, str) and reasoning.strip():
+        return _final_reasoning_fallback(reasoning)
+    return ""
 
 
 #: 哪些服务端不认哪些「可选字段」：``{base_url: {字段名}}``。
@@ -503,13 +549,7 @@ class QwenClient:
             json_mode=json_mode,
             tools=tools,
         )
-        content = message.get("content") or ""
-        reasoning = message.get("reasoning_content") or ""
-        if isinstance(content, str) and content.strip():
-            return content
-        if isinstance(reasoning, str) and reasoning.strip():
-            return _final_reasoning_fallback(reasoning)
-        return ""
+        return message_text(message)
 
     def chat_message(
         self,
@@ -792,7 +832,14 @@ JSON 结构：
         if knowledge_is_open(self.config):
             # 云端大模型：把「可以发挥自己的知识」那几条也带上（见
             # WORLD_KNOWLEDGE_INSTRUCTIONS）。测量数字仍然只能来自工具结果。
-            system_prompt = system_prompt + "\n\n" + WORLD_KNOWLEDGE_INSTRUCTIONS
+            system_prompt = (
+                system_prompt
+                + "\n\n"
+                + WORLD_KNOWLEDGE_INSTRUCTIONS
+                + "\n\n另外：reply 字段就是给用户看的回答。对比、解释、评价类请求要把"
+                "比较和结论写在 reply 里（可以长一点），只写「已完成」等于没做；"
+                "reply 里出现的测量数值必须来自工具结果。"
+            )
         examples = """
 示例：
 用户：提取当前语音的第二共振峰带宽

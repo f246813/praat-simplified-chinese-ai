@@ -504,5 +504,50 @@ class TextToolCallTests(unittest.TestCase):
         self.assertTrue([item for item in second if item.get("role") == "tool"])
 
 
+class EmptyAnswerTests(unittest.TestCase):
+    """模型没给正文时的两条规矩（2026-09-21 用户报的「直接回复了已完成」）：
+
+    ① 先再问一次要一句正文；② 实在没有就直说没内容，绝不用「已完成」糊过去。
+    """
+
+    def test_empty_answer_is_asked_again(self) -> None:
+        client = FakeClient(
+            [answer(""), answer("我是 deepseek-chat，我被设置成 Praat 的前端。")]
+        )
+        outcome = run(client, Recorder())
+        self.assertEqual(
+            outcome.reply, "我是 deepseek-chat，我被设置成 Praat 的前端。"
+        )
+        self.assertEqual(len(client.seen_messages), 2)
+
+    def test_bare_done_is_never_shown_to_the_user(self) -> None:
+        client = FakeClient([answer(""), answer("")])
+        outcome = run(client, Recorder())
+        self.assertNotIn("已完成", outcome.reply)
+        self.assertIn("没有返回任何内容", outcome.reply)
+
+    def test_results_are_kept_when_the_model_stays_silent(self) -> None:
+        client = FakeClient([tool_call("pitch", {"time": 0.5}), answer("")])
+        execute = Recorder([(True, ["基频（0.500 秒处）= 220.000 Hz"], "")])
+        outcome = run(client, execute)
+        self.assertIn("220.000 Hz", outcome.reply)
+        self.assertIn("没有给出说明", outcome.reply)
+
+    def test_reasoning_only_message_is_used_as_the_answer(self) -> None:
+        """思考型模型把答案只放在 reasoning_content 里时也要显示出来。"""
+
+        client = FakeClient(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "想想看。\nFinal Answer: 对比结果：这次 F0 偏高。",
+                }
+            ]
+        )
+        outcome = run(client, Recorder())
+        self.assertIn("对比结果", outcome.reply)
+
+
 if __name__ == "__main__":
     unittest.main()

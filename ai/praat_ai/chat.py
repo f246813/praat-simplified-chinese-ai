@@ -500,10 +500,15 @@ def _summary_of(outcome: TurnOutcome) -> str:
     """模型没给出文字时的兜底回答。"""
 
     if outcome.results:
-        return "结果：" + "；".join(outcome.results)
+        return "结果：" + "；".join(outcome.results) + "\n（模型这次没有给出说明。）"
     if outcome.failure:
         return "执行未完成：" + outcome.failure
-    return "已完成。"
+    # 以前这里回一句「已完成。」——模型既没回答也没给操作时，界面就显示这句空话，
+    # 用户以为事情办完了（2026-09-21 用户报的）。宁可直说没内容。
+    return (
+        "模型这次没有返回任何内容：既没有回答，也没有给出要执行的操作。"
+        "把要求再说具体一点（例如指明对象、时间点、要分析的量）会更稳。"
+    )
 
 
 def _action_signature(action: Mapping[str, Any]) -> str:
@@ -678,6 +683,13 @@ def _run_agent_turn(
             break
         actions, reply = planner.next()
         if not actions:
+            if not reply:
+                # 模型既没调工具、又没写正文（实测思考型模型会把话全放在
+                # reasoning_content 里，或者干脆回空）：再问它一次要一句正文，
+                # 别让界面用一句兜底话糊过去。
+                ask = getattr(planner, "ask_for_text", None)
+                if ask is not None:
+                    reply = ask()
             outcome.reply = reply or _summary_of(outcome)
             return outcome
         for action in actions:
@@ -795,7 +807,9 @@ class _NativePlanner:
             temperature=self.client.config.plan_temperature,
         )
         actions = qwen.extract_tool_actions(message)
-        content = str(message.get("content") or "").strip()
+        # 正文取 ``content``，空的时候退回 ``reasoning_content``（思考型模型会把
+        # 答案只放在那里，以前这条路直接读 content，界面就成了「已完成」）。
+        content = qwen.message_text(message).strip()
         if not actions:
             # 没开 --jinja 时小模型偶尔把调用写成正文里的 <tool_call> 文本；
             # 那种情况也要当工具调用执行，而不是把一坨 XML 当成回答显示给用户。
@@ -809,6 +823,25 @@ class _NativePlanner:
     def observe(self, action: Mapping[str, Any], observation: str) -> None:
         call_id = str(action.get("id", "") or "call-1")
         self.messages.append(qwen.tool_result_message(call_id, observation))
+
+    def ask_for_text(self) -> str:
+        """模型没给正文时再问一次（不要工具，只要一句话中文回答）。"""
+
+        self.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "请直接用中文把你的回答写出来：回答上面的问题；做不到就说清缺什么。"
+                    "不要留空，也不要只写「已完成」。"
+                ),
+            }
+        )
+        message = self.client.chat_message(
+            self.messages,
+            max_tokens=self.client.config.plan_max_tokens,
+            temperature=self.client.config.plan_temperature,
+        )
+        return qwen.message_text(message).strip()
 
     def wrap_up(self) -> str:
         text = self.client.chat(
@@ -869,6 +902,19 @@ class _JsonPlanner:
     def observe(self, action: Mapping[str, Any], observation: str) -> None:
         tool_name = str(action.get("tool", "") or "")
         self.observations.append(f"{tool_name}：{observation}")
+
+    def ask_for_text(self) -> str:
+        """模型没给 reply 时再问一次（同一个 JSON 接口，只要 reply）。"""
+
+        plan = self.client.plan_praat_command(
+            self.user_text + "\n（请直接在 reply 里用中文回答，不要选工具，也不要留空。）",
+            self.context_text,
+            list(self.history),
+            tool_catalog=tools.catalog_text(),
+            result_path=self.result_path,
+            state_path=self.state_path,
+        )
+        return str(plan.get("reply", "") or "").strip()
 
     def wrap_up(self) -> str:
         return ""

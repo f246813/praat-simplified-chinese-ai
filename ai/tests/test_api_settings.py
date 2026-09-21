@@ -443,10 +443,9 @@ class WorldKnowledgeTests(unittest.TestCase):
     def test_local_mode_keeps_the_strict_prompt(self) -> None:
         config = self.load(None)
         self.assertEqual(config.qwen.knowledge_mode, "strict")
-        self.assertEqual(
-            qwen.planner_instructions(config.qwen),
-            qwen.TOOL_PLANNER_INSTRUCTIONS,
-        )
+        prompt = qwen.planner_instructions(config.qwen)
+        self.assertIn(qwen.TOOL_PLANNER_INSTRUCTIONS, prompt)
+        self.assertNotIn("语言学", prompt)   # 本地不加「放开知识」那一段
 
     def test_api_mode_allows_world_knowledge_by_default(self) -> None:
         config = self.cloud()
@@ -461,10 +460,9 @@ class WorldKnowledgeTests(unittest.TestCase):
     def test_turning_world_knowledge_off_keeps_the_strict_prompt(self) -> None:
         config = self.cloud(use_world_knowledge=False)
         self.assertEqual(config.qwen.knowledge_mode, "strict")
-        self.assertEqual(
-            qwen.planner_instructions(config.qwen),
-            qwen.TOOL_PLANNER_INSTRUCTIONS,
-        )
+        prompt = qwen.planner_instructions(config.qwen)
+        self.assertIn(qwen.TOOL_PLANNER_INSTRUCTIONS, prompt)
+        self.assertNotIn("语言学", prompt)
 
     def test_api_mode_carries_the_thinking_level_into_qwen(self) -> None:
         config = self.cloud(thinking_level="high")
@@ -473,6 +471,44 @@ class WorldKnowledgeTests(unittest.TestCase):
         config = self.cloud(thinking_level="off")
         self.assertEqual(config.qwen.thinking_level, "off")
         self.assertFalse(config.qwen.enable_thinking)
+
+    def test_identity_rule_reports_the_model_and_the_frontend_role(self) -> None:
+        """问「你是谁」时要说自己的模型名 + 「我被设置成 Praat 的前端」。"""
+
+        local = self.load(None)
+        local_prompt = qwen.planner_instructions(local.qwen)
+        self.assertIn("Qwen3.5-0.8B-Q4_K_M.gguf", local_prompt)
+        self.assertIn(
+            "我是 Qwen3.5-0.8B-Q4_K_M.gguf，我被设置成 Praat 的前端。", local_prompt
+        )
+        self.assertIn("不要自称「Praat 语音助手」", local_prompt)
+        cloud = self.cloud()
+        cloud_prompt = qwen.planner_instructions(cloud.qwen)
+        self.assertIn("我是 deepseek-chat，我被设置成 Praat 的前端。", cloud_prompt)
+
+    def test_open_mode_forbids_bare_done_and_asks_for_the_comparison(self) -> None:
+        """云端模式：对比类请求要把比较写出来，不许只回「已完成」。"""
+
+        prompt = qwen.planner_instructions(self.cloud().qwen)
+        self.assertIn("东京标准音", prompt)      # 举的就是用户报的那个例子
+        self.assertIn("只回一句「已完成」等于没做", prompt)
+        # 两种模式都不许用空话当回答。
+        strict = qwen.planner_instructions(self.load(None).qwen)
+        self.assertIn("「已完成」「好的」「已处理」", strict)
+
+    def test_message_text_falls_back_to_reasoning_content(self) -> None:
+        self.assertEqual(qwen.message_text({"content": " 你好 "}), " 你好 ")
+        self.assertIn(
+            "220 Hz",
+            qwen.message_text(
+                {
+                    "content": "",
+                    "reasoning_content": "想一下……\nFinal Answer: 0.5 秒处是 220 Hz。",
+                }
+            ),
+        )
+        self.assertEqual(qwen.message_text({"content": "  "}), "")
+        self.assertEqual(qwen.message_text(None), "")
 
     def test_thinking_level_aliases_are_normalized(self) -> None:
         self.assertEqual(config_module.normalize_thinking_level("高"), "high")
