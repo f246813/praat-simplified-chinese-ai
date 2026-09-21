@@ -108,32 +108,29 @@ def main() -> int:
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             config_path = directory / "ai_config.json"
+            payload = {
+                "qwen": {
+                    "base_url": "http://127.0.0.1:8000/v1",
+                    "model": "local.gguf",
+                },
+                "server": {
+                    "llama_server": "D:/llama.cpp/llama-server.exe",
+                    "model_path": "D:/models/local.gguf",
+                    "host": "127.0.0.1",
+                    "port": 8000,
+                },
+                "api": {
+                    "enabled": True,
+                    "label": "FakeCloud",
+                    "base_url": base_url,
+                    "model": MODEL,
+                    "api_key": API_KEY,
+                    "max_context_tokens": 32768,
+                    "plan_max_tokens": 800,
+                },
+            }
             config_path.write_text(
-                json.dumps(
-                    {
-                        "qwen": {
-                            "base_url": "http://127.0.0.1:8000/v1",
-                            "model": "local.gguf",
-                        },
-                        "server": {
-                            "llama_server": "D:/llama.cpp/llama-server.exe",
-                            "model_path": "D:/models/local.gguf",
-                            "host": "127.0.0.1",
-                            "port": 8000,
-                        },
-                        "api": {
-                            "enabled": True,
-                            "label": "FakeCloud",
-                            "base_url": base_url,
-                            "model": MODEL,
-                            "api_key": API_KEY,
-                            "max_context_tokens": 32768,
-                            "plan_max_tokens": 800,
-                        },
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
+                json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
 
@@ -223,11 +220,68 @@ def main() -> int:
                 f"{'OK  ' if ok else 'FAIL'} 服务端收到 {len(FakeOpenAIHandler.requests)} 次请求"
             )
             failures += 0 if ok else 1
+
+            # 世界知识：接云端模型时系统提示里必须放行「用自己的语言学知识解释」，
+            # 但测量数字仍然只能来自工具结果（2026-09-21 用户提的限制太严）。
+            system_text = " ".join(
+                str(item.get("content", ""))
+                for item in (planning or {}).get("payload", {}).get("messages", [])
+                if isinstance(item, dict) and item.get("role") == "system"
+            )
+            ok = "语言学" in system_text and "测量数字" in system_text
+            print(
+                f"{'OK  ' if ok else 'FAIL'} 系统提示放行了世界知识："
+                f"{'是' if '语言学' in system_text else '没有'}"
+            )
+            failures += 0 if ok else 1
+
+            # 思考档位：默认「中」要真的变成请求里的 reasoning_effort；改成「高」
+            # 之后下一次请求要跟着变。
+            default_level = payload_sent.get("reasoning_effort")
+            ok = default_level == "medium"
+            print(
+                f"{'OK  ' if ok else 'FAIL'} 默认思考档位发成 reasoning_effort="
+                f"{default_level!r}"
+            )
+            failures += 0 if ok else 1
+
+            payload["api"]["thinking_level"] = "high"
+            config_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            high_config = load_config(config_path)
+            before = len(FakeOpenAIHandler.requests)
+            chat.run_turn(
+                qwen.QwenClient(high_config.qwen),
+                user_text="再查一次 0.5 秒处的基频",
+                context_text=CONTEXT_TSV,
+                history=[],
+                context=context,
+                execute=execute,
+                native=True,
+            )
+            high_planning = next(
+                (
+                    item
+                    for item in FakeOpenAIHandler.requests[before:]
+                    if item["payload"].get("tools")
+                ),
+                None,
+            )
+            high_level = ((high_planning or {}).get("payload", {})).get(
+                "reasoning_effort"
+            )
+            ok = high_level == "high"
+            print(
+                f"{'OK  ' if ok else 'FAIL'} 改成「高」之后发的是 "
+                f"reasoning_effort={high_level!r}"
+            )
+            failures += 0 if ok else 1
     finally:
         server.shutdown()
         server.server_close()
         time.sleep(0.2)
-    total = 5
+    total = 8
     print(f"\n{total - failures}/{total} 个 API 模式用例通过")
     return 1 if failures else 0
 

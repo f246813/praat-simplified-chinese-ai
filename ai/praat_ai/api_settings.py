@@ -7,8 +7,11 @@
 
 两个入口共用同一份实现：
 
-- Praat 菜单「前端 → API 配置…」→ `run_ai_control.py api-config` → 本模块的
-  :func:`run_standalone`（自己起一个 Tk 根窗口）；
+- Praat 菜单「前端 → API 配置…」→ `ai/start_api_settings.py` 起一个**独立进程**
+  → `ai/run_api_settings.py` → 本模块的 :func:`run_standalone`（自己起一个 Tk
+  根窗口）。**别改回** `run_ai_control.py api-config`：那条路是阻塞式的
+  （Praat 会读子进程输出直到它退出），窗口开着的时候 Praat 整个不响应，
+  缩窗口就变幽灵窗口，见 guide.md §8.15.2；
 - 对话窗口里的「API 配置…」按钮 → :class:`ApiSettingsDialog`（挂在对话窗口上）。
 
 API key 只写进 ``ai_config.json``（该文件在 .gitignore 里，不会进仓库）；也可以用
@@ -22,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from . import qwen
-from .config import AppConfig, load_config
+from .config import AppConfig, load_config, normalize_thinking_level
 
 
 #: 常见服务商的默认地址和示例模型（第一个是给本地 OpenAI 兼容网关用的）。
@@ -84,7 +87,28 @@ DEFAULTS: dict[str, Any] = {
     "plan_max_tokens": 1500,
     "plan_temperature": 0.1,
     "vision_when_requested": False,
+    "thinking_level": "medium",
+    "use_world_knowledge": True,
 }
+
+#: 「思考档位」下拉框的显示文字 → 配置里的值（见 config.THINKING_LEVELS）。
+THINKING_CHOICES: tuple[tuple[str, str], ...] = (
+    ("自动（服务端默认）", "auto"),
+    ("关闭（最快）", "off"),
+    ("低", "low"),
+    ("中（推荐）", "medium"),
+    ("高（最慢、最深）", "high"),
+)
+
+
+def thinking_choice_label(level: str) -> str:
+    """把配置里的思考档位翻成下拉框里的显示文字。"""
+
+    wanted = normalize_thinking_level(level)
+    for label, value in THINKING_CHOICES:
+        if value == wanted:
+            return label
+    return THINKING_CHOICES[0][0]
 
 
 def settings_from_config(config: AppConfig) -> dict[str, Any]:
@@ -104,6 +128,8 @@ def settings_from_config(config: AppConfig) -> dict[str, Any]:
             "plan_max_tokens": api.plan_max_tokens,
             "plan_temperature": api.plan_temperature,
             "vision_when_requested": bool(api.vision_when_requested),
+            "thinking_level": api.thinking_level,
+            "use_world_knowledge": bool(api.use_world_knowledge),
         }
     )
     return values
@@ -157,6 +183,8 @@ def normalize_settings(values: Mapping[str, Any]) -> tuple[dict[str, Any], list[
             values.get("plan_temperature"), 0.1, 0.0, 2.0
         ),
         "vision_when_requested": bool(values.get("vision_when_requested")),
+        "thinking_level": normalize_thinking_level(values.get("thinking_level")),
+        "use_world_knowledge": bool(values.get("use_world_knowledge", True)),
     }
     return clean, errors
 
@@ -185,7 +213,15 @@ def save_settings(
     else:
         # 改了地址/模型/key 就作废上一次的验证时间。
         clean["verified_at"] = ""
-    return control.update_config({"api": clean}, config_path)
+    # 思考档位是两条路共用的（本地翻成 enable_thinking、云端翻成 reasoning_effort），
+    # 所以同时写进 ``qwen`` 节；其余字段只属于 ``api`` 节。
+    return control.update_config(
+        {
+            "api": clean,
+            "qwen": {"thinking_level": clean["thinking_level"]},
+        },
+        config_path,
+    )
 
 
 class ApiSettingsDialog:
@@ -279,6 +315,36 @@ class ApiSettingsDialog:
             row=7, column=1, sticky="w", pady=3
         )
 
+        # 思考档位：云端翻成 reasoning_effort，本地翻成 enable_thinking
+        # （见 qwen.thinking_request_fields）。默认「中」——云端大模型够聪明，
+        # 档位太低会把「先想再规划」这一步省掉。
+        ttk.Label(frame, text="思考档位").grid(row=8, column=0, sticky="w", pady=3)
+        self.thinking_choice = tk.StringVar(
+            value=thinking_choice_label(self.values["thinking_level"])
+        )
+        ttk.Combobox(
+            frame,
+            textvariable=self.thinking_choice,
+            values=[label for label, _ in THINKING_CHOICES],
+            state="readonly",
+            width=18,
+        ).grid(row=8, column=1, sticky="w", pady=3)
+        ttk.Label(
+            frame,
+            text="越高越慢，但测量规划更稳",
+            foreground="#6B7280",
+        ).grid(row=8, column=2, sticky="w", padx=(6, 0))
+
+        # 允许云端模型发挥自己的语言学知识（本地小模型永远不让，免得编数字）。
+        self.world_knowledge = tk.BooleanVar(
+            value=bool(self.values["use_world_knowledge"])
+        )
+        ttk.Checkbutton(
+            frame,
+            text="允许它用自己的语言学知识解释、举例（测量数字仍只来自工具结果）",
+            variable=self.world_knowledge,
+        ).grid(row=9, column=0, columnspan=3, sticky="w", pady=(2, 0))
+
         hint = ttk.Label(
             frame,
             text=(
@@ -289,10 +355,10 @@ class ApiSettingsDialog:
             wraplength=420,
             justify="left",
         )
-        hint.grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 2))
+        hint.grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 2))
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        buttons.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         buttons.columnconfigure(0, weight=1)
         self.status = tk.StringVar(value=self._verified_text())
         ttk.Label(buttons, textvariable=self.status, foreground="#374151").grid(
@@ -339,6 +405,14 @@ class ApiSettingsDialog:
                 break
 
     def collect(self) -> dict[str, Any]:
+        thinking = next(
+            (
+                value
+                for label, value in THINKING_CHOICES
+                if label == self.thinking_choice.get()
+            ),
+            "auto",
+        )
         return {
             "enabled": self.enabled.get(),
             "label": self.provider.get().strip(),
@@ -348,6 +422,11 @@ class ApiSettingsDialog:
             "request_timeout_sec": self.timeout.get(),
             "max_context_tokens": self.context_tokens.get(),
             "plan_max_tokens": self.plan_tokens.get(),
+            # 窗口里没有这两项的控件：原样带回，别让一次保存把它们抹掉。
+            "plan_temperature": self.values.get("plan_temperature"),
+            "vision_when_requested": self.values.get("vision_when_requested"),
+            "thinking_level": thinking,
+            "use_world_knowledge": self.world_knowledge.get(),
         }
 
     def test_connection(self) -> None:
@@ -412,7 +491,12 @@ def run_standalone(config_path: str | Path | None = None) -> int:
 
     import tkinter as tk
 
+    from . import parent_watch
+
     dialog = ApiSettingsDialog(None, config_path=config_path)
+    # Praat 关了就跟着退，别把这个小窗留在桌面上（同对话窗口）。
+    if parent_watch.should_watch():
+        parent_watch.ParentWatcher(dialog.window, grace_sec=2.0).start()
     dialog.window.mainloop()
     try:
         dialog.window.destroy()

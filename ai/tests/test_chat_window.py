@@ -427,5 +427,35 @@ class StatusTextTests(unittest.TestCase):
         self.assertIn("预设：Qwen3.5-2B（视觉）", text)
 
 
+class ApiChoiceLabelTests(unittest.TestCase):
+    """API 模式下「模型预设」下拉框要显示当前云端模型（2026-09-21 用户报的）。
+
+    以前这一行永远是本地 qwen 预设，接上 API 之后用户看到还是本地模型名。
+    """
+
+    def test_cloud_model_is_shown_with_the_provider_name(self) -> None:
+        config = AppConfig()
+        config.api.enabled = True
+        config.api.base_url = "https://api.deepseek.com/v1"
+        config.api.model = "deepseek-chat"
+        config.api.label = "DeepSeek"
+        self.assertEqual(
+            chat.api_choice_label(config),
+            "云端 API：DeepSeek / deepseek-chat",
+        )
+
+    def test_cloud_model_without_a_provider_name_still_names_the_model(self) -> None:
+        config = AppConfig()
+        config.api.enabled = True
+        config.api.base_url = "https://api.example.com/v1"
+        config.api.model = "big-model"
+        config.api.label = ""
+        self.assertEqual(chat.api_choice_label(config), "云端 API：big-model")
+
+    def test_missing_model_is_reported_instead_of_an_empty_row(self) -> None:
+        config = AppConfig()
+        self.assertEqual(chat.api_choice_label(config), "云端 API：未配置")
+
+
 if __name__ == "__main__":
     unittest.main()

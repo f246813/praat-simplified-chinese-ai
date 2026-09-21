@@ -8,6 +8,8 @@ import json
 import os
 import tempfile
 import unittest
+import urllib.error
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -138,14 +140,24 @@ class ApiConfigParsingTests(unittest.TestCase):
 
 
 class ClientPayloadTests(unittest.TestCase):
-    def payload_for(self, provider: str) -> dict:
+    def setUp(self) -> None:
+        # 「哪个服务端不认哪个字段」是模块级记忆（按 base_url 分），
+        # 每条用例自己清一遍，免得互相影响。
+        qwen.forget_rejected_thinking_fields()
+
+    def tearDown(self) -> None:
+        qwen.forget_rejected_thinking_fields()
+
+    def payload_for(self, provider: str, **overrides) -> dict:
+        settings = {
+            "base_url": "https://api.example.com/v1",
+            "model": "big-model",
+            "api_key": "sk-test",
+            "provider": provider,
+        }
+        settings.update(overrides)
         client = qwen.QwenClient(
-            qwen.QwenConfig(
-                base_url="https://api.example.com/v1",
-                model="big-model",
-                api_key="sk-test",
-                provider=provider,
-            )
+            qwen.QwenConfig(**settings)
         )
         captured: dict = {}
 
@@ -187,6 +199,273 @@ class ClientPayloadTests(unittest.TestCase):
         captured = self.payload_for("api")
         headers = {key.casefold(): value for key, value in captured["headers"].items()}
         self.assertEqual(headers.get("authorization"), "Bearer sk-test")
+
+    # ---------------------------------------------------- 思考档位（2026-09-21 用户提的）
+
+    def test_api_thinking_level_becomes_reasoning_effort(self) -> None:
+        for level in ("low", "medium", "high"):
+            captured = self.payload_for("api", thinking_level=level)
+            self.assertEqual(captured["body"]["reasoning_effort"], level)
+
+    def test_api_thinking_off_sends_no_reasoning_field(self) -> None:
+        for level in ("off", "auto"):
+            captured = self.payload_for("api", thinking_level=level)
+            self.assertNotIn("reasoning_effort", captured["body"])
+
+    def test_local_thinking_level_toggles_enable_thinking(self) -> None:
+        high = self.payload_for("llama.cpp", thinking_level="high")
+        self.assertTrue(high["body"]["chat_template_kwargs"]["enable_thinking"])
+        off = self.payload_for("llama.cpp", thinking_level="off")
+        self.assertFalse(off["body"]["chat_template_kwargs"]["enable_thinking"])
+        # auto 沿用老的 enable_thinking 开关（不改变本地已有行为）。
+        auto = self.payload_for("llama.cpp", thinking_level="auto", enable_thinking=True)
+        self.assertTrue(auto["body"]["chat_template_kwargs"]["enable_thinking"])
+
+    def test_rejected_reasoning_effort_is_retried_without_it(self) -> None:
+        """服务端不认 reasoning_effort 时去掉重试，而且之后不再发（别白挨 400）。"""
+
+        calls: list[dict] = []
+
+        class FakeResponse:
+            status = 200
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
+                ).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            body = json.loads(request.data.decode("utf-8"))
+            calls.append(body)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    400,
+                    "Bad Request",
+                    {},
+                    BytesIO(
+                        b'{"error":{"message":"unknown field reasoning_effort"}}'
+                    ),
+                )
+            return FakeResponse()
+
+        client = qwen.QwenClient(
+            qwen.QwenConfig(
+                base_url="https://api.example.com/v1",
+                model="big-model",
+                api_key="sk-test",
+                provider="api",
+                thinking_level="high",
+            )
+        )
+        with patch.object(qwen.urllib.request, "urlopen", fake_urlopen):
+            client.chat_message([{"role": "user", "content": "你好"}])
+            client.chat_message([{"role": "user", "content": "再来一次"}])
+
+        self.assertEqual(calls[0]["reasoning_effort"], "high")
+        self.assertNotIn("reasoning_effort", calls[1])
+        self.assertIn(
+            "reasoning_effort",
+            qwen.rejected_thinking_fields("https://api.example.com/v1"),
+        )
+        self.assertNotIn("reasoning_effort", calls[2])
+
+    def test_a_bare_400_also_drops_the_thinking_field(self) -> None:
+        """有的服务端只说 invalid request，不点名 reasoning_effort，也要降级。"""
+
+        calls: list[dict] = []
+
+        class FakeResponse:
+            status = 200
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
+                ).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            body = json.loads(request.data.decode("utf-8"))
+            calls.append(body)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    400,
+                    "Bad Request",
+                    {},
+                    BytesIO(b'{"error":{"message":"invalid request"}}'),
+                )
+            return FakeResponse()
+
+        client = qwen.QwenClient(
+            qwen.QwenConfig(
+                base_url="https://api.example.com/v1",
+                model="big-model",
+                api_key="sk-test",
+                provider="api",
+                thinking_level="medium",
+            )
+        )
+        with patch.object(qwen.urllib.request, "urlopen", fake_urlopen):
+            client.chat_message([{"role": "user", "content": "你好"}])
+        self.assertEqual(calls[0]["reasoning_effort"], "medium")
+        self.assertNotIn("reasoning_effort", calls[1])
+
+    def test_a_422_also_drops_the_thinking_field(self) -> None:
+        """有的网关用 422 报「字段不认」，状态码不能只认 400。"""
+
+        calls: list[dict] = []
+
+        class FakeResponse:
+            status = 200
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
+                ).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            body = json.loads(request.data.decode("utf-8"))
+            calls.append(body)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    422,
+                    "Unprocessable Entity",
+                    {},
+                    BytesIO(b'{"error":{"message":"extra field not allowed"}}'),
+                )
+            return FakeResponse()
+
+        client = qwen.QwenClient(
+            qwen.QwenConfig(
+                base_url="https://api.example.com/v1",
+                model="big-model",
+                api_key="sk-test",
+                provider="api",
+                thinking_level="low",
+            )
+        )
+        with patch.object(qwen.urllib.request, "urlopen", fake_urlopen):
+            client.chat_message([{"role": "user", "content": "你好"}])
+        self.assertNotIn("reasoning_effort", calls[1])
+
+    def test_a_server_error_does_not_silently_drop_the_thinking_field(self) -> None:
+        """5xx / 401 这类不是「字段不认」，该报错就报错，别偷偷降级。"""
+
+        calls: list[dict] = []
+
+        def fake_urlopen(request, timeout=None):
+            calls.append(json.loads(request.data.decode("utf-8")))
+            raise urllib.error.HTTPError(
+                request.full_url,
+                401,
+                "Unauthorized",
+                {},
+                BytesIO(b'{"error":{"message":"invalid api key"}}'),
+            )
+
+        client = qwen.QwenClient(
+            qwen.QwenConfig(
+                base_url="https://api.example.com/v1",
+                model="big-model",
+                api_key="sk-bad",
+                provider="api",
+                thinking_level="low",
+            )
+        )
+        with patch.object(qwen.urllib.request, "urlopen", fake_urlopen):
+            with self.assertRaises(qwen.QwenError):
+                client.chat_message([{"role": "user", "content": "你好"}])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            qwen.rejected_thinking_fields("https://api.example.com/v1"), set()
+        )
+
+
+class WorldKnowledgeTests(unittest.TestCase):
+    """云端大模型可以发挥自己的语言学知识；本地小模型仍然只许用工具结果。
+
+    用户 2026-09-21 提的：接上大模型之后限制太严，发挥不出世界知识的优势。
+    """
+
+    def load(self, api: dict | None) -> object:
+        with tempfile.TemporaryDirectory() as raw:
+            payload = dict(LOCAL_ONLY)
+            if api is not None:
+                payload["api"] = api
+            path = write_config(Path(raw), payload)
+            return load_config(path)
+
+    def cloud(self, **overrides) -> dict:
+        values = {
+            "enabled": True,
+            "label": "DeepSeek",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+            "api_key": "sk-x",
+        }
+        values.update(overrides)
+        return self.load(values)
+
+    def test_local_mode_keeps_the_strict_prompt(self) -> None:
+        config = self.load(None)
+        self.assertEqual(config.qwen.knowledge_mode, "strict")
+        self.assertEqual(
+            qwen.planner_instructions(config.qwen),
+            qwen.TOOL_PLANNER_INSTRUCTIONS,
+        )
+
+    def test_api_mode_allows_world_knowledge_by_default(self) -> None:
+        config = self.cloud()
+        self.assertTrue(config_module.api_is_active(config))
+        self.assertEqual(config.qwen.knowledge_mode, "open")
+        prompt = qwen.planner_instructions(config.qwen)
+        self.assertIn("语言学", prompt)
+        # 放开的是「解释」，不是「编测量数字」。
+        self.assertIn("测量数字", prompt)
+        self.assertIn("文献里的常见范围", prompt)
+
+    def test_turning_world_knowledge_off_keeps_the_strict_prompt(self) -> None:
+        config = self.cloud(use_world_knowledge=False)
+        self.assertEqual(config.qwen.knowledge_mode, "strict")
+        self.assertEqual(
+            qwen.planner_instructions(config.qwen),
+            qwen.TOOL_PLANNER_INSTRUCTIONS,
+        )
+
+    def test_api_mode_carries_the_thinking_level_into_qwen(self) -> None:
+        config = self.cloud(thinking_level="high")
+        self.assertEqual(config.qwen.thinking_level, "high")
+        self.assertTrue(config.qwen.enable_thinking)
+        config = self.cloud(thinking_level="off")
+        self.assertEqual(config.qwen.thinking_level, "off")
+        self.assertFalse(config.qwen.enable_thinking)
+
+    def test_thinking_level_aliases_are_normalized(self) -> None:
+        self.assertEqual(config_module.normalize_thinking_level("高"), "high")
+        self.assertEqual(config_module.normalize_thinking_level("2"), "medium")
+        self.assertEqual(config_module.normalize_thinking_level("  LOW "), "low")
+        self.assertEqual(config_module.normalize_thinking_level(""), "auto")
+        self.assertEqual(config_module.normalize_thinking_level("乱写"), "auto")
+        self.assertEqual(config_module.normalize_thinking_level(None), "auto")
 
 
 class SettingsValidationTests(unittest.TestCase):
@@ -264,6 +543,62 @@ class SettingsValidationTests(unittest.TestCase):
         self.assertIn("DeepSeek", labels)
         self.assertIn("OpenAI", labels)
         self.assertTrue(all(item.get("base_url") for item in api_settings.PROVIDERS))
+
+    def test_settings_round_trip_thinking_and_knowledge(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(
+                Path(raw),
+                {
+                    **LOCAL_ONLY,
+                    "api": {
+                        "enabled": True,
+                        "label": "DeepSeek",
+                        "base_url": "https://api.deepseek.com/v1",
+                        "model": "deepseek-chat",
+                        "api_key": "sk-x",
+                        "thinking_level": "high",
+                        "use_world_knowledge": False,
+                    },
+                },
+            )
+            values = api_settings.settings_from_config(load_config(path))
+            clean, errors = api_settings.normalize_settings(values)
+        self.assertEqual(errors, [])
+        self.assertEqual(values["thinking_level"], "high")
+        self.assertFalse(values["use_world_knowledge"])
+        self.assertEqual(clean["thinking_level"], "high")
+        self.assertFalse(clean["use_world_knowledge"])
+
+    def test_saving_stores_the_thinking_level_for_both_modes(self) -> None:
+        """思考档位写进 ``api`` 和 ``qwen`` 两节：本地/云端各自翻成自己的字段。"""
+
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), LOCAL_ONLY)
+            api_settings.save_settings(
+                {
+                    "enabled": True,
+                    "label": "DeepSeek",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": "deepseek-chat",
+                    "api_key": "sk-test",
+                    "thinking_level": "低",
+                    "use_world_knowledge": True,
+                },
+                path,
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["api"]["thinking_level"], "low")
+        self.assertEqual(payload["qwen"]["thinking_level"], "low")
+        self.assertTrue(payload["api"]["use_world_knowledge"])
+
+    def test_thinking_choice_labels_cover_every_level(self) -> None:
+        labels = {value: label for label, value in api_settings.THINKING_CHOICES}
+        for level in config_module.THINKING_LEVELS:
+            self.assertIn(level, labels)
+            self.assertEqual(api_settings.thinking_choice_label(level), labels[level])
+        self.assertEqual(
+            api_settings.thinking_choice_label("乱写"), labels["auto"]
+        )
 
 
 class ProbeTests(unittest.TestCase):

@@ -18,6 +18,13 @@ class QwenConfig:
     request_timeout_sec: int = 60
     default_mode: str = "text"
     enable_thinking: bool = False
+    #: 思考档位：``auto`` / ``off`` / ``low`` / ``medium`` / ``high``。
+    #: 本地（llama.cpp）翻成 chat 模板的 ``enable_thinking``，云端翻成
+    #: ``reasoning_effort``（服务端不认这个字段时会自动退回不带它，见 qwen.py）。
+    thinking_level: str = "auto"
+    #: ``strict``（默认，只许用工具结果里的数字）/ ``open``（云端大模型可以发挥
+    #: 自己的语言学知识去解释、举例，测量数字仍然只能来自工具结果）。
+    knowledge_mode: str = "strict"
     vision_when_requested: bool = True
     max_context_tokens: int = 8192
     keep_alive_sec: int = 300
@@ -48,6 +55,12 @@ class ApiConfig:
     plan_max_tokens: int = 1500
     plan_temperature: float = 0.1
     vision_when_requested: bool = False
+    #: 思考档位（见 :class:`QwenConfig.thinking_level`）。云端大模型默认给「中」，
+    #: 又慢又贵的那一档留给需要深想的测量规划。
+    thinking_level: str = "medium"
+    #: 云端模型可以发挥自己的语言学/语音学知识（默认开；本地小模型仍然是
+    #: ``strict``，免得它拿想象出来的数字当测量结果）。
+    use_world_knowledge: bool = True
     #: 最近一次「测试连接」成功的时间（只用于显示，不参与逻辑）。
     verified_at: str = ""
 
@@ -212,6 +225,39 @@ def api_is_active(config: AppConfig) -> bool:
     )
 
 
+#: 思考档位的合法取值。``auto`` 表示「不指定」，交给服务端/模型自己的默认。
+THINKING_LEVELS = ("auto", "off", "low", "medium", "high")
+
+#: 界面上认的写法（中英文、数字都收）。
+_THINKING_ALIASES = {
+    "": "auto",
+    "auto": "auto",
+    "default": "auto",
+    "自动": "auto",
+    "off": "off",
+    "none": "off",
+    "no": "off",
+    "关闭": "off",
+    "0": "off",
+    "low": "low",
+    "低": "low",
+    "1": "low",
+    "medium": "medium",
+    "mid": "medium",
+    "中": "medium",
+    "2": "medium",
+    "high": "high",
+    "高": "high",
+    "3": "high",
+}
+
+
+def normalize_thinking_level(value: Any) -> str:
+    """把配置/界面里的思考档位收成 :data:`THINKING_LEVELS` 里的一个。"""
+
+    return _THINKING_ALIASES.get(str(value or "").strip().casefold(), "auto")
+
+
 def apply_api_to_qwen(config: AppConfig) -> None:
     """把 API 节的设置搬进 ``qwen``（只在 API 模式可用时）。
 
@@ -232,8 +278,12 @@ def apply_api_to_qwen(config: AppConfig) -> None:
     config.qwen.plan_max_tokens = int(api.plan_max_tokens)
     config.qwen.plan_temperature = float(api.plan_temperature)
     config.qwen.vision_when_requested = bool(api.vision_when_requested)
-    # 云端模型不用 llama.cpp 的 chat 模板开关（那是本地服务专有的）。
-    config.qwen.enable_thinking = False
+    # 云端模型的思考档位走 reasoning_effort（见 qwen.thinking_request_fields），
+    # 不用 llama.cpp 的 chat 模板开关（那是本地服务专有的）。
+    config.qwen.thinking_level = normalize_thinking_level(api.thinking_level)
+    config.qwen.enable_thinking = config.qwen.thinking_level not in {"off", "auto"}
+    # 云端大模型可以用自己的知识解释（默认开）；本地小模型不让它发挥，免得编数字。
+    config.qwen.knowledge_mode = "open" if api.use_world_knowledge else "strict"
     # API 模式下不许悄悄拉起本地 llama-server。
     config.server.auto_start = False
 

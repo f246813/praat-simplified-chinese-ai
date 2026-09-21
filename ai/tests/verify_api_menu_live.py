@@ -8,8 +8,9 @@
 菜单在编辑器窗口上）→ 在菜单里找到「API 配置…」→ 给它发 `WM_COMMAND`（就是点击走
 的那条回调）→ 等那个 Tk 小窗口出现 → 关掉它 → 确认 Praat 还活着、没有崩溃转储。
 
-注意：菜单回调会一直阻塞到窗口被关掉（Python + Tk 的 mainloop），所以这里用
-`PostMessage` 异步触发，不能等 `SendMessage` 返回。
+注意：菜单项现在起的是**独立进程**里的窗口（见 guide.md §8.15.2），Praat 侧几
+百毫秒就返回；这里仍然用 `PostMessage` 异步触发，因为要抓「Praat 一边开着窗口
+一边还能响应」这件事。
 """
 
 from __future__ import annotations

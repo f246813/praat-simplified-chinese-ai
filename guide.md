@@ -963,8 +963,13 @@ Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COM
 
 - 窗口是 Python + Tk（`ai/praat_ai/api_settings.py`）：服务商下拉 + Base URL +
   模型名 + API key（默认打码，可点「显示」）+ 超时/上下文/回复上限，
+  **思考档位**（自动/关闭/低/中/高）、「允许它用自己的语言学知识解释」开关，
   「测试连接」按钮、保存/取消。**测试连接**发一条极小的对话请求
   （`qwen.probe_api`）——比只查 ``/models`` 靠得住，很多网关的 ``/models`` 是假的；
+- 窗口跑在**独立进程**里（`ai/start_api_settings.py` 拉起 `ai/run_api_settings.py`），
+  Praat 只等启动器那零点几秒。**千万别改回** `runControlCommand("api-config")`：
+  那条路会让 Praat 一直读到子进程退出，而窗口要等用户点关闭，Praat 就会整个
+  不响应（缩窗口变幽灵窗口，见 §8.15）；
 - 保存写进 `ai_config.json` 的 **`api` 节**（这个文件在 .gitignore 里，key 不会进
   仓库）；也可以用环境变量 `PRAAT_AI_API_KEY`（还有 `PRAAT_AI_API_BASE_URL` /
   `PRAAT_AI_API_MODEL`）覆盖，界面里留空即可；
@@ -979,13 +984,19 @@ Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COM
 - 请求形状随 `provider` 变：`llama.cpp` 带 `chat_template_kwargs`（多轮回灌靠它，
   见 §8.4），`api` 不带——云端不认这个字段；遇到只认 `max_completion_tokens` 的
   新模型会自动换字段重试一次（`QwenClient._post`）；
-- 对话窗口里也有同一个入口（「API 配置…」按钮）；点「应用预设」= 回到本地模型
+- 对话窗口里也有同一个入口（「API 配置…」按钮，挂在对话窗口上）；菜单里那个窗口
+  保存之后，对话窗口会在 1 秒内发现 `ai_config.json` 变了并自己刷新
+  （`ChatWindow.check_config_changed`）；点「应用预设」= 回到本地模型
   （会顺手关掉 API 模式），这样两边都走得通。
+- API 模式下「模型预设」下拉框第一行显示的是**当前云端模型**
+  （`云端 API：<服务商> / <模型>`，见 `chat.api_choice_label`），不再一直显示
+  本地 qwen 预设（2026-09-21 用户报的）。
 
-回归：`ai/tests/test_api_settings.py`（17 条：配置解析/环境变量/请求形状/key 不泄漏/
-校验/保存/探测）、`python ai/tests/verify_api_mode.py`（5 条：自己起一个**假的
+回归：`ai/tests/test_api_settings.py`（配置解析/环境变量/请求形状/key 不泄漏/
+校验/保存/探测/思考档位/世界知识）、`python ai/tests/verify_api_mode.py`（8 条：自己起一个**假的
 OpenAI 兼容服务**，真走 HTTP 跑完一轮 `run_turn`——工具 schema 78 个字段都在、
-没有 llama.cpp 专有字段、Authorization 头正确、工具调用被真的执行）、
+没有 llama.cpp 专有字段、Authorization 头正确、工具调用被真的执行、
+系统提示放行了世界知识、默认「中」和高档都真的变成请求里的 `reasoning_effort`）、
 `python ai/tests/verify_api_menu_live.py`（真机：在编辑器菜单里找到
 「前端 / API 配置...」并触发它的回调，小窗口弹出、关掉之后 Praat 还活着）。
 
@@ -1059,3 +1070,92 @@ C++ 已经重画两遍，剩下的属于截图工具会放大的观感。
 而且一开始就报进度」和「llama-server 路径不对时报中文错误、不泄漏日志句柄」）、
 `ai/tests/progress_window_utils.py` + `verify_model_progress_live.py`
 （真机抓两张 PNG 数像素：第一帧必须有进度条，0.5 秒后填充必须变多）。
+
+### 8.15 前端跟着 Praat 走、API 配置不许堵住 Praat（2026-09-21 用户实测四条）
+
+用户实测报了四条，第 1、2 条是**架构问题**（不是小 bug），第 3、4 条是接上云端
+大模型之后才暴露的：
+
+#### 8.15.1 关掉 Praat 之后对话窗口不关
+
+对话窗口是 Praat 拉起来的**独立进程**（`start_ai_chat.py`），以前没人告诉它
+「Praat 是谁、还在不在」，所以 Praat 关了它还杵在桌面上。
+
+现在启动前端时把两条线索写进环境变量（`sys/PraatAiControl.cpp` 的
+`runDetachedLauncher`）：`PRAAT_AI_PRAAT_PID`（当时那个 Praat 的进程号）、
+`PRAAT_AI_PRAAT_EXECUTABLE`（Praat.exe 路径）。前端每秒看一眼
+（`ai/praat_ai/parent_watch.py`）：
+
+- 有进程号就查那个进程；没有进程号（手工起的窗口）就数一遍进程表里还有没有 Praat；
+- 查不出来（不是 Windows、tasklist 不可用）**不关**——宁可留着，也别误关；
+- 启动时根本没有 Praat 在跑（开发时手工起的窗口）就不盯。
+
+对话窗口和菜单里那个「API 配置」小窗都挂了 `ParentWatcher`；对话窗口先写一行
+「Praat 已经关闭，前端窗口跟着退出。」再关。
+
+回归：`ai/tests/test_parent_watch.py`（进程号解析、三态判断、宽限期、回调接管）、
+`python ai/tests/verify_frontend_follows_praat.py`（真机：Praat 活着时窗口不许关，
+关掉 Praat 之后窗口必须自己退）；加 `--menu` 走真菜单那条路（覆盖 C++ 的接线）。
+
+#### 8.15.2 配置 API 时缩小语图/主窗口会崩
+
+真机复现出来的机制是**假死**（事件日志里也是 `AppHangB1`，不是崩溃）：菜单项以前走
+`runControlCommand("api-config")` → `praat_runPythonScriptFile()`，而那个函数会
+**一直读子进程的标准输出直到子进程退出**；Tk 窗口却要等用户点关闭才退出，于是
+Praat 主线程整个被堵住：
+
+- `SendMessageTimeout(..., SMTO_ABORTIFHUNG)` 直接报 `Responding=False`（实测）；
+- 这时候缩窗口，窗口变成白板/幽灵，连别的进程 `SetWindowPos` 都会卡住
+  （复现脚本自己就被卡住了）；再点关闭就是「未响应 → 结束进程」，用户看到的就是崩溃。
+
+修法：菜单项改成新起一个**独立进程**显示那个窗口
+（`ai/start_api_settings.py` → `ai/run_api_settings.py`），Praat 只等启动器那
+零点几秒。`PraatAiControl_configureApi()` 现在调 `launchApiSettingsWindow()`。
+
+回归：`python ai/tests/verify_api_dialog_live.py`——开小窗 → 用
+`SMTO_ABORTIFHUNG` 问一句「Praat 还响应吗」（必须 True）→ `SetWindowPos` 连缩三次
+语图窗口和对象窗口（假死时这一步自己就会卡住）→ 关小窗、关 Praat，全程不许假死、
+不许新增崩溃转储，小窗在 Praat 关掉之后也要跟着退。
+
+#### 8.15.3 接上 API 之后「模型预设」还显示本地 qwen 模型
+
+那条下拉框以前永远选中的是本地预设。现在 API 模式下第 0 行是
+`云端 API：<服务商> / <模型>`（`chat.api_choice_label`）并被选中；提示行还会写出
+思考档位和「可以发挥自己的语言学知识」。选中这一行再点「应用预设」不会去动本地
+服务（提示用户想回本地就选一个本地预设）。
+
+回归：`ai/tests/test_chat_window.py::ApiChoiceLabelTests`、
+`verify_chat_window_ui.py`（真机：切到云端配置后读下拉框的文字，必须含
+`deepseek-chat` 和「云端 API」，并且点「应用预设」不进忙碌状态）。
+
+#### 8.15.4 接上大模型之后限制太严 + 没有思考档位
+
+**限制太严**：规划提示词第 10 条原来写死「回复里只能用工具结果里出现过的数字和
+名称，结果里没有的信息就直说没有」——本地小模型必须这样（它会拿想象出来的数字当
+测量结果），但云端大模型的**语言学知识**就这样被浪费了：问「为什么 F2 能区分元音」
+它也回「结果里没有」。
+
+现在分两种模式（`qwen.knowledge_mode`）：
+
+- `strict`（本地默认）：就是原来的提示词，一个字没变；
+- `open`（API 模式默认，`api.use_world_knowledge`，可在窗口里关）：在提示词后面追加
+  `WORLD_KNOWLEDGE_INSTRUCTIONS`——可以解释原理、举例子、给练习建议；但**这次录音的
+  测量数字仍然只能来自工具结果**，引用常识范围要说明那是文献常见值。
+
+**思考档位**：`thinking_level` = `auto`/`off`/`low`/`medium`/`high`（中英文、数字
+写法都认，`config.normalize_thinking_level`）。翻译成请求字段的是
+`qwen.thinking_request_fields`：云端 → `reasoning_effort`；本地 → llama.cpp 的
+`chat_template_kwargs.enable_thinking`（`auto` 沿用 `qwen.enable_thinking`，本地行为
+不变）。云端默认 `medium`。
+
+服务端不认 `reasoning_effort` 时（DeepSeek 这类网关有的只看 `400`、连字段名都不点）
+会自动去掉它重发一次，并记进 `qwen.REASONING_FIELDS_REJECTED`，之后不再发——
+用户不用自己去猜哪个网关支持什么。
+
+窗口里：`API 配置` 多了「思考档位」下拉和「允许它用自己的语言学知识解释」勾选框；
+保存会把档位同时写进 `api` 和 `qwen` 两节（本地/云端各翻各的字段）。
+
+回归：`ai/tests/test_api_settings.py`（`WorldKnowledgeTests` + 请求形状用例：
+默认/高/关、被拒后不带重试、`400` 不点名也要降级）、
+`python ai/tests/verify_api_mode.py`（假服务端里真发一遍，断言系统提示有
+「语言学」、默认档位是 `medium`、改成 `high` 之后请求里就是 `high`）。

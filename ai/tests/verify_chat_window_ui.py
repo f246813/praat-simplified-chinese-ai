@@ -235,6 +235,28 @@ def main() -> int:
                 )
                 if not ok:
                     problems.append(f"「填 API key 并保存」没有写进配置：{saved}")
+                # 接上云端模型之后，窗口上方那一行「模型预设」必须显示**当前**模型
+                # （2026-09-21 用户报的：还是显示本地 qwen 模型）。
+                from praat_ai.config import api_is_active, load_config
+
+                cloud = load_config(path)
+                print(f"· 切到云端配置：api_is_active={api_is_active(cloud)}")
+                window.config = cloud
+                window.refresh_preset_widgets()
+                pump(window, 1)
+                shown = window.preset_choice.get()
+                print(f"· 预设框显示：{shown!r}")
+                if "deepseek-chat" not in shown or "云端 API" not in shown:
+                    problems.append(f"接上 API 之后预设框没显示当前云端模型：{shown!r}")
+                # 选中的就是「当前在用的云端模型」：点「应用预设」不该去重启本地服务。
+                window.apply_selected_preset()
+                pump(window, 1)
+                if window.busy:
+                    problems.append("选中云端那一行再点「应用预设」进入了忙碌状态")
+                else:
+                    print("· 选中云端那一行再点「应用预设」：没有触发本地模型切换")
+                window.reload_config()
+                pump(window, 1)
         except Exception as error:   # noqa: BLE001
             problems.append(f"API key 保存检查失败：{error}")
         window.flush_messages()

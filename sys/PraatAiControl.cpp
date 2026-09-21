@@ -317,19 +317,27 @@ namespace {
 		return { };
 	}
 
-	void launchAiChatWindow () {
-		writeChatContext (true);
-		const std::filesystem::path launcher = projectDirectoryPath() / "start_ai_chat.py";
+	/*
+		跑一个「脱离」的 Python 启动器：Praat 只等它几百毫秒（它把真正的窗口进程
+		拉起来就退出了）。
+
+		顺便告诉那个窗口「是谁启动了你」——Praat 的进程号 + Praat.exe 路径。前端
+		按这两条线索盯着：Praat 关掉之后，对话窗口和 API 配置小窗都自己退出
+		（见 ai/praat_ai/parent_watch.py，用户 2026-09-21 报的 bug）。
+	*/
+	void runDetachedLauncher (const std::filesystem::path &launcher) {
 		const std::string launcher8 = launcher. u8string();
 		const std::string directory8 = projectDirectoryPath(). u8string();
 		autostring32 launcher32 = Melder_8to32_e (launcher8. c_str());
 		autostring32 directory32 = Melder_8to32_e (directory8. c_str());
 		const std::filesystem::path executable = praatExecutablePath ();
 		#if defined (_WIN32)
+			const std::wstring pidText = std::to_wstring (praatProcessId ());
 			SetEnvironmentVariableW (
 				L"PRAAT_AI_PRAAT_EXECUTABLE",
 				executable. empty() ? nullptr : executable. wstring(). c_str()
 			);
+			SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_PID", pidText. c_str());
 		#endif
 		try {
 			praat_runPythonScriptFile (
@@ -339,12 +347,32 @@ namespace {
 		} catch (...) {
 			#if defined (_WIN32)
 				SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_EXECUTABLE", nullptr);
+				SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_PID", nullptr);
 			#endif
 			throw;
 		}
 		#if defined (_WIN32)
 			SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_EXECUTABLE", nullptr);
+			SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_PID", nullptr);
 		#endif
+	}
+
+	void launchAiChatWindow () {
+		writeChatContext (true);
+		runDetachedLauncher (projectDirectoryPath() / "start_ai_chat.py");
+	}
+
+	void launchApiSettingsWindow () {
+		/*
+			「前端 → API 配置…」：新起一个**独立**进程显示那个 Tk 窗口。
+
+			不能走 runControlCommand()：那条路 = praat_runPythonScriptFile()，
+			Praat 会一直读子进程的标准输出直到子进程退出；而这个窗口要等用户点
+		关闭才退出，于是 Praat 的主线程整个被堵住（实测窗口 Responding=False）：
+			缩一下语图窗口或对象窗口就成了幽灵窗口，再点关闭就是「未响应 → 结束
+			进程」，用户看到的就是崩溃（2026-09-21 用户报的）。
+		*/
+		runDetachedLauncher (projectDirectoryPath() / "start_api_settings.py");
 	}
 
 }
@@ -425,8 +453,11 @@ void PraatAiControl_configureApi () {
 		窗口本身是 Python + Tk 的（ai/praat_ai/api_settings.py）：填服务商、Base URL、
 		模型名和 key，点「测试连接」确认，保存后写进 ai_config.json 的 api 节，
 		前端下一次请求就改用云端模型（本地 llama-server 的配置原样留着）。
+
+		窗口要跑在**独立进程**里（launchApiSettingsWindow），不能让 Praat 等它——
+		否则窗口开着的时候 Praat 整个不响应，缩窗就变幽灵窗口（见那个函数的注释）。
 	*/
-	runControlCommand (U"api-config");
+	launchApiSettingsWindow ();
 	PraatAiControl_refreshStatus ();
 }
 

@@ -69,8 +69,101 @@ TOOL_PLANNER_INSTRUCTIONS = """
 10. 回复里只能用工具结果里出现过的数字、名称和文件名，一个都不要自己编造或推算；
     结果里没有的信息就直说没有。
 11. 只做用户要求的那件事：不要顺手多做别的操作，也不要重复调用同一个工具；
-    上一步的结果已经够回答时，直接回答，不要再调工具。
+   上一步的结果已经够回答时，直接回答，不要再调工具。
 """.strip()
+
+#: 接云端大模型时追加的规则（``qwen.knowledge_mode == "open"``，API 模式默认如此）：
+#: 允许它发挥自己的语言学知识去解释、举例。本地小模型不加这一段——它分不清
+#: 「文献里的常见范围」和「这次实测到的值」，实测会拿想象出来的数字当测量结果。
+WORLD_KNOWLEDGE_INSTRUCTIONS = """
+你现在接的是云端大模型，可以放心用自己的语言学/语音学知识：
+12. 用户问「为什么」「这是什么」「怎么练」这类问题时，直接用你自己的知识回答：
+    解释原理、举常见例子、给练习建议都可以，不必硬套工具，也不要一律回
+    「结果里没有」。
+13. 但**这次录音的测量数字**仍然只能来自工具结果：不要凭空写出基频、共振峰、
+    时长之类的数值。引用常识范围可以，要说清那是文献里的常见范围、不是本次测量
+    结果（例如「普通话 /a/ 的 F1 常见在 700–900 Hz，这次测到的是 …」）。
+14. 做完操作之后，用一两句话说明结果意味着什么（发音或声学上怎么理解），
+    别只报数字。
+""".strip()
+
+
+def knowledge_is_open(config: QwenConfig | None) -> bool:
+    """这个配置允许模型发挥自己的世界知识吗（云端默认开、本地默认关）。"""
+
+    return str(getattr(config, "knowledge_mode", "strict") or "strict") == "open"
+
+
+def planner_instructions(config: QwenConfig | None = None) -> str:
+    """规划用的系统提示：本地小模型用严格版，云端大模型追加知识条款。"""
+
+    if knowledge_is_open(config):
+        return TOOL_PLANNER_INSTRUCTIONS + "\n\n" + WORLD_KNOWLEDGE_INSTRUCTIONS
+    return TOOL_PLANNER_INSTRUCTIONS
+
+
+#: 哪些服务端不认哪些「可选字段」：``{base_url: {字段名}}``。
+#: 按服务端记——换一个网关（DeepSeek 换成 OpenAI）不该被上一个的结论连累。
+REASONING_FIELDS_REJECTED: dict[str, set[str]] = {}
+
+
+def _rejected_key(base_url: str) -> str:
+    return (base_url or "").rstrip("/")
+
+
+def rejected_thinking_fields(base_url: str) -> set[str]:
+    """这个服务端已知不认的可选字段（空集合 = 都可以试）。"""
+
+    return set(REASONING_FIELDS_REJECTED.get(_rejected_key(base_url), set()))
+
+
+def remember_rejected_thinking_field(base_url: str, field: str) -> None:
+    REASONING_FIELDS_REJECTED.setdefault(_rejected_key(base_url), set()).add(field)
+
+
+def forget_rejected_thinking_fields() -> None:
+    """清掉记忆（测试用，也可以在换服务商时调）。"""
+
+    REASONING_FIELDS_REJECTED.clear()
+
+
+#: 这些状态码通常表示「请求形状不对」（多半是不认某个字段），可以去掉可选字段
+#: 重试一次。401/403/429/5xx 不是这一类，该报错就报错，别偷偷重发。
+REQUEST_SHAPE_ERROR_CODES = frozenset({400, 422})
+
+
+def _is_client_error(detail: str) -> bool:
+    """``QwenError`` 的文案里是不是「请求形状不对」那个状态码
+    （``HTTP 400 Bad Request：…``）。"""
+
+    match = re.search(r"HTTP\s+(\d{3})", detail or "")
+    return bool(match) and int(match.group(1)) in REQUEST_SHAPE_ERROR_CODES
+
+
+def thinking_request_fields(config: QwenConfig) -> dict[str, Any]:
+    """思考档位这次请求要多带哪些字段（纯函数，方便单测）。
+
+    - 云端（``api``）：``reasoning_effort = low/medium/high``；``off``/``auto``
+      不带（``auto`` = 交给服务端默认）。服务端报错不认这个字段时由
+      :meth:`QwenClient.chat_message` 去掉重试，并记进
+      :data:`REASONING_FIELDS_REJECTED`。
+    - 本地（``llama.cpp``）：``chat_template_kwargs.enable_thinking``。``auto``
+      沿用 ``qwen.enable_thinking``；``off`` 关；``low/medium/high`` 开
+      （llama.cpp 没有更细的档位）。
+    """
+
+    from .config import normalize_thinking_level
+
+    level = normalize_thinking_level(getattr(config, "thinking_level", "auto"))
+    if str(getattr(config, "provider", LOCAL_PROVIDER)) == API_PROVIDER:
+        if level in {"low", "medium", "high"}:
+            return {"reasoning_effort": level}
+        return {}
+    if level == "auto":
+        enable = bool(getattr(config, "enable_thinking", False))
+    else:
+        enable = level != "off"
+    return {"chat_template_kwargs": {"enable_thinking": enable}}
 
 
 def history_messages(history: list[dict[str, str]]) -> list[dict[str, Any]]:
@@ -438,13 +531,17 @@ class QwenClient:
             "top_p": self.config.top_p,
             "presence_penalty": self.config.presence_penalty,
         }
-        if self.config.provider != API_PROVIDER:
-            # llama.cpp 专有：用模型自带的 chat 模板（多轮里把工具结果作为
-            # role=tool 回灌，没有这一条小模型会跑偏，见 ADR-004）。
-            # 云端 OpenAI 兼容服务不认这个字段，所以 API 模式不带它。
-            payload["chat_template_kwargs"] = {
-                "enable_thinking": self.config.enable_thinking,
-            }
+        # 思考档位：云端是 reasoning_effort，本地是 chat_template_kwargs
+        # （llama.cpp 专有：用模型自带的 chat 模板，多轮里把工具结果作为
+        # role=tool 回灌，没有这一条小模型会跑偏，见 ADR-004）。
+        fields = thinking_request_fields(self.config)
+        rejected = rejected_thinking_fields(self.base_url)
+        fields = {
+            key: value
+            for key, value in fields.items()
+            if key not in rejected
+        }
+        payload.update(fields)
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         if tools:
@@ -454,13 +551,24 @@ class QwenClient:
         try:
             result = self._post(payload)
         except QwenError as error:
+            detail = str(error)
+            # 服务端不认思考档位时去掉它再发一次，并记住别再发（下次直接不带，
+            # 不白挨一遍报错）。判定放宽到「任何 4xx」：有的服务端只说
+            # 「invalid request」不点名，有的用 422，点名和状态码都不能指望。
+            if "reasoning_effort" in payload and (
+                "reasoning_effort" in detail or _is_client_error(detail)
+            ):
+                remember_rejected_thinking_field(self.base_url, "reasoning_effort")
+                payload.pop("reasoning_effort")
+                result = self._post(payload)
             # 新一点的云端模型不认 max_tokens（要 max_completion_tokens），
             # 报错里提到它时换个字段名再试一次，别让用户自己去猜。
-            if "max_completion_tokens" not in str(error):
+            elif "max_completion_tokens" not in detail:
                 raise
-            payload.pop("max_tokens", None)
-            payload["max_completion_tokens"] = max_tokens
-            result = self._post(payload)
+            else:
+                payload.pop("max_tokens", None)
+                payload["max_completion_tokens"] = max_tokens
+                result = self._post(payload)
 
         try:
             message = result["choices"][0]["message"]
@@ -681,6 +789,10 @@ JSON 结构：
 13. 用户说法里带对象类型时按类型选：说「这个 TextGrid」就用 TextGrid，说「这个声音」就用 Sound；不要因为另一个类型的对象是当前选中就写错。
 14. 没有对应工具的测量（例如 CPP）绝不能拿别的量代替；reply 里直说做不到，并说明还缺什么。
 """.strip()
+        if knowledge_is_open(self.config):
+            # 云端大模型：把「可以发挥自己的知识」那几条也带上（见
+            # WORLD_KNOWLEDGE_INSTRUCTIONS）。测量数字仍然只能来自工具结果。
+            system_prompt = system_prompt + "\n\n" + WORLD_KNOWLEDGE_INSTRUCTIONS
         examples = """
 示例：
 用户：提取当前语音的第二共振峰带宽

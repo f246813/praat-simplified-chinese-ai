@@ -304,6 +304,12 @@ Praat 里自己点运行。
   前端就改用云端模型（任何 OpenAI 兼容的 `/v1` 接口都行）；本地 llama-server 的配置
   会留着，取消勾选或点「应用预设」就切回本地。key 只写进 `ai_config.json`
   （已 gitignore），也可以只放在环境变量 `PRAAT_AI_API_KEY` 里。
+  菜单里那个窗口跑在独立进程（Praat 不会被它堵住）；窗口上方「模型预设」下拉框
+  在 API 模式下第一行就是当前云端模型。云端模型还可以在同一个窗口里选**思考档位**
+  （自动/关闭/低/中/高，云端翻成 `reasoning_effort`、本地翻成 `enable_thinking`）、
+  勾选「允许它用自己的语言学知识解释」——测量数字仍然只来自工具结果。
+- **关掉 Praat，前端窗口跟着退**：启动时会记下是哪个 Praat 拉起的（进程号 +
+  exe 路径），Praat 一关，对话窗口和 API 配置小窗都自己退出。
 - **加载/停止模型有进度小窗口**：从菜单启动/停止时是 Praat 自己的进度窗口
   （一根进度条 + 「中断」），从对话窗口点「应用预设」时是一个迷你进度窗
   （一句话 + 一根进度条）。以前这段时间界面什么都不说。
@@ -341,6 +347,8 @@ python ai/tests/verify_api_mode.py              # API 模式：自己起假 Open
 python ai/tests/verify_api_menu_live.py         # 真机：菜单「前端 / API 配置...」能弹出小窗口
 python ai/tests/verify_model_progress_live.py   # 真机：加载/停止模型时出现进度小窗口
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）
+python ai/tests/verify_api_dialog_live.py       # 真机：开着 API 配置小窗时缩窗口，Praat 不许假死
+python ai/tests/verify_frontend_follows_praat.py # 真机：关掉 Praat 后对话窗口要跟着退（--menu 走真菜单）
 ```
 
 后五条需要本机装好模型、并且在没有沙箱限制的终端里执行；

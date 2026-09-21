@@ -34,8 +34,16 @@ from pathlib import Path
 from tkinter import ttk
 from typing import Any, Callable, Mapping
 
-from . import api_settings, praat_app, progress_popup, qwen, sendpraat, tools
-from .config import api_is_active, load_config
+from . import (
+    api_settings,
+    parent_watch,
+    praat_app,
+    progress_popup,
+    qwen,
+    sendpraat,
+    tools,
+)
+from .config import api_is_active, default_config_path as config_path, load_config
 from .presets import PresetError, active_preset, list_presets
 from .server import running_model_info
 
@@ -771,7 +779,7 @@ class _NativePlanner:
         self.messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": qwen.TOOL_PLANNER_INSTRUCTIONS
+                "content": qwen.planner_instructions(self.client.config)
                 + "\n\n"
                 + tool_context_text(context_text, result_path, state_path),
             }
@@ -917,7 +925,7 @@ def run_turn(
     # 当前选中，但不该把历史挤光）。
     # 老的 JSON 规划把工具清单写在提示词里，那份开销也要算进去。
     instructions = (
-        qwen.TOOL_PLANNER_INSTRUCTIONS if use_native else tools.catalog_text()
+        qwen.planner_instructions(client.config) if use_native else tools.catalog_text()
     )
     budget = qwen.history_budget(
         client.config.max_context_tokens,
@@ -1156,6 +1164,21 @@ def praat_instance_warning(executable: str) -> str:
     return praat_instance_warning_from(praat_process_ids(executable))
 
 
+def api_choice_label(config) -> str:
+    """API 模式下「模型预设」下拉框第一行的文字：显示当前真正在用的云端模型。
+
+    以前这一行永远是本地 qwen 预设（例如「Qwen3.5-0.8B（快速，省显存）」），
+    接上 API 之后用户看到的还是本地模型名，以为接的 API 没生效。
+    """
+
+    model = str(getattr(config.api, "model", "") or "").strip()
+    name = str(getattr(config.api, "label", "") or "").strip()
+    parts = [part for part in (name, model) if part]
+    if not parts:
+        return "云端 API：未配置"
+    return "云端 API：" + " / ".join(parts)
+
+
 def model_status_text(config) -> str:
     """状态栏文案：模型来自服务实际加载的模型，而不是配置里的文件名。"""
 
@@ -1279,6 +1302,9 @@ class ChatWindow:
         self.root.configure(background="#F3F4F6")
         self.config = load_config()
         self.client = qwen.QwenClient(self.config.qwen)
+        #: 配置文件（ai_config.json）的修改时间：别的窗口改了它我们就重新读。
+        self.config_stamp = self._config_stamp()
+        self.next_config_check = 0.0
         self.history: list[dict[str, str]] = []
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy = False
@@ -1471,10 +1497,24 @@ class ChatWindow:
             "例如：提取当前语音的第二共振峰带宽；把选中的声音改名为 测试；"
             "查询 0.5 秒处的基频；统计整段基频；截取 0.2–0.5 秒；"
             "把两个声音拼起来；另存为 D:/out/a.wav。"
+            "接上云端大模型之后，也可以直接问语音学/声学问题（它会用自己的知识"
+            "解释，测量数字仍然来自 Praat）。"
         )
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self.flush_messages)
         self.root.after(400, self.entry.focus_set)
+        # 关掉 Praat 之后这个窗口该跟着退（2026-09-21 用户报的 bug）。盯着启动它
+        # 的那个 Praat：手工起窗口做开发时（没有 Praat）不盯，免得自己把自己关了。
+        self.closing = False
+        self.praat_watcher = None
+        if parent_watch.should_watch():
+            self.praat_watcher = parent_watch.ParentWatcher(
+                self.root,
+                executable=praat_executable(),
+                grace_sec=2.0,
+                on_close=self._on_praat_gone,
+            )
+            self.praat_watcher.start()
 
     # ------------------------------------------------------------ 模型预设
 
@@ -1486,9 +1526,23 @@ class ChatWindow:
     def preset_hint_text(self) -> str:
         if api_is_active(self.config):
             label = self.config.api.label or "云端 API"
+            from . import api_settings
+
+            bits: list[str] = []
+            level = self.config.qwen.thinking_level
+            if level and level != "auto":
+                bits.append(f"思考档位：{api_settings.thinking_choice_label(level)}")
+            bits.append(
+                "可以发挥自己的语言学知识"
+                if qwen.knowledge_is_open(self.config.qwen)
+                else "只按工具结果回答"
+            )
+            bits.append(
+                "不需要本机 llama-server；想回到本机模型就选一个预设再点「应用预设」"
+            )
             return (
                 f"当前是 API 模式：{label} / {self.config.api.model}"
-                "（不需要本机 llama-server）；想回到本机模型就选一个预设再点「应用预设」。"
+                f"（{'，'.join(bits)}）。"
             )
         if not self.presets:
             return (
@@ -1510,13 +1564,20 @@ class ChatWindow:
             self.preset_label_for(preset): preset["id"] for preset in self.presets
         }
         labels = list(self.preset_ids)
+        # API 模式下当前模型是云端那个：把它放在下拉框第一行并选中，不然用户看到
+        # 的是本地 qwen 预设，以为接的 API 没生效（2026-09-21 用户报的）。
+        self.api_choice = api_choice_label(self.config) if api_is_active(self.config) else ""
+        if self.api_choice:
+            labels = [self.api_choice] + labels
         self.preset_box.configure(
             values=labels,
             state="readonly" if labels else "disabled",
         )
         self.preset_button.configure(state="normal" if labels else "disabled")
         current = next((preset for preset in self.presets if preset["active"]), None)
-        if current is not None:
+        if self.api_choice:
+            self.preset_choice.set(self.api_choice)
+        elif current is not None:
             self.preset_choice.set(self.preset_label_for(current))
         elif labels:
             self.preset_choice.set(labels[0])
@@ -1526,6 +1587,14 @@ class ChatWindow:
 
     def apply_selected_preset(self, _event: object = None) -> None:
         if self.busy:
+            return
+        if getattr(self, "api_choice", "") and self.preset_choice.get() == self.api_choice:
+            # 选中的就是「当前正在用的云端模型」那一行：不用重启任何东西。
+            self.append_hint(
+                f"当前已经在用云端 API 模型：{self.config.api.model}"
+                "（不需要本机 llama-server）。想回到本机模型，就在下拉框里选一个"
+                "本地预设，再点「应用预设」。"
+            )
             return
         preset_id = resolve_preset_id(self.presets, self.preset_choice.get())
         if not preset_id:
@@ -1841,7 +1910,33 @@ class ChatWindow:
                     self.append(role, text)
         except queue.Empty:
             pass
+        # 配置文件被别的窗口改了（Praat 菜单里的「API 配置…」跑在独立进程里，
+        # 手工编辑也算）就跟着刷新，别让界面显示的还是旧模型。
+        now = time.monotonic()
+        if now >= self.next_config_check:
+            self.next_config_check = now + 1.0
+            self.check_config_changed()
         self.root.after(100, self.flush_messages)
+
+    def check_config_changed(self) -> None:
+        """ai_config.json 的修改时间变了就重新读一遍（不打扰用户）。
+
+        Praat 菜单里的「API 配置…」现在跑在独立进程里（不然 Praat 会被那个窗口
+        堵死，见 sys/PraatAiControl.cpp），它保存之后这个窗口得跟着换模型。
+        """
+
+        try:
+            stamp = config_path().stat().st_mtime_ns
+        except OSError:
+            return
+        if stamp == self.config_stamp:
+            return
+        if self.busy:
+            # 正在跑一轮请求时先别换模型；**别**更新时间戳，下一次 tick 再看一遍。
+            return
+        self.config_stamp = stamp
+        self.reload_config()
+        self.append_hint("配置已经更新（可能是另一个窗口改的），界面已刷新。")
 
     def show_progress(self, payload: str) -> None:
         """更新（必要时创建）迷你进度窗。``payload`` 是 ``"0.42|说明"``。"""
@@ -1874,6 +1969,11 @@ class ChatWindow:
         self.progress_window = None
 
     def close(self) -> None:
+        if getattr(self, "_closed", False):
+            return   # WM_DELETE_WINDOW 和「Praat 关了」可能同时来，别 destroy 两次
+        self._closed = True
+        if getattr(self, "praat_watcher", None) is not None:
+            self.praat_watcher.stopped = True
         pid_path = runtime_dir() / "chat.pid"
         try:
             pid_path.unlink()
@@ -1881,14 +1981,37 @@ class ChatWindow:
             pass
         self.root.destroy()
 
+    def _on_praat_gone(self) -> None:
+        """Praat 已经退出：先说一句，再把窗口关掉。
+
+        以前这个窗口会一直留着（2026-09-21 用户报的「关掉 Praat 后前端不关」）。
+        """
+
+        try:
+            self.append_hint("Praat 已经关闭，前端窗口跟着退出。")
+        except Exception:   # noqa: BLE001 - 界面已经不正常时只要把窗口收掉
+            pass
+        try:
+            self.root.after(700, self.close)
+        except Exception:   # noqa: BLE001
+            self.close()
+
     def reload_config(self) -> None:
         """重新读取 ai_config.json（切换预设之后模型和 mmproj 都会变）。"""
 
         self.config = load_config()
         self.client = qwen.QwenClient(self.config.qwen)
+        self.config_stamp = self._config_stamp()
         self.presets = list_presets(self.config)
         self.refresh_preset_widgets()
         self.status.set("Praat AI  |  " + model_status_text(self.config))
+
+    @staticmethod
+    def _config_stamp() -> int:
+        try:
+            return config_path().stat().st_mtime_ns
+        except OSError:
+            return 0
 
     def run(self) -> int:
         self.root.mainloop()
