@@ -178,6 +178,51 @@ def forget_rejected_thinking_fields() -> None:
 REQUEST_SHAPE_ERROR_CODES = frozenset({400, 422})
 
 
+def _is_connection_refused(error: BaseException) -> bool:
+    """连接被拒绝（本机上没人听这个端口）——不是超时、不是 DNS、不是 4xx。"""
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ConnectionRefusedError):
+            return True
+        if getattr(current, "winerror", None) == 10061:
+            return True
+        text = str(current).casefold()
+        if "10061" in text or "refused" in text or "积极拒绝" in text:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _is_local_endpoint(base_url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit(base_url).hostname or "").casefold()
+    except ValueError:
+        return False
+    return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"} or host.startswith(
+        "127."
+    )
+
+
+def connection_hint(base_url: str, error: BaseException) -> str:
+    """把「本机模型服务没在跑」翻成一条能照着做的提示；别的错误返回空串。
+
+    2026-09-22 用户看到的是裸的 ``Qwen request failed: [WinError 10061] 由于目标
+    计算机积极拒绝，无法连接。``——知道失败了，但不知道下一步该点哪里。
+    """
+
+    if not _is_local_endpoint(base_url) or not _is_connection_refused(error):
+        return ""
+    return (
+        f"本机模型服务没在跑（{base_url.rstrip('/')} 拒绝了连接）："
+        "在 Praat 菜单里点「前端 → 启动前端」，或者在对话窗口重新应用一次模型预设。"
+    )
+
+
 def _is_client_error(detail: str) -> bool:
     """``QwenError`` 的文案里是不是「请求形状不对」那个状态码
     （``HTTP 400 Bad Request：…``）。"""
@@ -643,7 +688,12 @@ class QwenClient:
                 f"HTTP {error.code} {error.reason}：{detail or error}"
             ) from error
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
-            raise QwenError(f"Qwen request failed: {error}") from error
+            detail = f"Qwen request failed: {error}"
+            # 本机 llama-server 没在跑时给一句能照着做的提示（WinError 10061）。
+            hint = connection_hint(self.base_url, error)
+            if hint:
+                detail = f"{hint}（{detail}）"
+            raise QwenError(detail) from error
 
     def parse_analysis_request(
         self,

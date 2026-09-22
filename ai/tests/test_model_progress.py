@@ -95,6 +95,12 @@ class ProgressReportingTests(unittest.TestCase):
                 control, "detect_gpu", return_value=None
             ), patch.object(
                 control, "select_runtime_profile", return_value=fake_profile()
+            ), patch.object(
+                # 这个用例讲的是「端口空着 → 启动」；真机上 8000 端口可能正跑着
+                # llama-server（真机回归跑完就留着），不钉住探测会走去重启别人。
+                control,
+                "endpoint_available",
+                return_value=False,
             ), patch.object(control, "collect_status", return_value={"success": True}):
                 control.start_frontend(path, progress=collect(seen))
         fractions = [fraction for fraction, _ in seen]
@@ -108,14 +114,115 @@ class ProgressReportingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             path = write_config(Path(raw), LOCAL_ONLY)
             seen: list[tuple[float, str]] = []
-            with patch.object(
-                control, "_stop_running_service", return_value=True
-            ), patch.object(control, "collect_status", return_value={"success": True}):
-                control.stop_frontend(path, progress=collect(seen))
+        with patch.object(
+            control, "_stop_running_service", return_value=True
+        ), patch.object(
+            # 真机上 8000 端口可能正跑着 llama-server；这里只验进度，不真等端口。
+            control,
+            "_wait_for_endpoint_gone",
+            return_value=None,
+        ), patch.object(control, "collect_status", return_value={"success": True}):
+            control.stop_frontend(path, progress=collect(seen))
         self.assertTrue(seen)
         self.assertAlmostEqual(seen[0][0], 0.1, places=3)
         self.assertAlmostEqual(seen[-1][0], 1.0, places=3)
         self.assertIn("停止", seen[0][1])
+
+
+class EnsureLocalServiceTests(unittest.TestCase):
+    """回到本地模型时，必须真的把 llama-server 弄起来（2026-09-22 的 WinError 10061）。
+
+    以前的 `apply_preset` / `set_frontend_model` 只在「端口上有服务、但加载的是别的
+    模型」时才重启；端口**空着**时什么都不做，于是配置已经切回本地、8000 端口却没人
+    听，下一条消息就是「目标计算机积极拒绝」。
+    """
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = write_config(Path(self.directory.name), LOCAL_ONLY)
+        self.runtime = Path(self.directory.name) / "runtime"
+        self.runtime.mkdir(exist_ok=True)
+        self._runtime_patch = patch.object(control, "runtime_dir", return_value=self.runtime)
+        self._runtime_patch.start()
+
+    def tearDown(self) -> None:
+        self._runtime_patch.stop()
+        self.directory.cleanup()
+
+    def test_empty_port_launches_the_server(self) -> None:
+        with patch.object(control, "endpoint_available", return_value=False), patch.object(
+            control, "_launch_server", return_value={"success": True, "started": True}
+        ) as launcher:
+            result = control.ensure_local_service(control.load_config(self.path), self.path)
+        launcher.assert_called_once()
+        self.assertEqual(result, {"success": True, "started": True})
+
+    def test_another_model_on_the_port_restarts_the_service(self) -> None:
+        with (
+            patch.object(control, "endpoint_available", return_value=True),
+            patch.object(control, "server_model_state", return_value=False),
+            patch.object(control, "_restart_service", return_value={"restarted": True}) as restart,
+            patch.object(control, "_launch_server") as launcher,
+        ):
+            result = control.ensure_local_service(control.load_config(self.path), self.path)
+        restart.assert_called_once()
+        launcher.assert_not_called()
+        self.assertEqual(result, {"restarted": True})
+
+    def test_the_configured_model_is_left_alone(self) -> None:
+        with (
+            patch.object(control, "endpoint_available", return_value=True),
+            patch.object(control, "server_model_state", return_value=True),
+            patch.object(control, "_restart_service") as restart,
+            patch.object(control, "_launch_server") as launcher,
+            patch.object(control, "collect_status", return_value={"success": True}),
+        ):
+            result = control.ensure_local_service(control.load_config(self.path), self.path)
+        restart.assert_not_called()
+        launcher.assert_not_called()
+        self.assertEqual(result, {"success": True})
+
+    def test_an_unreadable_model_list_keeps_the_existing_behaviour(self) -> None:
+        """`server_model_state()` 是 None（读不到模型列表）时不许擅自重启。"""
+
+        with (
+            patch.object(control, "endpoint_available", return_value=True),
+            patch.object(control, "server_model_state", return_value=None),
+            patch.object(control, "_restart_service") as restart,
+            patch.object(control, "_launch_server") as launcher,
+            patch.object(control, "collect_status", return_value={"success": True}),
+        ):
+            control.ensure_local_service(control.load_config(self.path), self.path)
+        restart.assert_not_called()
+        launcher.assert_not_called()
+
+    def test_apply_preset_goes_through_ensure_local_service(self) -> None:
+        model = Path(self.directory.name) / "big.gguf"
+        model.write_bytes(b"stub")
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        payload["server"]["presets"] = [
+            {"id": "big", "label": "Big", "model_path": str(model)}
+        ]
+        self.path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        with patch.object(
+            control, "ensure_local_service", return_value={"ensured": True}
+        ) as ensure:
+            result = control.apply_preset("big", self.path)
+        ensure.assert_called_once()
+        self.assertEqual(result, {"ensured": True})
+        self.assertEqual(load_config(self.path).server.active_preset, "big")
+
+    def test_set_frontend_model_goes_through_ensure_local_service(self) -> None:
+        model = Path(self.directory.name) / "manual.gguf"
+        model.write_bytes(b"stub")
+        with patch.object(
+            control, "ensure_local_service", return_value={"ensured": True}
+        ) as ensure:
+            result = control.set_frontend_model(str(model), config_path=self.path)
+        ensure.assert_called_once()
+        self.assertEqual(result, {"ensured": True})
 
 
 class ApiModeControlTests(unittest.TestCase):
@@ -153,17 +260,72 @@ class ApiModeControlTests(unittest.TestCase):
         self.assertTrue(result["api_enabled"])
 
     def test_stop_frontend_in_api_mode_does_not_touch_a_local_service(self) -> None:
-        with patch.object(control, "_stop_running_service") as stopper, patch.object(
+        """默认 `api.stop_local_service=True`：进 API 之后「停止前端」要真的收掉本机服务。"""
+
+        with patch.object(control, "_stop_running_service", return_value=True) as stopper, patch.object(
             control, "running_model_info", return_value={}
         ):
             control.stop_frontend(self.path)
+        stopper.assert_called_once()
+
+    def test_stop_frontend_in_api_mode_keeps_the_service_when_the_option_is_off(self) -> None:
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        payload["api"]["stop_local_service"] = False
+        self.path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        seen: list[tuple[float, str]] = []
+        with patch.object(control, "_stop_running_service") as stopper, patch.object(
+            control, "running_model_info", return_value={}
+        ):
+            control.stop_frontend(self.path, progress=collect(seen))
         stopper.assert_not_called()
+        # 就算不动本机服务，也要有进度和说明（不然用户点了「停止前端」像什么都没发生）。
+        self.assertTrue(seen)
+        self.assertAlmostEqual(seen[0][0], 0.1, places=3)
+        self.assertAlmostEqual(seen[-1][0], 1.0, places=3)
+        self.assertTrue(any("本机" in message or "服务" in message for _, message in seen))
+
+    def test_start_frontend_in_api_mode_reports_progress(self) -> None:
+        """API 模式也要发 `PRAAT_PROGRESS`：Praat 的进度小窗靠它才弹得出来。"""
+
+        seen: list[tuple[float, str]] = []
+        with patch.object(control, "_launch_server") as launcher, patch.object(
+            control, "running_model_info", return_value={}
+        ):
+            result = control.start_frontend(self.path, progress=collect(seen))
+        launcher.assert_not_called()
+        self.assertTrue(result["api_enabled"])
+        fractions = [fraction for fraction, _ in seen]
+        self.assertTrue(fractions, seen)
+        self.assertAlmostEqual(fractions[0], 0.1, places=3)
+        self.assertAlmostEqual(fractions[-1], 1.0, places=3)
+        self.assertTrue(any("API" in message for _, message in seen))
+        self.assertTrue(any("deepseek-chat" in message for _, message in seen))
 
     def test_api_config_command_is_available(self) -> None:
         with patch.object(control, "run_api_settings_dialog", return_value=0) as dialog:
             result = control.execute_command("api-config", "", self.path)
         dialog.assert_called_once()
         self.assertTrue(result["success"])
+
+    def test_local_base_url_ignores_the_cloud_override(self) -> None:
+        """API 模式下 `qwen.base_url` 是云端地址，本机端口要另算。"""
+
+        config = control.load_config(self.path)
+        self.assertEqual(config.qwen.base_url, "https://api.deepseek.com/v1")
+        self.assertEqual(control.local_base_url(config), "http://127.0.0.1:8000/v1")
+
+    def test_stop_frontend_in_api_mode_waits_for_the_local_port_only(self) -> None:
+        """停止/等待释放看的是本机端口；拿云端地址去等会白等 20 秒还打网络。"""
+
+        with (
+            patch.object(control, "_stop_running_service", return_value=True),
+            patch.object(control, "_wait_for_endpoint_gone") as wait,
+            patch.object(control, "running_model_info", return_value={}),
+        ):
+            control.stop_frontend(self.path)
+        wait.assert_called_once_with("http://127.0.0.1:8000/v1")
 
 
 if __name__ == "__main__":

@@ -95,6 +95,11 @@ Thing_define (FunctionEditor, Editor) {
 	constexpr static double MARGIN = 107.0;
 	constexpr static double BOTTOM_MARGIN = 2.0;
 	constexpr static double TOP_MARGIN = 3.0;
+	/*
+		Vertical space that every function area reserves above itself for its legend
+		(see FunctionArea :: top_pxlt), in pixelettes.
+	*/
+	constexpr static double TOP_LEGEND_MARGIN = 23.0;
 	double dataLeft_pxlt () const { return our _functionViewerLeft + our MARGIN; }
 	double dataRight_pxlt () const { return our _functionViewerRight - our MARGIN; }
 	double dataBottom_pxlt () const { return our BOTTOM_MARGIN + our space * 3; }

@@ -31,10 +31,17 @@ namespace {
 	char32 theAiAlignmentMode [32];
 	bool statusSuccess = false;
 	bool statusRunning = false;
+	/*
+		API 模式（前端接云端大模型）：状态行必须说清楚，不然「running」看着像在等
+		本机 llama-server，用户点了菜单里的「启动/停止前端」也看不出发生了什么
+		（2026-09-22 用户报的「没反应」有一半是这个）。
+	*/
+	bool statusApiEnabled = false;
 	bool statusVramLow = false;
 	double statusVramFreeGb = 0.0;
 	MelderString statusFrontendModel;
 	MelderString statusFrontendStatus;
+	MelderString statusApiStatus;
 	char32 theAiProjectDirectoryBuffer [Preferences_STRING_BUFFER_SIZE];
 	constexpr conststring32 defaultFrontendModel = U"Qwen3.5-0.8B-Q4_K_M.gguf";
 	/*
@@ -411,6 +418,18 @@ bool PraatAiControl_refreshStatus () {
 	autostring32 status32 = Melder_8to32_e (status. c_str());
 	MelderString_copy (& statusFrontendModel, model32 ? model32. get() : U"");
 	MelderString_copy (& statusFrontendStatus, status32 ? status32. get() : U"unknown");
+	statusApiEnabled = jsonBoolField (* text, "api_enabled", false);
+	MelderString_empty (& statusApiStatus);
+	if (statusApiEnabled) {
+		const std::string apiModel = jsonStringField (* text, "api_model");
+		autostring32 apiModel32 = Melder_8to32_e (apiModel. c_str());
+		MelderString_append (
+			& statusApiStatus,
+			U"API 模式（",
+			apiModel32 && apiModel32. get() [0] ? apiModel32. get() : U"云端模型",
+			U"，不需要本机模型服务）"
+		);
+	}
 	return statusSuccess;
 }
 
@@ -419,6 +438,8 @@ conststring32 PraatAiControl_getFrontendModel () {
 }
 
 conststring32 PraatAiControl_getFrontendStatus () {
+	if (statusApiEnabled && statusApiStatus. string)
+		return statusApiStatus. string;
 	return statusFrontendStatus. string ? statusFrontendStatus. string : U"stopped";
 }
 

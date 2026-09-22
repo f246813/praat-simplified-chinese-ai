@@ -275,7 +275,9 @@ class StartFrontendTests(unittest.TestCase):
         )
         self.assertIn("frontend_model_configured", status)
 
-    def test_set_model_does_not_restart_when_service_stopped(self) -> None:
+    def test_set_model_starts_the_service_when_nothing_is_listening(self) -> None:
+        """端口空着时选模型必须把服务起起来（以前什么都不做 → 下一条消息 10061）。"""
+
         write_config(
             self.config_path,
             base_url="http://127.0.0.1:9/v1",
@@ -283,7 +285,8 @@ class StartFrontendTests(unittest.TestCase):
         )
         control.set_frontend_model(str(self.big), config_path=self.config_path)
         self.stop_mock.assert_not_called()
-        self.assertFalse(FakeManager.instances)
+        self.assertTrue(FakeManager.instances)
+        self.assertTrue(FakeManager.instances[-1].ensure_called)
 
 
 class EnsureStartedTests(unittest.TestCase):
@@ -604,6 +607,15 @@ class SetMmprojMappingTests(unittest.TestCase):
             patch.object(control, "status_path", return_value=self.runtime / "status.json"),
             patch.object(control, "pid_path", return_value=self.runtime / "qwen.pid"),
             patch.object(control, "detect_gpu", return_value=None),
+            # 端口空着时 set-model 现在会把服务起起来；这两个用例只关心 mmproj
+            # 记账，所以把真正的启动换成一次状态收集。
+            patch.object(
+                control,
+                "_launch_server",
+                side_effect=lambda *args, **kwargs: control.collect_status(
+                    self.config_path
+                ),
+            ),
         ]
         for item in self.patches:
             item.start()

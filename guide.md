@@ -978,9 +978,14 @@ Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COM
   对话链路到处用的都是 `config.qwen`，所以**别的地方一行都不用改**；本地
   llama-server 的配置原样留着，取消勾选就回到本地；
 - API 模式下：`server.auto_start` 被强制关掉（不许悄悄拉起 llama-server），
-  `control.start_frontend/stop_frontend` 都不碰本地服务（但「停止前端」仍会收掉
-  之前启动过的本机服务，腾显存），状态栏/菜单显示 `模型: <云端模型>` +
-  `状态: 运行中（API 模式）`；**key 一个字都不进 `runtime/status.json`**；
+  状态栏/菜单显示 `<云端模型>` + `API 模式（<模型>，不需要本机模型服务）`；
+  **key 一个字都不进 `runtime/status.json`**；
+- **`api.stop_local_service`（默认 `true`，2026-09-22 新增）**：启用 API 时要不要
+  顺手停掉本机 llama-server。`true` = 停掉、腾显存（老行为）；`false` = 留着，
+  切回本地模型时不用重新加载。界面在「API 配置」小窗的**「连接」卡片**里
+  （「超时(秒)」下面那个复选框）；老配置里没有这个键时**按 true 读**，不写迁移。
+  菜单「前端 → 停止前端」在 API 模式下也认这个开关（只有 true 才真的收服务），
+  而且两条路都要发 `PRAAT_PROGRESS`——不然菜单里点了像没反应（见 §8.15.7）；
 - 请求形状随 `provider` 变：`llama.cpp` 带 `chat_template_kwargs`（多轮回灌靠它，
   见 §8.4），`api` 不带——云端不认这个字段；遇到只认 `max_completion_tokens` 的
   新模型会自动换字段重试一次（`QwenClient._post`）；
@@ -997,6 +1002,8 @@ Praat → 建 `Sound あなた` → `View & Edit` → 给编辑窗口发 `WM_COM
 OpenAI 兼容服务**，真走 HTTP 跑完一轮 `run_turn`——工具 schema 78 个字段都在、
 没有 llama.cpp 专有字段、Authorization 头正确、工具调用被真的执行、
 系统提示放行了世界知识、默认「中」和高档都真的变成请求里的 `reasoning_effort`）、
+`python ai/tests/verify_api_switching_live.py`（真机：进 API / 回本地时本机服务的
+启停矩阵，见 §8.15.7）、
 `python ai/tests/verify_api_menu_live.py`（真机：在编辑器菜单里找到
 「前端 / API 配置...」并触发它的回调，小窗口弹出、关掉之后 Praat 还活着）。
 
@@ -1233,6 +1240,66 @@ Praat 主线程整个被堵住：
 `test_api_settings.py::WorldKnowledgeTests`（身份规则含真实模型名、对比条款、
 空话禁令）、`test_qwen`/`test_api_settings` 里的 `message_text` 用例。
 
+#### 8.15.7 菜单「启动/停止前端」没反应、切回本地后 WinError 10061（2026-09-22）
+
+用户报了三件事，其实是两个根因：
+
+**① API 模式下点菜单「启动前端 / 停止前端」像是没反应。** 两个函数在 API 模式下
+第一句就 `return collect_status(...)`，**一条 `PRAAT_PROGRESS` 都不打**；而 Praat 的
+「正在处理中」小窗就是靠子进程标准输出里出现 `PRAAT_PROGRESS` 才弹出来的
+（`sys/praat_python.cpp` → `Melder_progress`，见 §8.14）。加上 `collect_status()`
+在 API 模式写 `frontend_running=true`，`PraatAiControl_startFrontend()` 于是只把
+**已经开着**的对话窗口置前——窗口本来就在最前面，用户看到的就是「什么都没发生」。
+
+现在：
+
+- `control.start_frontend()` 在 API 模式下报 `0.10 当前是 API 模式，不需要本机模型
+  服务` → `1.00 已就绪：<api.model>（云端）`；
+- `control.stop_frontend()` 在 API 模式下**认 `api.stop_local_service`**（见 §8.13）：
+  `true` 就真的 `_stop_running_service()` 收掉本机服务（这才是 `ca8d95ba2` 提交信息
+  里承诺的行为，当时代码里其实没做），`false` 就一条都不碰、但仍然报进度 + 说明；
+- `PraatAiControl.cpp` 在 `api_enabled=true` 时把菜单状态行换成
+  `API 模式（<api_model>，不需要本机模型服务）`（`PraatAiControl_getFrontendStatus`），
+  不再只显示一个 `running (API)`。
+
+**② 从 API 切回本地（或换一个本地预设）之后，端口没人听 → `[WinError 10061] 由于
+目标计算机积极拒绝`。** 切本地那一步确实写了 `api.enabled = false`，但**没有任何
+代码去启动 llama-server**：`apply_preset()` / `set_frontend_model()` 只在
+`server_model_state(...) is False`（端口上有服务但加载的是别的模型）时重启；端口
+**空着**时 `server_model_state()` 返回 `None`（拿不到 `/v1/models`），于是既不重启
+也不启动，直接回报状态。对话窗口那边同理：勾上 API 会 `stop-local-service`，取消
+勾选却只写一行提示——一进一出，本机服务就没了，「切换不生效」是同一件事的表现。
+
+现在新增了一个统一的入口：
+
+```python
+control.ensure_local_service(config, config_path, progress=...)
+    # 端口空着        → _launch_server()（启动）
+    # 端口上是别的模型 → _restart_service()（重启）
+    # 端口上就是它     → 只 collect_status()
+    # 读不到模型列表   → 保持原语义，不擅自重启别人的服务
+```
+
+接到四条路上：`apply_preset()`、`set_frontend_model()`、`start_frontend()`（本地
+模式那一支）、以及对话窗口的 `on_api_settings_saved()`（取消勾选 API 时发一条
+`start-local-service` 消息，由 `start_local_service_worker` 把服务起起来）。
+另外 `qwen.connection_hint()` 把「连接被拒绝」翻成能照着做的中文提示：
+
+> 本机模型服务没在跑（http://127.0.0.1:8000/v1 拒绝了连接）：在 Praat 菜单里点
+> 「前端 → 启动前端」，或者在对话窗口重新应用一次模型预设。（Qwen request failed:
+> [WinError 10061] 由于目标计算机积极拒绝，无法连接。）
+
+只对**本机地址**（127.0.0.1 / localhost / ::1）这么做；云端地址连不上时照旧报原文，
+超时、DNS 失败也不冒充「服务没在跑」。
+
+回归：`test_model_progress.py::EnsureLocalServiceTests`（四种端口状态 + 两条接线）、
+`ApiModeControlTests`（API 模式 start/stop 必须发进度、开关两态）、
+`test_presets.py`（端口空着时切预设要真的启动）、`test_frontend_model.py`
+（`set-model` 端口空着要启动）、`test_qwen.py::ConnectionHintTests`（本机/远端/超时），
+真机 `python ai/tests/verify_api_switching_live.py`（自带临时配置：① true 时切 API
+端口必须空掉；② false 时切 API 端口仍在、模型没变；③ 取消 API 后自动起服务，
+随后发一条真消息不再 10061；③′ 切本地预设同样会自动起服务）。
+
 ### 8.16 界面：对齐 TW-Elements 的设计语言（2026-09-22）
 
 [TW-Elements](https://github.com/mdbootstrap/TW-Elements)（Tailwind + MDB，
@@ -1328,3 +1395,42 @@ _on_provider / save / close`。
 （Markdown 子集 + 「⧉ 复制」复制的是原文）、`verify_chat_window_ui.py`（真机：卡片
 都在、消息块底色跟着主题走、切深色后重刷、复制粘贴对得上、进度小窗 value 仍是
 0–100）。截图存档（不入库）：`ai/runtime/ui_snapshots/`。
+
+#### 8.16.6 Sound 编辑器「语图上方的白条」：画布里那条没人画的预留行
+
+先量后改。开一个有语图的 Sound 编辑器，抓**画布子窗口**（`PraatDrawingArea1`，
+`PrintWindow` + `GetClientRect`）逐行取主色，得到：
+
+| 位置（画布坐标，1812×841 的窗口里客户区是 1810×839） | 修复前 | 修复后 |
+| --- | --- | --- |
+| 最上面数据区顶边（顶点框那条蓝线） | 第 49 行 | 第 49 行（布局没动） |
+| 画布 1–48 行（数据区那一列） | `#F5F6F8`（74210/75840 像素） | `#FFFFFF` |
+| 波形区与频谱区之间那条缝（396–415 行） | `#F5F6F8`（28699/31600） | `#FFFFFF` |
+
+两件事叠在一起：
+
+1. **画布顶部预留**：`dataTop_pxlt() = height_pxlt - (TOP_MARGIN + space)`，也就是
+   数据视口上面留了 33 pxlt（`TOP_MARGIN = 3` + `space = 30`）；最上面那个
+   `FunctionArea` 自己还留 `top_pxlt() = 全局 y - legendMargin`（`legendMargin = 23`
+   pxlt，用来画图例「脉冲 · 可编辑声音」「语谱图 · 共振峰 · 基频」）；
+   `height_pxlt = 窗口像素高 + 111`、`width_pxlt = 宽 + 21`，所以 33+23 pxlt ≈ 49 行。
+2. **这些行没人画**：`FunctionEditor::v_draw()` 只把整块画布填成
+   `DataGuiColour_WINDOW_BACKGROUND`（本 fork 是 `#F5F6F8`，“Modern Fluent clean
+   background”），各 `FunctionArea` 只在自己的视口里用
+   `DataGuiColour_AREA_BACKGROUND`（`#FFFFFF`）擦底色 —— 于是预留行就是一条比数据区
+   略深的浅带，在语图上方和两块数据区之间都看得到（用户叫它「白条」）。
+   （另外窗口层还有一个 26px 的缝：Win32 的 lookAndFeel 是 **Motif**，
+   `Machine_getMenuBarBottom()` 返回 26 而不是 0，`contentTop = 26`；它在画布**外面**，
+   属于窗口布局，没动。）
+
+修法（最小、不动布局）：在 `FunctionEditor::v_draw()` 里，画完窗口底色、
+**在按钮和数据区之前**，把数据区那一列（`dataLeft_pxlt() … dataRight_pxlt()`、
+`dataBottom_pxlt() … height_pxlt`）再填一遍 `DataGuiColour_AREA_BACKGROUND`。
+左边/右边的刻度栏（`MARGIN = 107`）和底部按钮带仍然是窗口底色，原来的灰色边框还在。
+`TOP_LEGEND_MARGIN` 从 `FunctionArea.h` 里的局部 `23.0` 提成 `FunctionEditor.h` 的
+一个常量，两边共用，免得以后改一处忘一处。
+
+截图（不入库，`ai/runtime/ui_snapshots/`）：`sound_editor_before/after.png`（整窗）、
+`canvas_printwindow_before/after.png`（画布）、`canvas_top_*` / `canvas_between_*`
+（放大的顶部带与区间缝）。复现脚本：`ai/runtime/whitebar_shot.py [before|after]`
+（开 Praat → 建 Sound → View & Edit → 挪到 1828×954 @ (20,13) → 抓图 + 打印逐行主色）。

@@ -91,6 +91,19 @@ def configured_model_name(config: AppConfig | None = None) -> str:
     return Path(config.server.model_path).name if config.server.model_path else ""
 
 
+def local_base_url(config: AppConfig | None = None) -> str:
+    """本机 llama-server 的地址（从 ``server.host/port`` 拼）。
+
+    不能拿 ``config.qwen.base_url`` 代替：API 模式下 `apply_api_to_qwen` 会把它换成
+    **云端**地址，拿它去等本机端口释放就会去请求云端（实测会白等 20 秒 + 打网络）。
+    """
+
+    config = config or load_config()
+    host = config.server.host or "127.0.0.1"
+    port = config.server.port or 8000
+    return f"http://{host}:{port}/v1"
+
+
 def collect_status(config_path: str | Path | None = None) -> dict[str, Any]:
     config = load_config(config_path)
     gpu = detect_gpu()
@@ -360,6 +373,34 @@ def _restart_service(
     return _launch_server(config, config_path, progress=progress)
 
 
+def ensure_local_service(
+    config: AppConfig,
+    config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
+) -> dict[str, Any]:
+    """保证配置里写的那个本地模型真的在服务上（回本地模型时都要走这里）。
+
+    2026-09-22 的 WinError 10061 就是这条路缺了一段：从 API 切回本地（或者换一个
+    本地预设）时，代码只在「端口上有服务、但加载的是别的模型」时重启，端口**空着**
+    时什么都不做——配置已经切回本地、8000 端口却没人听，下一条消息直接「目标计算机
+    积极拒绝」。这里的四种情况：
+
+    - 端口空着 → 启动（``_launch_server``）；
+    - 端口上是**别的**模型（``server_model_state() is False``）→ 重启；
+    - 端口上就是配置里的模型（``True``）→ 什么都不做，只回报状态；
+    - 读不到模型列表（``None``）→ 保持原语义，不擅自重启别人的服务。
+    """
+
+    if not endpoint_available(config.qwen.base_url):
+        # 进度从 `_launch_server` 自己的 0.05 开始报（它一进门就报，用户不会干等）。
+        return _launch_server(config, config_path, progress=progress)
+    if server_model_state(config.qwen.base_url, config.server.model_path) is False:
+        # 端口上有服务，但加载的是别的模型：重启成配置里的模型。
+        return _restart_service(config, config_path, progress=progress)
+    return collect_status(config_path)
+
+
 def start_frontend(
     config_path: str | Path | None = None,
     *,
@@ -367,16 +408,14 @@ def start_frontend(
 ) -> dict[str, Any]:
     config = load_config(config_path)
     if api_is_active(config):
-        # API 模式不需要本地服务；状态里会说明用的是哪个云端模型。
+        # API 模式不需要本地服务，但**一样要打进度**：Praat 的「正在处理中」小窗
+        # 是子进程的标准输出里出现 `PRAAT_PROGRESS` 才弹的（见
+        # sys/praat_python.cpp → Melder_progress），以前这里直接 return，菜单里点
+        # 「启动前端」就完全没有反馈（2026-09-22 用户报的）。
+        _progress(0.10, "当前是 API 模式，不需要本机模型服务。", progress)
+        _progress(1.00, f"已就绪：{config.api.model}（云端）", progress)
         return collect_status(config_path)
-    if endpoint_available(config.qwen.base_url):
-        state = server_model_state(config.qwen.base_url, config.server.model_path)
-        if state is not False:
-            # True：端口上就是配置里的模型；None：读不到模型列表，保持原行为。
-            return collect_status(config_path)
-        # 端口上有服务，但加载的是别的模型：重启成配置里的模型。
-        return _restart_service(config, config_path, progress=progress)
-    return _launch_server(config, config_path, progress=progress)
+    return ensure_local_service(config, config_path, progress=progress)
 
 
 def stop_frontend(
@@ -386,7 +425,27 @@ def stop_frontend(
 ) -> dict[str, Any]:
     config = load_config(config_path)
     if api_is_active(config):
-        # 云端模型没有「本地服务」可停；别去动本机端口上的东西。
+        # API 模式下本机服务是可停可留的：默认（`api.stop_local_service`）停掉腾
+        # 显存，关掉这个选项就留着（切回本地模型时不用重新加载）。两条路都要发
+        # 进度，不然菜单里点「停止前端」看着像没反应。
+        if config.api.stop_local_service:
+            _progress(0.10, "API 模式：按设置停掉本机模型服务（省显存）…", progress)
+            stopped = _stop_running_service(config)
+            _progress(0.60, "等待端口释放…", progress)
+            # 等的是**本机**端口：API 模式下 config.qwen.base_url 是云端地址。
+            _wait_for_endpoint_gone(local_base_url(config))
+            _progress(
+                1.00,
+                "本机模型服务已停。" if stopped else "本机模型服务本来就没在跑。",
+                progress,
+            )
+        else:
+            _progress(
+                0.10,
+                "API 模式：设置里取消了「顺手停掉本机模型服务」，本机服务保持不动。",
+                progress,
+            )
+            _progress(1.00, "API 模式仍在运行；本机模型服务按设置保留。", progress)
         return collect_status(config_path)
     _progress(0.1, "正在停止模型服务…", progress)
     _stop_running_service(config)
@@ -472,10 +531,9 @@ def set_frontend_model(
             "API 模式已启用，这个本地模型路径要等取消 API 模式后才会用上。"
         )
         return status
-    # 端口上已有服务却加载着旧模型时，必须重启，否则切换模型只是改了配置。
-    if server_model_state(config.qwen.base_url, config.server.model_path) is False:
-        return _restart_service(config, config_path, progress=progress)
-    return collect_status(config_path)
+    # 端口空着要启动、加载着旧模型要重启——都交给 ensure_local_service，
+    # 否则「选了模型但端口没人听」会一直报 WinError 10061。
+    return ensure_local_service(config, config_path, progress=progress)
 
 
 def apply_preset(
@@ -505,10 +563,9 @@ def apply_preset(
         _progress(0.02, "切回本地模型（关闭 API 模式）…", progress)
     update_config(values, config_path)
     config = load_config(config_path)
-    # 端口上已有服务却加载着别的模型时，必须重启，否则切换预设只是改配置。
-    if server_model_state(config.qwen.base_url, config.server.model_path) is False:
-        return _restart_service(config, config_path, progress=progress)
-    return collect_status(config_path)
+    # 切回本地预设（或换一个预设）之后，服务必须真的跑起来：端口空着就启动，
+    # 加载着别的模型就重启（见 ensure_local_service）。
+    return ensure_local_service(config, config_path, progress=progress)
 
 
 def _progress(

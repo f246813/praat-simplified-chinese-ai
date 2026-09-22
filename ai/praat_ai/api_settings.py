@@ -89,6 +89,7 @@ DEFAULTS: dict[str, Any] = {
     "vision_when_requested": False,
     "thinking_level": "medium",
     "use_world_knowledge": True,
+    "stop_local_service": True,
 }
 
 #: 「思考档位」下拉框的显示文字 → 配置里的值（见 config.THINKING_LEVELS）。
@@ -130,6 +131,7 @@ def settings_from_config(config: AppConfig) -> dict[str, Any]:
             "vision_when_requested": bool(api.vision_when_requested),
             "thinking_level": api.thinking_level,
             "use_world_knowledge": bool(api.use_world_knowledge),
+            "stop_local_service": bool(api.stop_local_service),
         }
     )
     return values
@@ -185,6 +187,8 @@ def normalize_settings(values: Mapping[str, Any]) -> tuple[dict[str, Any], list[
         "vision_when_requested": bool(values.get("vision_when_requested")),
         "thinking_level": normalize_thinking_level(values.get("thinking_level")),
         "use_world_knowledge": bool(values.get("use_world_knowledge", True)),
+        # 老配置没有这个键 → True（= 进 API 就停本机服务，腾显存）。
+        "stop_local_service": bool(values.get("stop_local_service", True)),
     }
     return clean, errors
 
@@ -339,6 +343,20 @@ class ApiSettingsDialog:
         shell, _entry = field_entry(connect_body, self.timeout, width=8)
         shell.grid(row=5, column=1, sticky="w", pady=4)
 
+        # 进入 API 模式时要不要顺手停掉本机 llama-server：默认停（腾显存），
+        # 但切回本地模型时要重新加载几十秒，所以给一个「别停」的选项。
+        self.stop_local_service = tk.BooleanVar(
+            value=bool(self.values["stop_local_service"])
+        )
+        ttk.Checkbutton(
+            connect_body,
+            text=(
+                "启用 API 时顺手停掉本机模型服务（省显存；取消勾选则切回本地时"
+                "不用重新加载）"
+            ),
+            variable=self.stop_local_service,
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
         # ---------------------------------------------------------- 生成
         generate = ui_widgets.Card(frame, theme, padding=(14, 12, 14, 12))
         generate.grid(row=1, column=0, sticky="ew", pady=(10, 0))
@@ -472,6 +490,7 @@ class ApiSettingsDialog:
             "vision_when_requested": self.values.get("vision_when_requested"),
             "thinking_level": thinking,
             "use_world_knowledge": self.world_knowledge.get(),
+            "stop_local_service": self.stop_local_service.get(),
         }
 
     def test_connection(self) -> None:

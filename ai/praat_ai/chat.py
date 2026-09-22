@@ -47,7 +47,7 @@ from . import (
 )
 from .config import api_is_active, default_config_path as config_path, load_config
 from .presets import PresetError, active_preset, list_presets
-from .server import running_model_info
+from .server import QwenServerError, running_model_info
 
 
 SEND_NOISE = (
@@ -1944,7 +1944,12 @@ class ChatWindow:
             pass
 
     def on_api_settings_saved(self, values: dict) -> None:
-        """保存之后刷新界面；如果刚切到 API 模式，顺手停掉本机模型服务省显存。"""
+        """保存之后刷新界面：进 API 顺手停本机服务（可关），回本地则把服务起起来。
+
+        `api.stop_local_service`（API 配置窗口里的复选框，默认开）决定进 API 时要
+        不要停本机 llama-server；取消勾选 API / 切回本地预设时**一律**要把本机服务
+        弄起来——2026-09-22 的 WinError 10061 就是这里只改了配置、没起服务。
+        """
 
         self.reload_config()
         if api_is_active(self.config):
@@ -1952,9 +1957,41 @@ class ChatWindow:
                 f"已切到 API 模式：{self.config.api.label or '云端 API'} / "
                 f"{self.config.api.model}（对话走云端，不再需要本机模型服务）。"
             )
-            self.messages.put(("stop-local-service", ""))
+            if self.config.api.stop_local_service:
+                self.messages.put(("stop-local-service", ""))
+            else:
+                self.append_hint(
+                    "按设置保留本机模型服务（切回本地时不用重新加载；想腾显存就在"
+                    " Praat 菜单点「前端 → 停止前端」）。"
+                )
         else:
-            self.append_hint("已关闭 API 模式：前端回到本地模型预设。")
+            self.append_hint(
+                "已关闭 API 模式：前端回到本地模型预设，正在把本机模型服务起起来…"
+            )
+            self.messages.put(("start-local-service", ""))
+
+    def start_local_service_worker(self) -> None:
+        """回本地模型时把 llama-server 起起来。
+
+        以前这里只改配置：端口空着也没人管，下一条消息就是
+        ``[WinError 10061] 由于目标计算机积极拒绝``。
+        """
+
+        from . import control
+
+        try:
+            result = control.ensure_local_service(
+                control.load_config(), progress=self._progress_sink()
+            )
+        except (QwenServerError, qwen.QwenError, OSError, ValueError) as error:
+            self.messages.put(("failure", f"启动本机模型服务失败：{error}"))
+        else:
+            model = str(result.get("frontend_model", ""))
+            self.messages.put(
+                ("hint", f"本机模型服务已就绪：{model or '（模型名读取中）'}")
+            )
+        finally:
+            self.messages.put(("progress-done", ""))
 
     def stop_local_service_worker(self) -> None:
         """API 模式下把还在跑的本机 llama-server 停掉（主要目的是腾显存）。"""
@@ -2270,6 +2307,10 @@ class ChatWindow:
                 elif role == "stop-local-service":
                     threading.Thread(
                         target=self.stop_local_service_worker, daemon=True
+                    ).start()
+                elif role == "start-local-service":
+                    threading.Thread(
+                        target=self.start_local_service_worker, daemon=True
                     ).start()
                 elif role in {"result", "failure"}:
                     self.append_lines(role, text)

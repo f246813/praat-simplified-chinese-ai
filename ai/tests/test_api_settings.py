@@ -652,6 +652,80 @@ class SettingsValidationTests(unittest.TestCase):
         )
 
 
+class StopLocalServiceOptionTests(unittest.TestCase):
+    """进入 API 模式时要不要顺手停掉本机 llama-server（`api.stop_local_service`）。
+
+    默认 True = 修好之前的行为（进 API 就停、腾显存）；老配置里没有这个键时也按
+    True 读——不写迁移、不改用户的 ai_config.json。
+    """
+
+    def test_defaults_to_true_and_normalizes_when_the_key_is_missing(self) -> None:
+        self.assertIs(api_settings.DEFAULTS["stop_local_service"], True)
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(
+                Path(raw),
+                {
+                    **LOCAL_ONLY,
+                    "api": {
+                        "enabled": True,
+                        "label": "DeepSeek",
+                        "base_url": "https://api.deepseek.com/v1",
+                        "model": "deepseek-chat",
+                        "api_key": "sk-x",
+                    },
+                },
+            )
+            config = load_config(path)
+            values = api_settings.settings_from_config(config)
+        self.assertTrue(config.api.stop_local_service)
+        self.assertTrue(values["stop_local_service"])
+        self.assertTrue(
+            api_settings.normalize_settings({"enabled": True})[0][
+                "stop_local_service"
+            ]
+        )
+
+    def test_round_trips_when_it_is_turned_off(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(
+                Path(raw),
+                {
+                    **LOCAL_ONLY,
+                    "api": {
+                        "enabled": True,
+                        "label": "DeepSeek",
+                        "base_url": "https://api.deepseek.com/v1",
+                        "model": "deepseek-chat",
+                        "api_key": "sk-x",
+                        "stop_local_service": False,
+                    },
+                },
+            )
+            values = api_settings.settings_from_config(load_config(path))
+            self.assertFalse(values["stop_local_service"])
+            clean, errors = api_settings.normalize_settings(values)
+            self.assertEqual(errors, [])
+            self.assertFalse(clean["stop_local_service"])
+            api_settings.save_settings(clean, path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertFalse(payload["api"]["stop_local_service"])
+            self.assertFalse(load_config(path).api.stop_local_service)
+
+    def test_turning_it_back_on_is_saved_as_true(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), LOCAL_ONLY)
+            clean, errors = api_settings.normalize_settings(
+                {
+                    "enabled": False,
+                    "stop_local_service": True,
+                }
+            )
+            self.assertEqual(errors, [])
+            api_settings.save_settings(clean, path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(payload["api"]["stop_local_service"])
+
+
 class ProbeTests(unittest.TestCase):
     def test_probe_reports_success(self) -> None:
         class FakeResponse:

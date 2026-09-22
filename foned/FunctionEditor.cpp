@@ -444,6 +444,18 @@ static void drawBackgroundAndData (FunctionEditor me) {
 	my viewAllAsPixelettes ();
 	Graphics_setColour (my graphics.get(), DataGuiColour_WINDOW_BACKGROUND);
 	Graphics_fillRectangle (my graphics.get(), my _functionViewerLeft, my _selectionViewerRight, my BOTTOM_MARGIN, my height_pxlt);
+	/*
+		The function areas leave a strip of the canvas unpainted above themselves:
+		their own legend margin (FunctionArea :: top_pxlt) plus, at the very top,
+		the TOP_MARGIN + space that dataTop_pxlt() keeps free. That strip therefore
+		showed the window background colour as a light band above the topmost pane
+		and between the panes (2026-09-22, "语图上方的白条"). Paint the data column
+		with the data-area colour so the panes look flush; the frame around them
+		(left/right margins, bottom button row) keeps the window colour.
+	*/
+	Graphics_setColour (my graphics.get(), DataGuiColour_AREA_BACKGROUND);
+	Graphics_fillRectangle (my graphics.get(), my dataLeft_pxlt(), my dataRight_pxlt(),
+			my dataBottom_pxlt(), my height_pxlt);
 	Graphics_setColour (my graphics.get(), Melder_BLACK);
 
 	/*

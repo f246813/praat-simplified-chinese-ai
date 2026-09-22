@@ -304,6 +304,11 @@ Praat 里自己点运行。
   前端就改用云端模型（任何 OpenAI 兼容的 `/v1` 接口都行）；本地 llama-server 的配置
   会留着，取消勾选或点「应用预设」就切回本地。key 只写进 `ai_config.json`
   （已 gitignore），也可以只放在环境变量 `PRAAT_AI_API_KEY` 里。
+  同一个窗口里还有一个 **`api.stop_local_service`** 复选框（默认勾上）：启用 API 时
+  顺手停掉本机模型服务、省显存；取消勾选就让它继续跑，切回本地时不用重新加载。
+  取消勾选 API／切回本地预设时前端会**自动把本机服务起起来**（端口空着就启动、
+  加载着别的模型就重启），所以不会再出现 `[WinError 10061] 目标计算机积极拒绝`；
+  API 模式下菜单「前端 → 启动前端 / 停止前端」也会走一遍带进度条的小窗。
   菜单里那个窗口跑在独立进程（Praat 不会被它堵住）；窗口上方「模型预设」下拉框
   在 API 模式下第一行就是当前云端模型。云端模型还可以在同一个窗口里选**思考档位**
   （自动/关闭/低/中/高，云端翻成 `reasoning_effort`、本地翻成 `enable_thinking`）、
@@ -352,6 +357,7 @@ python ai/tests/verify_error_dialog.py          # 脚本报错不弹模态框、
 python ai/tests/verify_context_marker.py        # 对象列表里的进程标记（C5）：不再每条消息都刷列表
 python ai/tests/verify_cancel_live.py           # 「停止」真的能停住等 Praat / 等批处理（C7）
 python ai/tests/verify_api_mode.py              # API 模式：自己起假 OpenAI 服务，真跑一轮对话
+python ai/tests/verify_api_switching_live.py    # 真机：进 API 停不停本机服务、回本地自动起服务
 python ai/tests/verify_api_menu_live.py         # 真机：菜单「前端 / API 配置...」能弹出小窗口
 python ai/tests/verify_model_progress_live.py   # 真机：加载/停止模型时出现进度小窗口
 python ai/tests/verify_presets_live.py          # 模型预设切换（会重启 llama-server）

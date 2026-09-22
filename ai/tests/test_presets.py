@@ -277,9 +277,18 @@ class PresetParsingTests(PresetFixture):
 class PresetApplyTests(PresetFixture):
     def test_apply_preset_updates_config_when_service_is_stopped(self) -> None:
         self.write_config(base_url="http://127.0.0.1:9/v1")
-        with patch.object(control, "_restart_service") as restart:
+        # 端口空着 → 必须真的把服务起起来（以前只改配置，下一条消息就是 WinError 10061）。
+        with (
+            patch.object(control, "_restart_service") as restart,
+            patch.object(
+                control,
+                "_launch_server",
+                side_effect=lambda *args, **kwargs: control.collect_status(self.config_path),
+            ) as launch,
+        ):
             status = control.apply_preset("small", self.config_path)
         self.assertFalse(restart.called)
+        self.assertTrue(launch.called)
         config = load_config(self.config_path)
         self.assertEqual(config.server.active_preset, "small")
         self.assertEqual(Path(config.server.model_path), self.small)
@@ -343,12 +352,20 @@ class PresetApplyTests(PresetFixture):
 
     def test_set_model_keeps_preset_flag_in_sync(self) -> None:
         self.write_config(base_url="http://127.0.0.1:9/v1")
-        status = control.set_frontend_model(str(self.small), config_path=self.config_path)
-        self.assertEqual(status["frontend_preset"], "small")
-        # 手动选一个不在预设里的模型时，不能继续显示旧预设。
-        other = self.directory / "other.gguf"
-        other.write_bytes(b"stub")
-        status = control.set_frontend_model(str(other), config_path=self.config_path)
+        # 端口空着 → 会把服务起起来（真去拉 llama-server 不是这个用例要验的）。
+        with patch.object(
+            control,
+            "_launch_server",
+            side_effect=lambda *args, **kwargs: control.collect_status(self.config_path),
+        ):
+            status = control.set_frontend_model(
+                str(self.small), config_path=self.config_path
+            )
+            self.assertEqual(status["frontend_preset"], "small")
+            # 手动选一个不在预设里的模型时，不能继续显示旧预设。
+            other = self.directory / "other.gguf"
+            other.write_bytes(b"stub")
+            status = control.set_frontend_model(str(other), config_path=self.config_path)
         self.assertEqual(status["frontend_preset"], "")
 
 
