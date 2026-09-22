@@ -1262,6 +1262,12 @@ Praat 主线程整个被堵住：
   `API 模式（<api_model>，不需要本机模型服务）`（`PraatAiControl_getFrontendStatus`），
   不再只显示一个 `running (API)`。
 
+  （`PRAAT_PROGRESS` 是真发了，但 API 模式下这两步几乎不花时间，Praat 的进度小窗
+  是懒创建的、毫秒级结束就不会露脸——所以菜单路径上肉眼可见的反馈是**状态行**和
+  被置前的对话窗口。真机核对：开一个 Praat + Sound 编辑器，点之前状态行是本地模型，
+  点之后立刻变成 `状态: API 模式（deepseek-chat，不需要本机模型服务）`；
+  「停止前端」则要真的把 8000 端口收空。脚本：`ai/runtime/api_status_menu_live.py`。）
+
 **② 从 API 切回本地（或换一个本地预设）之后，端口没人听 → `[WinError 10061] 由于
 目标计算机积极拒绝`。** 切本地那一步确实写了 `api.enabled = false`，但**没有任何
 代码去启动 llama-server**：`apply_preset()` / `set_frontend_model()` 只在
