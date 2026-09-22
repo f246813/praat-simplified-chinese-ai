@@ -4,59 +4,123 @@
 
 - Praat 菜单里点「启动前端 / 加载模型」→ 控制脚本把进度打到标准输出
   （``PRAAT_PROGRESS\\t<进度>\\t<说明>``）→ Praat 自己的进度小窗
-  （`sys/praat_python.cpp` → `Melder_progress`）；
-- 对话窗口里点「应用预设 / API 配置」→ 本模块的 :class:`MiniProgress`，
-  一个只有一句话 + 一根进度条的小窗，不抢焦点、不能改大小、关闭时不留残影。
+  （`sys/praat_python.cpp` → `Melder_progress`，那个窗口属于 Praat，见 guide.md §8.16
+  说明为什么不动它）；
+- 对话窗口里点「应用预设 / API 配置」→ 本模块的 :class:`MiniProgress`。
+
+界面按 TW-Elements 的卡片形态做：圆角卡片 + 圆角进度条 + 右侧百分比（等宽数字），
+深浅色跟随系统。对外接口一个都没变（``bar.cget("value")`` 仍是 0–100）。
 """
 
 from __future__ import annotations
 
 import time
 
+from . import ui_theme, ui_widgets
+
 #: 小窗最少显示多久：一次「应用预设」有时几百毫秒就完了，不兜一下用户只看到一闪。
 MINIMUM_VISIBLE_SEC = 0.8
 
 
 class MiniProgress:
-    """挂在对话窗口上的迷你进度窗（简约：一句话 + 一根进度条 + 自动消失）。"""
+    """挂在对话窗口上的迷你进度窗（卡片 + 一句话 + 一根进度条 + 百分比）。"""
 
     def __init__(self, root, *, title: str = "Praat AI", message: str = "正在加载模型…"):
         import tkinter as tk
-        from tkinter import ttk
 
         self._tk = tk
         self.root = root
         self.shown_at = time.monotonic()
+        self.theme = ui_theme.Theme(root)
         self.window = tk.Toplevel(root)
         self.window.title(title)
         self.window.resizable(False, False)
         self.window.protocol("WM_DELETE_WINDOW", lambda: None)   # 简约：不给中途关闭
+        self.window.configure(background=self.theme.color("canvas"))
         try:
             self.window.attributes("-topmost", True)
         except tk.TclError:
             pass
 
-        frame = ttk.Frame(self.window, padding=(16, 14, 16, 14))
-        frame.pack(fill="both", expand=True)
-        self.message = tk.StringVar(value=message)
-        ttk.Label(
-            frame,
-            textvariable=self.message,
-            width=34,
-            anchor="w",
-            font=("Microsoft YaHei UI", 9),
-        ).pack(anchor="w")
-        self.bar = ttk.Progressbar(
-            frame, mode="determinate", maximum=100.0, length=280
+        self.card = ui_widgets.Card(
+            self.window, self.theme, padding=(16, 14, 16, 14), radius=12
         )
-        self.bar.pack(fill="x", pady=(8, 0))
-        # 一开始就画出进度条（0%），别让用户先看到一个空窗口。
-        self.bar.configure(value=0.0)
+        self.card.pack(fill="both", expand=True)
+        body = self.card.body
+
+        head = tk.Frame(body, background=self.theme.color("surface"))
+        head.pack(fill="x")
+        self.dot = tk.Canvas(
+            head,
+            width=self.theme.pad(10),
+            height=self.theme.pad(10),
+            bd=0,
+            highlightthickness=0,
+            background=self.theme.color("surface"),
+        )
+        self.dot.pack(side="left", padx=(0, self.theme.pad(8)))
+        self.message = tk.StringVar(value=message)
+        self.title_label = tk.Label(
+            head,
+            textvariable=self.message,
+            anchor="w",
+            bd=0,
+            highlightthickness=0,
+            background=self.theme.color("surface"),
+            foreground=self.theme.color("text"),
+            font=self.theme.font("body_bold"),
+        )
+        self.title_label.pack(side="left", fill="x", expand=True)
+
+        row = tk.Frame(body, background=self.theme.color("surface"))
+        row.pack(fill="x", pady=(self.theme.pad(10), 0))
+        self.bar = ui_widgets.RoundedProgressBar(
+            row, self.theme, height=8, radius=4, length=240
+        )
+        self.bar.pack(side="left", fill="x", expand=True)
+        self.percent_text = tk.StringVar(value="0%")
+        self.percent = tk.Label(
+            row,
+            textvariable=self.percent_text,
+            width=5,
+            anchor="e",
+            bd=0,
+            highlightthickness=0,
+            background=self.theme.color("surface"),
+            foreground=self.theme.color("textMuted"),
+            font=self.theme.font("data"),
+        )
+        self.percent.pack(side="left", padx=(self.theme.pad(8), 0))
+
+        self.theme.add_listener(self._apply_theme)
+        self._draw_dot()
         self._place_near_parent()
         try:
             self.window.update_idletasks()
         except Exception:   # noqa: BLE001
             pass
+
+    # ------------------------------------------------------------------ 绘制
+
+    def _draw_dot(self, *, done: bool = False) -> None:
+        theme = self.theme
+        self.dot.configure(background=theme.color("surface"))
+        self.dot.delete("dot")
+        size = theme.pad(10)
+        color = theme.color("success" if done else "primary")
+        self.dot.create_oval(0, 0, size, size, fill=color, outline="")
+
+    def _apply_theme(self, theme=None) -> None:
+        theme = theme or self.theme
+        surface = theme.color("surface")
+        self.window.configure(background=theme.color("canvas"))
+        for widget in (self.title_label, self.percent, self.dot):
+            widget.configure(background=surface)
+        self.title_label.configure(foreground=theme.color("text"))
+        self.percent.configure(foreground=theme.color("textMuted"))
+        for frame in (self.card.body, self.title_label.master, self.bar.master):
+            frame.configure(background=surface)
+        self._draw_dot(done=float(self.bar.cget("value")) >= 100.0)
 
     def _place_near_parent(self) -> None:
         """显示在对话窗口中间偏上一点（不遮住输入框）。"""
@@ -73,18 +137,27 @@ class MiniProgress:
         except Exception:   # noqa: BLE001 - 位置算不出来就用系统默认位置
             pass
 
+    # ------------------------------------------------------------------ 更新
+
     def update(self, fraction: float, message: str | None = None) -> None:
         """更新进度条（0–1）和文案。"""
 
         try:
-            self.bar.configure(value=max(0.0, min(1.0, float(fraction))) * 100.0)
+            value = max(0.0, min(1.0, float(fraction))) * 100.0
+            self.bar.configure(value=value)
+            self.percent_text.set(f"{value:.0f}%")
             if message:
                 self.message.set(message)
+            self._draw_dot(done=value >= 100.0)
             self.window.update_idletasks()
         except Exception:   # noqa: BLE001 - 窗口已经被关掉时忽略
             pass
 
     def close(self) -> None:
+        try:
+            self.theme.remove_listener(self._apply_theme)
+        except Exception:   # noqa: BLE001
+            pass
         try:
             self.window.destroy()
         except Exception:   # noqa: BLE001

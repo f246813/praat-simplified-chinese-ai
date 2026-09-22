@@ -21,6 +21,7 @@
 | [chengafni/praat](https://github.com/chengafni/praat) | 声学测量脚本的公式与做法：`plugin_CompleteAnalysis`（表驱动：`objects.txt`/`queries.txt`/`settings.txt`）、`plugin_SpectralEmphasis`、`plugin_HL`、`plugin_HammarbergIndex`、`plugin_PA`、`plugin_IntensitySlope`、`plugin_PitchPeakLatency` 的原理与原脚本 | `ai/praat_ai/tools.py` 的测量模板、`ai/praat_ai/measures.tsv`（表结构参考）、`ai/plugin/`（原生插件的 `setup.praat` + `Add menu command` 做法），说明见 [ADR-005](ai/docs/adr/ADR-005-table-driven-measurements.md)、guide §8.4/§8.7 |
 | [QwenLM/Qwen-Agent](https://github.com/QwenLM/Qwen-Agent) | agent 循环的设计参考：工具自带 JSON Schema → 交给服务端原生 function calling → 把结果作为 function/tool 消息回灌 → 再规划；工具报错当「可恢复的观察」；输入按 token 预算截断 | `ai/praat_ai/qwen.py`、`ai/praat_ai/chat.py`（见 [ADR-003](ai/docs/adr/ADR-003-planning-interface.md)、[ADR-004](ai/docs/adr/ADR-004-agent-loop.md)、[ADR-008](ai/docs/adr/ADR-008-context-token-budget.md)） |
 | [Ron-312/PraatPlugin](https://github.com/Ron-312/PraatPlugin) | 调用层的做法参考：Praat 安装位置的定位（对应 `PraatInstallationLocator`）、脚本投递与结果契约的取舍 | `ai/praat_ai/praat_app.py`（找 Praat）、`ai/docs/adr/ADR-001/002`（我们改了结论的地方都写在 ADR 的「备选方案」里） |
+| [mdbootstrap/TW-Elements](https://github.com/mdbootstrap/TW-Elements)（MIT） | **界面设计语言的参考**：色板（primary `#3B71CA`、success `#14A44D`、danger `#DC4C64`、warning `#E4A11B`、info `#54B4D3`）、卡片/按钮/进度条/状态胶囊/提示条的组件形态与层级。它是给网页用的 Tailwind 组件库，我们**没有复制它的代码**——界面仍是 Python + Tkinter，圆角卡片与进度条是 Canvas 自绘 | `ai/praat_ai/ui_theme.py`（令牌）、`ai/praat_ai/ui_widgets.py`（自绘控件）、`ai/praat_ai/chat.py` / `api_settings.py` / `progress_popup.py` / `ui.py`（四个界面），说明见 guide §8.16 |
 
 ## 运行依赖（不是代码借用，但用到了）
 

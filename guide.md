@@ -1232,3 +1232,99 @@ Praat 主线程整个被堵住：
 「已完成」、有结果时要保留结果、reasoning-only 也要当正文）、
 `test_api_settings.py::WorldKnowledgeTests`（身份规则含真实模型名、对比条款、
 空话禁令）、`test_qwen`/`test_api_settings` 里的 `message_text` 用例。
+
+### 8.16 界面：对齐 TW-Elements 的设计语言（2026-09-22）
+
+[TW-Elements](https://github.com/mdbootstrap/TW-Elements)（Tailwind + MDB，
+**MIT**）是**网页**组件库（500+ 组件：cards / buttons / progress / toast / chips…），
+我们的界面是 Python + Tkinter，所以**只借它的设计语言**（色板、层级、间距、圆角、
+状态表达），一行它的代码都没有复制。对外只说一句：界面长得像 MDB，实现是自己的。
+
+#### 8.16.1 令牌（`ai/praat_ai/ui_theme.py`）
+
+两套令牌键名完全相同（有单测守着），颜色取自 TW-Elements 构建产物里实测的值：
+
+| 语义 | 浅色 | 深色 | 用在哪 |
+| --- | --- | --- | --- |
+| primary / primaryHover / onPrimary | `#3B71CA` / `#3567B5` / `#FFFFFF` | `#6EA8FE` / `#8AB8FF` / `#10151C` | 主按钮、状态胶囊、用户消息块 |
+| primarySoft | `#E8F0FE` | `#22304A` | 用户消息块底、提示条底 |
+| success / successText / successSoft | `#14A44D` / `#0B6B33` / `#E6F4EA` | `#3FB950` / `#4ED164` / `#12261A` | 结果块表头、正常状态 |
+| danger / dangerSoft | `#DC4C64` / `#FCE8EB` | `#F85149` / `#2A1416` | 失败块 |
+| warning / warningText | `#E4A11B` / `#9A6E00` | `#E3B341` / `#E3B341` | 忙碌/警告 |
+| canvas / surface / surfaceAlt | `#F5F5F5` / `#FFFFFF` / `#FBFBFB` | `#121212` / `#1E1E1E` / `#262626` | 窗口底 / 卡片底 |
+| border / divider / shadowRing | `#E0E0E0` / `#EEEEEE` / `#E9ECEF` | `#3A3A3A` / `#2E2E2E` / `#2E2E2E` | 边线、卡片外圈、结果块底 |
+| text / textMuted / codeBg / codeText / chipBg | `#212529` / `#6C757D` / `#F8F9FA` / `#212529` / `#F1F3F5` | `#E9ECEF` / `#9AA0A6` / `#1B1B1B` / `#E9ECEF` / `#2A2A2A` | 正文/次要文字/代码 |
+
+- **successText / warningText 是必要的**：`#14A44D` 压浅底只有 2.7:1、`warning`
+  压 `chipBg` 只有 2.0:1，直接当文字色看不清。单测 `test_ui_theme.py` 会把
+  正文 4.5:1、强调行 3:1 这两条底线挨个算一遍——**改颜色先看那两条用例**。
+- 字号用 point（正文 10 / 标题 11 粗 / 说明 9 / 数据 Consolas 10），中文字体
+  微软雅黑 UI、数据 Consolas，找不到就回落（本机没有 Roboto，不用它）。
+- `scale = clamp(winfo_fpixels('1i')/96, 1.0, 2.0)`，只用来缩放 **Canvas 自绘尺寸**
+  （圆角半径、内边距、进度条高度）；字号是 point，Tk 自己跟 DPI。本机 96 DPI →
+  1.0，120%/150% 的实际观感要在有缩放的机器上复验。
+
+#### 8.16.2 深浅色：只跟随系统
+
+`ui_theme.system_is_dark()` 读
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme`
+（0 = 深色）；**非 Windows / 键缺失 / 读失败一律按浅色**（宁可亮着，别看不见）。
+窗口开着一个 `ThemeWatcher` 每 5 秒复查一次，变了就 `theme.set_dark()` → 通知所有注册过的
+控件重刷（自绘控件在 `__init__` 里 `add_listener`，销毁时自动摘掉；坏掉的监听器会被
+踢出名单）。**没有手动开关**，也不写进配置。
+
+ttk 基础主题从 `vista` 换成 **`clam`**：vista 的输入框/下拉框由系统主题引擎绘制，
+颜色根本改不动，深色模式下会留一片白底。`ui_widgets.configure_ttk()` 把 TEntry /
+TCombobox / TCheckbutton / TScrollbar 刷成当前令牌；Win10 原生下拉列表可能仍有系统色
+残留，接受。
+
+#### 8.16.3 自绘控件的取舍（为什么不是真气泡、也不是无边框窗口）
+
+- **消息区保持 `tk.Text`**：要能选中、能复制。所以消息是「消息块」——底色 + 左侧
+  `▍` 强调字符 + 缩进/间距，而不是圆角气泡。真圆角气泡要牺牲文本选择（Canvas 自绘），
+  这个工具里「把 AI 给的脚本抄出来」比观感重要。
+- **保留系统标题栏**：本机 Windows 10 22H2 不支持系统级窗口圆角
+  （`DWMWA_WINDOW_CORNER_PREFERENCE` 是 Win11 的），硬做只能 `SetWindowRgn`，
+  会有锯齿、破坏阴影和贴边。圆角只用在内层卡片、按钮、输入框、进度条上。
+- 「⧉ 复制」**不是内嵌按钮**：`Text.window_create` 的内嵌窗口不会抬高行高，实测会压住
+  下一块（两个「复制」叠在一起）。现在是文本 tag + `<Button-1>` 命中
+  （`_copy_registry` 记 tag → 原文），滚动/重绘都没有问题。
+- 圆角矩形用「4 个扇形 + 2 个矩形」画（`_rounded_shapes`），描边靠"外圈+内圈"两层；
+  Tk 的 arc 没有描边。
+
+#### 8.16.4 四个界面
+
+- **对话窗口**（`chat.py`）：顶部 AppBar（标题 + 状态胶囊：正常绿 / 忙碌黄 / 不通红）→
+  预设行（下拉 + 「应用预设」实心 + 「API 配置…」描边）→ 提示条（Snackbar）→
+  对象行（小号次要文字）→ 消息区（用户右对齐 `primarySoft`、AI `surface`、结果
+  `shadowRing` + 等宽、失败 `dangerSoft`、提示无底）→ 输入卡片（圆角外壳里的
+  `tk.Text` + 「发送」实心 + 「停止」描边 + 说明行）。
+- **最小 Markdown 渲染**（`chat.render_message`，纯函数）：`#/##/###` 标题、行首
+  `-`/`*`/`•` 项目符号、`**粗体**`、`` `代码` ``。只用在 AI 回答与结果上，用户自己
+  敲的字原样显示。
+- **迷你进度窗**（`progress_popup.py`）：圆角卡片 + 圆点（未完成=primary、满格=success）+ 
+  圆角进度条 + 右侧百分比（等宽）。`bar.cget("value")` 仍是 **0–100**，
+  `MINIMUM_VISIBLE_SEC` / `update()` / `close()` 一个都没变。
+- **API 配置窗**（`api_settings.py`）：两张卡片（「连接」服务商/地址/模型/Key/超时，
+  「生成」上下文/回复上限/思考档位/世界知识）+ 底部状态 Snackbar + 三档按钮。
+- **纠音表单**（`ui.py`）：同一套卡片/圆角输入框/按钮，窗口按内容自适应大小。
+- Praat 自带那个「正在处理中」进度窗（C++ `sys/Gui_messages.cpp`）**没动**：它属于
+  Praat 的 GuiDialog，改了会影响 Praat 所有进度窗。
+
+#### 8.16.5 改 UI 时不许动的东西
+
+回归脚本直接按这些名字读控件，改名就红：`status / status_text / preset_box /
+preset_choice / preset_hint / preset_button / api_button / entry / send_button /
+stop_button / transcript / context_label / progress_window / app_bar / composer /
+status_chip / preset_snack`，以及 `MiniProgress.bar.cget("value")`（0–100）、
+`ApiSettingsDialog.key_entry.cget("show")`（真 `ttk.Entry`，默认 `•`）、
+`provider / base_url / model / api_key / show_key / timeout / context_tokens /
+plan_tokens / thinking_choice / world_knowledge / enabled / test_button / collect /
+_on_provider / save / close`。
+
+回归：`ai/tests/test_ui_theme.py`（令牌完整性、系统深浅色五种情形、缩放、对比度、
+监听器生命周期）、`test_ui_widgets.py`（进度条 0–100 与夹紧、按钮状态、卡片/转圈
+销毁后不留回调、FieldCard 里仍是真 ttk.Entry）、`test_chat_message_render.py`
+（Markdown 子集 + 「⧉ 复制」复制的是原文）、`verify_chat_window_ui.py`（真机：卡片
+都在、消息块底色跟着主题走、切深色后重刷、复制粘贴对得上、进度小窗 value 仍是
+0–100）。截图存档（不入库）：`ai/runtime/ui_snapshots/`。

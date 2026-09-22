@@ -24,7 +24,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from . import qwen
+from . import qwen, ui_theme, ui_widgets
 from .config import AppConfig, load_config, normalize_thinking_level
 
 
@@ -255,124 +255,169 @@ class ApiSettingsDialog:
         except tk.TclError:
             pass
 
-        frame = ttk.Frame(self.window, padding=14)
-        frame.pack(fill="both", expand=True)
+        # 主题：TW-Elements 令牌 + 跟随系统深浅色（开窗时定一次，窗口是短命的）。
+        self.theme = ui_theme.Theme(self.window)
+        theme = self.theme
+        self.window.configure(background=theme.color("canvas"))
+        style = ttk.Style(self.window)
+        if "clam" in style.theme_names() and style.theme_use() != "clam":
+            style.theme_use("clam")
+        ui_widgets.configure_ttk(style, theme)
+
+        frame = tk.Frame(self.window, background=theme.color("canvas"))
+        frame.pack(fill="both", expand=True, padx=14, pady=14)
+        frame.columnconfigure(0, weight=1)
+
+        def field_label(parent, text: str, *, muted: bool = False, role: str = "body"):
+            return tk.Label(
+                parent,
+                text=text,
+                anchor="w",
+                background=theme.color("surface"),
+                foreground=theme.color("textMuted" if muted else "text"),
+                font=theme.font("small" if muted else role),
+            )
+
+        def field_entry(parent, variable, *, width: int = 44, show: str | None = None):
+            """圆角外壳 + **真正的 ttk.Entry**（key_entry 这些属性名不能换掉）。"""
+
+            shell = ui_widgets.FieldCard(parent, theme, background="surface")
+            entry = ttk.Entry(shell, textvariable=variable, width=width, font=theme.font("body"))
+            if show is not None:
+                entry.configure(show=show)
+            shell.attach(entry)
+            return shell, entry
+
+        # ---------------------------------------------------------- 连接
+        connect = ui_widgets.Card(frame, theme, padding=(14, 12, 14, 12))
+        connect.grid(row=0, column=0, sticky="ew")
+        connect_body = connect.body
+        connect_body.columnconfigure(1, weight=1)
 
         self.enabled = tk.BooleanVar(value=bool(self.values["enabled"]))
         ttk.Checkbutton(
-            frame,
+            connect_body,
             text="使用云端 API 模型（勾上后不再用本机 llama-server）",
             variable=self.enabled,
         ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
-        ttk.Label(frame, text="服务商").grid(row=1, column=0, sticky="w", pady=3)
+        field_label(connect_body, "服务商").grid(row=1, column=0, sticky="w", pady=4)
         self.provider = tk.StringVar(value=self._provider_for(self.values))
         self.provider_box = ttk.Combobox(
-            frame,
+            connect_body,
             textvariable=self.provider,
             values=[item["label"] for item in PROVIDERS],
-            width=34,
+            width=32,
+            font=theme.font("body"),
         )
-        self.provider_box.grid(row=1, column=1, columnspan=2, sticky="ew", pady=3)
+        self.provider_box.grid(row=1, column=1, columnspan=2, sticky="ew", pady=4)
         self.provider_box.bind("<<ComboboxSelected>>", self._on_provider)
 
-        ttk.Label(frame, text="API 地址").grid(row=2, column=0, sticky="w", pady=3)
+        field_label(connect_body, "API 地址").grid(row=2, column=0, sticky="w", pady=4)
         self.base_url = tk.StringVar(value=self.values["base_url"])
-        ttk.Entry(frame, textvariable=self.base_url, width=46).grid(
-            row=2, column=1, columnspan=2, sticky="ew", pady=3
-        )
+        shell, _entry = field_entry(connect_body, self.base_url, width=46)
+        shell.grid(row=2, column=1, columnspan=2, sticky="ew", pady=4)
 
-        ttk.Label(frame, text="模型名").grid(row=3, column=0, sticky="w", pady=3)
+        field_label(connect_body, "模型名").grid(row=3, column=0, sticky="w", pady=4)
         self.model = tk.StringVar(value=self.values["model"])
-        ttk.Entry(frame, textvariable=self.model, width=46).grid(
-            row=3, column=1, columnspan=2, sticky="ew", pady=3
-        )
+        shell, _entry = field_entry(connect_body, self.model, width=46)
+        shell.grid(row=3, column=1, columnspan=2, sticky="ew", pady=4)
 
-        ttk.Label(frame, text="API Key").grid(row=4, column=0, sticky="w", pady=3)
+        field_label(connect_body, "API Key").grid(row=4, column=0, sticky="w", pady=4)
         self.api_key = tk.StringVar(value=self.values["api_key"])
-        self.key_entry = ttk.Entry(
-            frame, textvariable=self.api_key, width=34, show="•"
+        shell, self.key_entry = field_entry(
+            connect_body, self.api_key, width=32, show="•"
         )
-        self.key_entry.grid(row=4, column=1, sticky="ew", pady=3)
+        shell.grid(row=4, column=1, sticky="ew", pady=4)
         self.show_key = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            frame, text="显示", variable=self.show_key, command=self._toggle_key
-        ).grid(row=4, column=2, sticky="w", padx=(6, 0))
+            connect_body, text="显示", variable=self.show_key, command=self._toggle_key
+        ).grid(row=4, column=2, sticky="w", padx=(8, 0))
 
-        ttk.Label(frame, text="超时(秒)").grid(row=5, column=0, sticky="w", pady=3)
+        field_label(connect_body, "超时(秒)").grid(row=5, column=0, sticky="w", pady=4)
         self.timeout = tk.StringVar(value=str(self.values["request_timeout_sec"]))
-        ttk.Entry(frame, textvariable=self.timeout, width=8).grid(
-            row=5, column=1, sticky="w", pady=3
-        )
-        ttk.Label(frame, text="上下文 token").grid(row=6, column=0, sticky="w", pady=3)
+        shell, _entry = field_entry(connect_body, self.timeout, width=8)
+        shell.grid(row=5, column=1, sticky="w", pady=4)
+
+        # ---------------------------------------------------------- 生成
+        generate = ui_widgets.Card(frame, theme, padding=(14, 12, 14, 12))
+        generate.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        generate_body = generate.body
+        generate_body.columnconfigure(1, weight=1)
+
+        field_label(generate_body, "上下文 token").grid(row=0, column=0, sticky="w", pady=4)
         self.context_tokens = tk.StringVar(value=str(self.values["max_context_tokens"]))
-        ttk.Entry(frame, textvariable=self.context_tokens, width=8).grid(
-            row=6, column=1, sticky="w", pady=3
-        )
-        ttk.Label(frame, text="最大回复 token").grid(row=7, column=0, sticky="w", pady=3)
+        shell, _entry = field_entry(generate_body, self.context_tokens, width=10)
+        shell.grid(row=0, column=1, sticky="w", pady=4)
+
+        field_label(generate_body, "最大回复 token").grid(row=1, column=0, sticky="w", pady=4)
         self.plan_tokens = tk.StringVar(value=str(self.values["plan_max_tokens"]))
-        ttk.Entry(frame, textvariable=self.plan_tokens, width=8).grid(
-            row=7, column=1, sticky="w", pady=3
-        )
+        shell, _entry = field_entry(generate_body, self.plan_tokens, width=10)
+        shell.grid(row=1, column=1, sticky="w", pady=4)
 
         # 思考档位：云端翻成 reasoning_effort，本地翻成 enable_thinking
         # （见 qwen.thinking_request_fields）。默认「中」——云端大模型够聪明，
         # 档位太低会把「先想再规划」这一步省掉。
-        ttk.Label(frame, text="思考档位").grid(row=8, column=0, sticky="w", pady=3)
+        field_label(generate_body, "思考档位").grid(row=2, column=0, sticky="w", pady=4)
         self.thinking_choice = tk.StringVar(
             value=thinking_choice_label(self.values["thinking_level"])
         )
         ttk.Combobox(
-            frame,
+            generate_body,
             textvariable=self.thinking_choice,
             values=[label for label, _ in THINKING_CHOICES],
             state="readonly",
             width=18,
-        ).grid(row=8, column=1, sticky="w", pady=3)
-        ttk.Label(
-            frame,
-            text="越高越慢，但测量规划更稳",
-            foreground="#6B7280",
-        ).grid(row=8, column=2, sticky="w", padx=(6, 0))
+            font=theme.font("body"),
+        ).grid(row=2, column=1, sticky="w", pady=4)
+        field_label(generate_body, "越高越慢，但测量规划更稳", muted=True).grid(
+            row=2, column=2, sticky="w", padx=(8, 0)
+        )
 
         # 允许云端模型发挥自己的语言学知识（本地小模型永远不让，免得编数字）。
         self.world_knowledge = tk.BooleanVar(
             value=bool(self.values["use_world_knowledge"])
         )
         ttk.Checkbutton(
-            frame,
+            generate_body,
             text="允许它用自己的语言学知识解释、举例（测量数字仍只来自工具结果）",
             variable=self.world_knowledge,
-        ).grid(row=9, column=0, columnspan=3, sticky="w", pady=(2, 0))
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
-        hint = ttk.Label(
+        ui_widgets.Snackbar(
             frame,
+            theme,
             text=(
                 "填完点「测试连接」确认；key 只存在 ai_config.json（已 gitignore），"
                 "也可以用环境变量 PRAAT_AI_API_KEY。"
             ),
-            foreground="#6B7280",
-            wraplength=420,
-            justify="left",
-        )
-        hint.grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 2))
+            kind="neutral",
+            background="canvas",
+            wraplength=520,
+        ).grid(row=2, column=0, sticky="ew", pady=(10, 0))
 
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        buttons = tk.Frame(frame, background=theme.color("canvas"))
+        buttons.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         buttons.columnconfigure(0, weight=1)
         self.status = tk.StringVar(value=self._verified_text())
-        ttk.Label(buttons, textvariable=self.status, foreground="#374151").grid(
-            row=0, column=0, sticky="w"
+        self.status_snack = ui_widgets.Snackbar(
+            buttons,
+            theme,
+            textvariable=self.status,
+            kind="neutral",
+            background="canvas",
+            wraplength=300,
         )
-        self.test_button = ttk.Button(
-            buttons, text="测试连接", width=10, command=self.test_connection
+        self.status_snack.grid(row=0, column=0, sticky="ew")
+        self.test_button = ui_widgets.RoundedButton(
+            buttons, theme, "测试连接", self.test_connection, kind="outlined"
         )
-        self.test_button.grid(row=0, column=1, padx=(6, 0))
-        ttk.Button(buttons, text="保存", width=8, command=self.save).grid(
-            row=0, column=2, padx=(6, 0)
+        self.test_button.grid(row=0, column=1, padx=(8, 0))
+        ui_widgets.RoundedButton(buttons, theme, "保存", self.save, kind="filled").grid(
+            row=0, column=2, padx=(8, 0)
         )
-        ttk.Button(buttons, text="取消", width=8, command=self.close).grid(
-            row=0, column=3, padx=(6, 0)
+        ui_widgets.RoundedButton(buttons, theme, "取消", self.close, kind="text").grid(
+            row=0, column=3, padx=(8, 0)
         )
 
     # ---------------------------------------------------------------- 交互
@@ -433,12 +478,15 @@ class ApiSettingsDialog:
         values, errors = normalize_settings(self.collect())
         if errors:
             self.status.set("；".join(errors))
+            self.status_snack.set_kind("danger")
             return
         if not values["base_url"] or not values["model"]:
             self.status.set("先填 API 地址和模型名。")
+            self.status_snack.set_kind("warning")
             return
         self.test_button.configure(state="disabled")
         self.status.set("正在测试连接…")
+        self.status_snack.set_kind("primary")
 
         def worker() -> None:
             ok, detail = qwen.probe_api(
@@ -451,6 +499,7 @@ class ApiSettingsDialog:
             def finish() -> None:
                 self.test_button.configure(state="normal")
                 self.status.set(detail)
+                self.status_snack.set_kind("success" if ok else "danger")
                 self.verified = bool(ok)
                 if ok:
                     self.enabled.set(True)

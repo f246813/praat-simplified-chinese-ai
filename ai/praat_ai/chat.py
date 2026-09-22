@@ -42,6 +42,8 @@ from . import (
     qwen,
     sendpraat,
     tools,
+    ui_theme,
+    ui_widgets,
 )
 from .config import api_is_active, default_config_path as config_path, load_config
 from .presets import PresetError, active_preset, list_presets
@@ -1339,13 +1341,65 @@ def preset_label_text(preset: dict) -> str:
     return " · ".join(item for item in parts if item)
 
 
+#: 「最小 Markdown」子集：只认标题、行首项目符号、**粗体**、`行内代码`。
+_HEADING_PREFIXES = ("### ", "## ", "# ")
+_BULLET_PREFIXES = ("- ", "* ", "• ", "· ")
+_INLINE_PATTERN = re.compile(r"\*\*(.+?)\*\*|`([^`]+)`")
+
+
+def _inline_segments(line: str, base: str) -> list[tuple[str, Any]]:
+    """把一行的行内标记切成 ``(片段, tag)``；``base`` 是这一行所属块/行内 tag。"""
+
+    segments: list[tuple[str, Any]] = []
+    position = 0
+    for match in _INLINE_PATTERN.finditer(line):
+        if match.start() > position:
+            segments.append((line[position : match.start()], base))
+        if match.group(1) is not None:
+            segments.append((match.group(1), (base, "bold") if base else "bold"))
+        else:
+            segments.append((match.group(2), (base, "code") if base else "code"))
+        position = match.end()
+    if position < len(line):
+        segments.append((line[position:], base))
+    return segments or [("", base)]
+
+
+def render_message(text: str) -> list[tuple[str, Any]]:
+    """把模型回答切成 ``(片段, tag)``，tag 可以直接喂给 ``Text.insert``。
+
+    只认这几样：``#``/``##``/``###`` 标题、行首 ``-``/``*``/``•`` 项目符号、
+    ``**粗体**``、`` `代码` ``。用户自己敲的字不渲染（原样显示），见 guide.md §8.16。
+    """
+
+    segments: list[tuple[str, Any]] = []
+    lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for index, line in enumerate(lines):
+        if index:
+            segments.append(("\n", ""))
+        stripped = line.strip()
+        base = ""
+        if any(stripped.startswith(prefix) for prefix in _HEADING_PREFIXES):
+            body = stripped.lstrip("#").strip()
+            base = "heading"
+        elif any(stripped.startswith(prefix) for prefix in _BULLET_PREFIXES):
+            body = "• " + stripped[2:].strip()
+            base = "bullet"
+        else:
+            body = line.rstrip()
+        segments.extend(_inline_segments(body, base))
+    return segments
+
+
 class ChatWindow:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("Praat AI 对话")
         self.root.geometry("900x680")
         self.root.minsize(680, 480)
-        self.root.configure(background="#F3F4F6")
+        #: 主题：TW-Elements 的设计令牌 + 跟随系统深浅色（见 ai/praat_ai/ui_theme.py）。
+        self.theme = ui_theme.Theme(self.root)
+        self.root.configure(background=self.theme.color("canvas"))
         self.config = load_config()
         self.client = qwen.QwenClient(self.config.qwen)
         #: 配置文件（ai_config.json）的修改时间：别的窗口改了它我们就重新读。
@@ -1360,93 +1414,121 @@ class ChatWindow:
         self.context_ready_pids: frozenset[int] = frozenset()
         #: 加载/停止模型时的迷你进度小窗（懒创建，用完关掉）。
         self.progress_window = None
+        #: 「⧉ 复制」那些文本 tag → 对应的消息原文（点一下复制整条）。
+        self._copy_registry: dict[str, str] = {}
 
-        style = ttk.Style(self.root)
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
-        style.configure("Chat.TFrame", background="#F3F4F6")
-        style.configure("Composer.TFrame", background="#FFFFFF")
-        style.configure("Hint.TLabel", background="#F3F4F6", foreground="#6B7280")
-
-        frame = ttk.Frame(self.root, padding=16, style="Chat.TFrame")
-        frame.pack(fill="both", expand=True)
+        frame = tk.Frame(self.root, background=self.theme.color("canvas"))
+        frame.pack(fill="both", expand=True, padx=14, pady=14)
         frame.rowconfigure(3, weight=1)
         frame.columnconfigure(0, weight=1)
+        self.frame = frame
 
         self.presets: list[dict] = list_presets(self.config)
         self.preset_ids: dict[str, str] = {}
+        # 「Praat AI  |  ……」这一条同时喂给状态栏和顶部那颗状态胶囊：标题已经写在
+        # AppBar 上了，所以胶囊里只显示竖线右边那半截。
         self.status = tk.StringVar(value="Praat AI  |  " + model_status_text(self.config))
-        ttk.Label(
-            frame,
-            textvariable=self.status,
-            font=("Microsoft YaHei UI", 10, "bold"),
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self.status_text = tk.StringVar(value=model_status_text(self.config))
+        self.app_bar = ui_widgets.Card(
+            frame, self.theme, padding=(14, 10, 14, 10), radius=12
+        )
+        self.app_bar.grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            self.app_bar.body,
+            text="Praat AI",
+            background=self.theme.color("surface"),
+            foreground=self.theme.color("text"),
+            font=self.theme.font("title"),
+        ).pack(side="left")
+        self.status_chip = ui_widgets.Chip(
+            self.app_bar.body,
+            self.theme,
+            textvariable=self.status_text,
+            kind="neutral",
+            background="surface",
+        )
+        self.status_chip.pack(side="right")
 
-        preset_row = ttk.Frame(frame, style="Chat.TFrame")
-        preset_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        preset_row = tk.Frame(frame, background=self.theme.color("canvas"))
+        preset_row.grid(row=1, column=0, sticky="ew", pady=(10, 8))
         preset_row.columnconfigure(1, weight=1)
-        ttk.Label(
+        self.preset_row = preset_row
+        tk.Label(
             preset_row,
             text="模型预设",
-            style="Hint.TLabel",
-            font=("Microsoft YaHei UI", 9),
-        ).grid(row=0, column=0, sticky="w", padx=(0, 6))
+            background=self.theme.color("canvas"),
+            foreground=self.theme.color("textMuted"),
+            font=self.theme.font("small"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8))
         self.preset_choice = tk.StringVar(value="")
         self.preset_box = ttk.Combobox(
             preset_row,
             textvariable=self.preset_choice,
             values=[],
             state="readonly",
-            width=56,
+            width=48,
+            font=self.theme.font("body"),
         )
         self.preset_box.grid(row=0, column=1, sticky="ew")
-        self.preset_button = ttk.Button(
+        self.preset_button = ui_widgets.RoundedButton(
             preset_row,
-            text="应用预设",
-            width=10,
-            command=self.apply_selected_preset,
+            self.theme,
+            "应用预设",
+            self.apply_selected_preset,
+            kind="filled",
         )
         self.preset_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
         # API 配置：填 key 接云端大模型（更大的模型当后端），不用本地 llama-server。
-        self.api_button = ttk.Button(
+        self.api_button = ui_widgets.RoundedButton(
             preset_row,
-            text="API 配置…",
-            width=12,
-            command=self.open_api_settings,
+            self.theme,
+            "API 配置…",
+            self.open_api_settings,
+            kind="outlined",
         )
         self.api_button.grid(row=0, column=3, sticky="e", padx=(6, 0))
         self.preset_hint = tk.StringVar(value="")
-        ttk.Label(
+        self.preset_snack = ui_widgets.Snackbar(
             preset_row,
+            self.theme,
             textvariable=self.preset_hint,
-            style="Hint.TLabel",
-            font=("Microsoft YaHei UI", 8),
-        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+            kind="neutral",
+            background="canvas",
+            wraplength=760,
+        )
+        self.preset_snack.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         self.refresh_preset_widgets()
 
         self.context_label = tk.StringVar(value=selected_object_label())
-        ttk.Label(
+        self.context_line = tk.Label(
             frame,
             textvariable=self.context_label,
-            style="Hint.TLabel",
-            font=("Microsoft YaHei UI", 9),
-        ).grid(row=2, column=0, sticky="ew", pady=(0, 10))
+            anchor="w",
+            background=self.theme.color("canvas"),
+            foreground=self.theme.color("textMuted"),
+            font=self.theme.font("small"),
+        )
+        self.context_line.grid(row=2, column=0, sticky="ew", pady=(0, 10))
 
-        transcript_frame = ttk.Frame(frame)
+        transcript_frame = tk.Frame(frame, background=self.theme.color("canvas"))
         transcript_frame.grid(row=3, column=0, sticky="nsew")
         transcript_frame.rowconfigure(0, weight=1)
         transcript_frame.columnconfigure(0, weight=1)
+        self.transcript_frame = transcript_frame
         self.transcript = tk.Text(
             transcript_frame,
             wrap="word",
             state="disabled",
-            font=("Microsoft YaHei UI", 10),
-            background="#FFFFFF",
-            foreground="#111827",
-            relief="solid",
-            borderwidth=1,
-            padx=14,
-            pady=12,
+            font=self.theme.font("body"),
+            background=self.theme.color("canvas"),
+            foreground=self.theme.color("text"),
+            insertbackground=self.theme.color("text"),
+            relief="flat",
+            borderwidth=0,
+            padx=2,
+            pady=2,
+            spacing1=0,
+            spacing3=0,
         )
         self.transcript.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(
@@ -1456,87 +1538,67 @@ class ChatWindow:
         )
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.transcript.configure(yscrollcommand=scrollbar.set)
-        self.transcript.tag_configure(
-            "user_label",
-            foreground="#2563EB",
-            font=("Microsoft YaHei UI", 10, "bold"),
-            spacing1=8,
-        )
-        self.transcript.tag_configure(
-            "assistant_label",
-            foreground="#047857",
-            font=("Microsoft YaHei UI", 10, "bold"),
-            spacing1=8,
-        )
-        self.transcript.tag_configure("body", lmargin1=18, lmargin2=18, spacing3=8)
-        self.transcript.tag_configure(
-            "result",
-            lmargin1=18,
-            lmargin2=18,
-            foreground="#1F2937",
-            background="#ECFDF5",
-            font=("Consolas", 10),
-            spacing3=6,
-        )
-        self.transcript.tag_configure(
-            "failure",
-            lmargin1=18,
-            lmargin2=18,
-            foreground="#991B1B",
-            background="#FEF2F2",
-            font=("Consolas", 10),
-            spacing3=6,
-        )
-        self.transcript.tag_configure(
-            "hint",
-            lmargin1=18,
-            lmargin2=18,
-            foreground="#6B7280",
-            font=("Microsoft YaHei UI", 9),
-            spacing3=8,
-        )
+        self._configure_transcript_tags(self.theme)
 
-        composer = ttk.Frame(frame, padding=10, style="Composer.TFrame")
+        composer = ui_widgets.Card(frame, self.theme, padding=(12, 10, 12, 10), radius=12)
         composer.grid(row=4, column=0, sticky="ew", pady=(12, 0))
-        composer.columnconfigure(0, weight=1)
+        composer_body = composer.body
+        composer_body.columnconfigure(0, weight=1)
+        self.composer = composer
+        self.entry_field = ui_widgets.FieldCard(
+            composer_body, self.theme, background="surface", radius=8
+        )
+        self.entry_field.grid(row=0, column=0, columnspan=3, sticky="ew")
         self.entry = tk.Text(
-            composer,
+            self.entry_field,
             height=3,
             wrap="word",
-            font=("Microsoft YaHei UI", 10),
-            relief="solid",
-            borderwidth=1,
-            padx=10,
-            pady=8,
+            font=self.theme.font("body"),
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            padx=8,
+            pady=6,
+            background=self.theme.color("surface"),
+            foreground=self.theme.color("text"),
+            insertbackground=self.theme.color("text"),
         )
-        self.entry.grid(row=0, column=0, sticky="ew")
+        self.entry_field.attach(self.entry)
         self.entry.bind("<Return>", self.on_return)
         self.entry.bind("<KP_Enter>", self.on_return)
         self.entry.bind("<Shift-Return>", self.on_shift_return)
-        self.send_button = ttk.Button(
-            composer,
-            text="发送",
-            command=self.submit,
-            width=10,
+        self.send_button = ui_widgets.RoundedButton(
+            composer_body,
+            self.theme,
+            "发送",
+            self.submit,
+            kind="filled",
         )
-        self.send_button.grid(row=0, column=1, sticky="ns", padx=(10, 0))
+        self.send_button.grid(row=1, column=1, sticky="e", padx=(10, 0), pady=(10, 0))
         # C7：等待可以取消。Praat 卡住、社区脚本跑太久时不用干等 25 秒。
-        self.stop_button = ttk.Button(
-            composer,
-            text="停止",
-            command=self.cancel_turn,
-            width=8,
-            state="disabled",
+        self.stop_button = ui_widgets.RoundedButton(
+            composer_body,
+            self.theme,
+            "停止",
+            self.cancel_turn,
+            kind="outlined",
         )
-        self.stop_button.grid(row=0, column=2, sticky="ns", padx=(6, 0))
-        ttk.Label(
-            composer,
+        self.stop_button.configure(state="disabled")
+        self.stop_button.grid(row=1, column=2, sticky="e", padx=(8, 0), pady=(10, 0))
+        self.composer_hint = tk.Label(
+            composer_body,
             text=(
                 "Enter 发送，Shift+Enter 换行；脚本在正在运行的 Praat 里执行，结果会回到这里；"
                 "「停止」= 不再等这一步（Praat 里已经在跑的脚本不受影响）"
             ),
-            foreground="#6B7280",
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+            anchor="w",
+            justify="left",
+            wraplength=520,
+            background=self.theme.color("surface"),
+            foreground=self.theme.color("textMuted"),
+            font=self.theme.font("small"),
+        )
+        self.composer_hint.grid(row=1, column=0, sticky="w", pady=(10, 0))
 
         self.append("assistant", "请直接用自然语言描述要执行的 Praat 操作。")
         self.append_hint(
@@ -1561,8 +1623,175 @@ class ChatWindow:
                 on_close=self._on_praat_gone,
             )
             self.praat_watcher.start()
+        # 主题：窗口级的东西（ttk style、文本 tag、底色）也注册进去，系统深浅色一变
+        # 就整体重刷。只跟随系统，不提供手动开关（见 guide.md §8.16）。
+        self.theme.add_listener(self.apply_theme)
+        self.theme_watcher = ui_theme.ThemeWatcher(self.root, self.on_system_theme_changed)
+        self.theme_watcher.start()
 
     # ------------------------------------------------------------ 模型预设
+
+    # ---------------------------------------------------------------- 主题
+
+    def set_status(self, text: str) -> None:
+        """状态栏文案。``self.status`` 保持老格式（回归脚本会读），胶囊里只显示后半截。"""
+
+        self.status.set(text)
+        head, _, tail = text.partition("|")
+        self.status_text.set((tail.strip() if tail else head.strip()) or head.strip())
+        try:
+            self.status_chip.set_kind(self._status_kind())
+        except Exception:   # noqa: BLE001 - 窗口还没建好时忽略
+            pass
+
+    def _status_kind(self) -> str:
+        """状态胶囊的语义色：正常=success，忙碌/警告=warning，服务不通=danger。"""
+
+        text = self.status_text.get()
+        if "失败" in text or "未响应" in text:
+            return "danger"
+        if "正在" in text or "停止" in text or "stopped" in text:
+            return "warning"
+        if "API 模式" in text:
+            return "primary"
+        return "success"
+
+    def _hint_kind(self) -> str:
+        """预设提示条的语义色：API 模式/切换中各有各的颜色。"""
+
+        text = self.preset_hint.get()
+        if "失败" in text:
+            return "danger"
+        if "API 模式" in text:
+            return "primary"
+        if "正在" in text:
+            return "warning"
+        return "neutral"
+
+    def on_system_theme_changed(self, dark: bool) -> None:
+        """系统换了深浅色（每 5 秒看一次）。"""
+
+        self.theme.set_dark(dark)
+
+    def apply_theme(self, theme=None) -> None:
+        """把当前主题铺到窗口级的东西上（ttk style、文本 tag、底色、胶囊颜色）。"""
+
+        theme = theme or self.theme
+        canvas_color = theme.color("canvas")
+        surface = theme.color("surface")
+        self.root.configure(background=canvas_color)
+        style = ttk.Style(self.root)
+        # 只在确实不是 clam 时切换：每次刷新都切一遍会广播 <<ThemeChanged>>，
+        # 既费时间，测试里还会打出 Tcl 的吓人噪声。
+        if "clam" in style.theme_names() and style.theme_use() != "clam":
+            style.theme_use("clam")
+        ui_widgets.configure_ttk(style, theme)
+        for widget in (self.frame, self.preset_row, self.transcript_frame):
+            widget.configure(background=canvas_color)
+        self.context_line.configure(background=canvas_color, foreground=theme.color("textMuted"))
+        self.composer_hint.configure(background=surface, foreground=theme.color("textMuted"))
+        self.entry.configure(
+            background=surface,
+            foreground=theme.color("text"),
+            insertbackground=theme.color("text"),
+            font=theme.font("body"),
+        )
+        self.preset_box.configure(font=theme.font("body"))
+        self._configure_transcript_tags(theme)
+        try:
+            self.status_chip.set_kind(self._status_kind())
+            self.preset_snack.set_kind(self._hint_kind())
+        except Exception:   # noqa: BLE001 - 刚建窗口时这些还没齐
+            pass
+
+    def _configure_transcript_tags(self, theme) -> None:
+        """消息块的样式（TW-Elements 的 card / notification 形态）。
+
+        顺序有讲究：先建"块"tag（底色 + 缩进），再建行内 tag（加粗/代码）——Tk 里
+        后建的 tag 优先级更高，行内 tag 才能盖住块的字号与底色。
+        """
+
+        transcript = self.transcript
+        pad = theme.pad(12)
+        transcript.configure(
+            background=theme.color("canvas"),
+            foreground=theme.color("text"),
+            insertbackground=theme.color("text"),
+            font=theme.font("body"),
+        )
+        blocks = {
+            "user": (theme.color("primarySoft"), theme.color("text"), theme.color("primary")),
+            "assistant": (theme.color("surface"), theme.color("text"), theme.color("primary")),
+            # 结果块用 shadowRing 而不是 codeBg：codeBg 太接近画布底色，块看不出来。
+            "result": (
+                theme.color("shadowRing"),
+                theme.color("codeText"),
+                theme.color("successText"),
+            ),
+            # 失败块的正文用普通文字色（danger 压 dangerSoft 只有 3.4:1），
+            # danger 只留给加粗的「▍ 失败」那一行。
+            "failure": (
+                theme.color("dangerSoft"),
+                theme.color("text"),
+                theme.color("danger"),
+            ),
+        }
+        for name, (background, foreground, accent) in blocks.items():
+            transcript.tag_configure(
+                f"{name}_block",
+                background=background,
+                foreground=foreground,
+                font=theme.font("data" if name in {"result", "failure"} else "body"),
+                lmargin1=pad,
+                lmargin2=pad,
+                rmargin=theme.pad(10),
+                justify="right" if name == "user" else "left",
+                spacing1=theme.pad(8),
+                spacing3=theme.pad(2),
+                borderwidth=0,
+            )
+            transcript.tag_configure(
+                f"{name}_header",
+                background=background,
+                foreground=accent,
+                font=theme.font("small_bold"),
+                lmargin1=pad,
+                lmargin2=pad,
+                rmargin=theme.pad(10),
+                justify="right" if name == "user" else "left",
+                spacing1=theme.pad(8),
+            )
+        transcript.tag_configure(
+            "hint",
+            foreground=theme.color("textMuted"),
+            lmargin1=pad,
+            lmargin2=pad,
+            spacing1=theme.pad(4),
+            spacing3=theme.pad(6),
+            font=theme.font("small"),
+        )
+        # 行内 tag：只改字号/底色，不能碰 lmargin（会把块的缩进顶掉）。
+        transcript.tag_configure("heading", font=theme.font("heading"))
+        transcript.tag_configure(
+            "bullet", lmargin1=pad + theme.pad(8), lmargin2=pad + theme.pad(18)
+        )
+        transcript.tag_configure("bold", font=theme.font("body_bold"))
+        transcript.tag_configure(
+            "code",
+            font=theme.font("data"),
+            background=theme.color("chipBg"),
+            foreground=theme.color("codeText"),
+        )
+        # 动态的「⧉ 复制」tag（每条消息一个）也要跟着换色。
+        for tag in getattr(self, "_copy_registry", {}):
+            transcript.tag_configure(
+                tag,
+                foreground=theme.color("primary"),
+                font=theme.font("small_bold"),
+                spacing1=theme.pad(2),
+                spacing3=theme.pad(6),
+                lmargin1=theme.pad(12),
+            )
 
     def preset_label_for(self, preset: dict) -> str:
         # 标签里不要写「当前」：切换后标签会变，下拉框里的旧值就对不上了。
@@ -1630,6 +1859,7 @@ class ChatWindow:
         else:
             self.preset_choice.set("")
         self.preset_hint.set(self.preset_hint_text())
+        self.preset_snack.set_kind(self._hint_kind())
 
     def apply_selected_preset(self, _event: object = None) -> None:
         if self.busy:
@@ -1649,7 +1879,7 @@ class ChatWindow:
         self.busy = True
         self.send_button.configure(state="disabled")
         self.preset_button.configure(state="disabled")
-        self.status.set("Praat AI  |  正在切换模型预设…")
+        self.set_status("Praat AI  |  正在切换模型预设…")
         threading.Thread(
             target=self.apply_preset_worker,
             args=(preset_id,),
@@ -1742,22 +1972,115 @@ class ChatWindow:
             self.messages.put(("progress-done", ""))
 
     def append(self, role: str, text: str) -> None:
-        label = "你" if role == "user" else "Praat AI"
-        label_tag = "user_label" if role == "user" else "assistant_label"
-        self.transcript.configure(state="normal")
-        self.transcript.insert("end", f"{label}\n", label_tag)
-        self.transcript.insert("end", f"{text}\n", "body")
-        self.transcript.configure(state="disabled")
-        self.transcript.see("end")
+        self._insert_message(role, text)
 
     def append_lines(self, tag: str, text: str) -> None:
-        self.transcript.configure(state="normal")
-        self.transcript.insert("end", f"{text}\n", tag)
-        self.transcript.configure(state="disabled")
-        self.transcript.see("end")
+        self._insert_message(tag, text)
 
     def append_hint(self, text: str) -> None:
-        self.append_lines("hint", text)
+        self._insert_message("hint", text)
+
+    # ---------------------------------------------------------- 消息块渲染
+
+    #: 角色 → (tag 前缀, 头部文字)。头部的 ▍ 是块左侧那条强调线。
+    _MESSAGE_ROLES: dict[str, tuple[str, str]] = {
+        "user": ("user", "你"),
+        "assistant": ("assistant", "Praat AI"),
+        "result": ("result", "结果"),
+        "failure": ("failure", "失败"),
+    }
+
+    #: 哪些消息值得一键复制（用户自己敲的不用）。
+    _COPYABLE_ROLES = {"assistant", "result"}
+
+    def _insert_message(self, role: str, text: str) -> None:
+        """插一条消息块（底色 + ▍ 强调线 + 间距），回答/结果顺带渲染最小 Markdown。"""
+
+        transcript = self.transcript
+        body = str(text or "")
+        transcript.configure(state="normal")
+        if role == "hint":
+            transcript.insert("end", f"ⓘ {body}\n", "hint")
+            transcript.configure(state="disabled")
+            transcript.see("end")
+            return
+        prefix, label = self._MESSAGE_ROLES.get(role, self._MESSAGE_ROLES["assistant"])
+        transcript.insert("end", f"▍ {label}\n", (f"{prefix}_block", f"{prefix}_header"))
+        markdown = role in {"assistant", "result"}
+        for chunk, tag in (render_message(body) if markdown else [(body, "")]):
+            if isinstance(tag, str):
+                tags: tuple[str, ...] = ((f"{prefix}_block", tag) if tag else (f"{prefix}_block",))
+            else:
+                tags = (f"{prefix}_block", *tag)
+            transcript.insert("end", chunk, tags)
+        if not body.endswith("\n"):
+            transcript.insert("end", "\n", f"{prefix}_block")
+        if prefix in self._COPYABLE_ROLES and body.strip():
+            self._insert_copy_link(body)
+        transcript.configure(state="disabled")
+        transcript.see("end")
+
+    def _insert_copy_link(self, raw: str) -> None:
+        """在消息块末尾放一个「⧉ 复制」文本按钮。
+
+        早先用 ``window_create`` 内嵌一个自绘按钮，实测会压住下一块——Tk 不会为内嵌
+        窗口抬高行高（截图里两个「复制」叠在一起）。改成文本 tag + 点击命中，滚动和
+        重绘都不会出问题。
+        """
+
+        tag = f"copy_{len(self._copy_registry) + 1}"
+        self._copy_registry[tag] = raw
+        self.transcript.tag_configure(
+            tag,
+            foreground=self.theme.color("primary"),
+            font=self.theme.font("small_bold"),
+            spacing1=self.theme.pad(2),
+            spacing3=self.theme.pad(6),
+            lmargin1=self.theme.pad(12),
+        )
+        self.transcript.tag_bind(tag, "<Button-1>", self._on_copy_click)
+        self.transcript.tag_bind(tag, "<Enter>", lambda _event: self._set_cursor("hand2"))
+        self.transcript.tag_bind(tag, "<Leave>", lambda _event: self._set_cursor("xterm"))
+        self.transcript.insert("end", "⧉ 复制\n", tag)
+
+    def _set_cursor(self, cursor: str) -> None:
+        try:
+            self.transcript.configure(cursor=cursor)
+        except tk.TclError:
+            pass
+
+    def _on_copy_click(self, event) -> None:
+        try:
+            index = self.transcript.index(f"@{event.x},{event.y}")
+        except tk.TclError:
+            return
+        for name in self.transcript.tag_names(index):
+            if name in self._copy_registry:
+                self.copy_message(self._copy_registry[name])
+                return
+
+    def copy_message(self, text: str) -> None:
+        """把整条消息写进剪贴板（消息区本身仍然可以选中复制）。"""
+
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+        except tk.TclError:
+            return
+        if not hasattr(self, "status_text"):
+            return
+        try:
+            self.status_text.set("已复制到剪贴板")
+            self.status_chip.set_kind("success")
+            self.root.after(1500, self._restore_status_text)
+        except tk.TclError:
+            pass
+
+    def _restore_status_text(self) -> None:
+        try:
+            self.set_status(self.status.get())
+        except tk.TclError:
+            pass
 
     def on_return(self, _event: tk.Event) -> str:
         self.submit()
@@ -1779,7 +2102,7 @@ class ChatWindow:
         self.send_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.preset_button.configure(state="disabled")
-        self.status.set("Praat AI  |  正在处理请求…")
+        self.set_status("Praat AI  |  正在处理请求…")
         self.append("user", text)
         threading.Thread(
             target=self.process_message,
@@ -1935,7 +2258,7 @@ class ChatWindow:
                     self.preset_button.configure(
                         state="normal" if self.presets else "disabled"
                     )
-                    self.status.set("Praat AI  |  " + model_status_text(self.config))
+                    self.set_status("Praat AI  |  " + model_status_text(self.config))
                     self.context_label.set(selected_object_label())
                     self.entry.focus_set()
                 elif role == "reload":
@@ -2020,6 +2343,8 @@ class ChatWindow:
         self._closed = True
         if getattr(self, "praat_watcher", None) is not None:
             self.praat_watcher.stopped = True
+        if getattr(self, "theme_watcher", None) is not None:
+            self.theme_watcher.stop()   # 关掉之后别再排主题轮询回调
         pid_path = runtime_dir() / "chat.pid"
         try:
             pid_path.unlink()
@@ -2050,7 +2375,7 @@ class ChatWindow:
         self.config_stamp = self._config_stamp()
         self.presets = list_presets(self.config)
         self.refresh_preset_widgets()
-        self.status.set("Praat AI  |  " + model_status_text(self.config))
+        self.set_status("Praat AI  |  " + model_status_text(self.config))
 
     @staticmethod
     def _config_stamp() -> int:

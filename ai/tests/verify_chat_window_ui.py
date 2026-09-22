@@ -121,6 +121,55 @@ def main() -> int:
         print(f"· 预设说明：{window.preset_hint.get()}")
         print(f"· 对象提示：{window.context_label.get()}")
         print(f"· 输入框可用：{window.entry.cget('state')}")
+
+        # 界面改版（TW-Elements 设计语言，guide.md §8.16）：卡片化外壳 + 消息块随主题变。
+        try:
+            theme = window.theme
+            for name in ("app_bar", "composer", "status_chip", "preset_snack"):
+                if getattr(window, name, None) is None:
+                    problems.append(f"对话窗口少了 {name}")
+            print(f"· 主题：{'深色' if theme.dark else '浅色'}（缩放 {theme.scale:g}）")
+            block = window.transcript.tag_cget("assistant_block", "background")
+            print(f"· 消息块底色：assistant_block={block}")
+            if str(block) != theme.color("surface"):
+                problems.append(f"消息块底色没跟上主题：{block} != {theme.color('surface')}")
+            started_dark = theme.dark
+            theme.set_dark(not started_dark)
+            pump(window, 1)
+            flipped = window.transcript.tag_cget("assistant_block", "background")
+            canvas_now = window.transcript.cget("background")
+            print(
+                f"· 切到{'深色' if theme.dark else '浅色'}后："
+                f"assistant_block={flipped}，画布={canvas_now}"
+            )
+            if str(flipped) != theme.color("surface") or str(canvas_now) != theme.color("canvas"):
+                problems.append("切主题之后消息区没有重刷")
+            theme.set_dark(started_dark)   # 改回系统实际的那个
+            pump(window, 1)
+            window.append("assistant", "## 复制测试\n- **粗体** 与 `代码`")
+            window.transcript.see("end")
+            pump(window, 1)
+            index = window.transcript.search("⧉ 复制", "1.0", stopindex="end")
+            while True:
+                following = window.transcript.search(
+                    "⧉ 复制", f"{index}+1c", stopindex="end"
+                ) if index else ""
+                if not following:
+                    break
+                index = following
+            print(f"· 回答末尾的复制按钮：{'有' if index else '没有'}")
+            if not index:
+                problems.append("回答末尾没有「⧉ 复制」")
+            else:
+                window.copy_message(window._copy_registry[next(reversed(window._copy_registry))])
+                copied = window.root.clipboard_get()
+                if "复制测试" not in copied:
+                    problems.append(f"复制到剪贴板的内容不对：{copied[:40]!r}")
+                else:
+                    print("· 一键复制：剪贴板内容正确")
+        except Exception as error:   # noqa: BLE001 - 这一条只是界面冒烟
+            problems.append(f"界面主题检查失败：{error}")
+
         # C7：等待可以取消。这里只验按钮和事件接上了（真投递的取消在
         # verify_cancel_live.py 里用真 Praat 跑）。
         try:

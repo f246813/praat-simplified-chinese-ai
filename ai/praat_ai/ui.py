@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from .audio import read_wav
 from .bridge import SelectedObject
 from .models import AnalysisRequest, PhoneSpec
+from . import ui_theme, ui_widgets
 
 
 @dataclass(slots=True)
@@ -44,9 +45,14 @@ def show_tutor_form(sound_objects: list[SelectedObject]) -> TutorFormValues:
         raise ValueError("AI 纠音需要至少两个已选中的 Sound 对象。")
 
     root = tk.Tk()
+    theme = ui_theme.Theme(root)
     root.title("Praat 本地 AI 纠音")
-    root.geometry("620x420")
     root.resizable(False, False)
+    root.configure(background=theme.color("canvas"))
+    style = ttk.Style(root)
+    if "clam" in style.theme_names() and style.theme_use() != "clam":
+        style.theme_use("clam")
+    ui_widgets.configure_ttk(style, theme)
 
     names = [f"{item.id}: {item.name}" for item in sound_objects]
     reference_name = tk.StringVar(value=names[0])
@@ -58,81 +64,69 @@ def show_tutor_form(sound_objects: list[SelectedObject]) -> TutorFormValues:
     qwen_explain = tk.BooleanVar(value=True)
     qwen_vision = tk.BooleanVar(value=False)
 
-    frame = ttk.Frame(root, padding=18)
-    frame.pack(fill="both", expand=True)
+    frame = tk.Frame(root, background=theme.color("canvas"))
+    frame.pack(fill="both", expand=True, padx=14, pady=14)
+    card = ui_widgets.Card(frame, theme, padding=(14, 12, 14, 12), radius=12)
+    card.pack(fill="both", expand=True)
+    body = card.body
+    body.columnconfigure(1, weight=1)
 
-    ttk.Label(frame, text="标准音范本").grid(row=0, column=0, sticky="w", pady=6)
-    ttk.Combobox(
-        frame,
-        textvariable=reference_name,
-        values=names,
-        state="readonly",
-        width=52,
-    ).grid(row=0, column=1, columnspan=2, sticky="ew", pady=6)
+    def add_label(text: str, *, row: int, muted: bool = False, column: int = 0) -> None:
+        tk.Label(
+            body,
+            text=text,
+            anchor="w",
+            background=theme.color("surface"),
+            foreground=theme.color("textMuted" if muted else "text"),
+            font=theme.font("small" if muted else "body"),
+        ).grid(
+            row=row,
+            column=column,
+            columnspan=2 if muted else 1,
+            sticky="w",
+            padx=(0, 8) if column == 0 else (0, 0),
+            pady=(0, 6) if muted else 5,
+        )
 
-    ttk.Label(frame, text="学习者录音").grid(row=1, column=0, sticky="w", pady=6)
-    ttk.Combobox(
-        frame,
-        textvariable=learner_name,
-        values=names,
-        state="readonly",
-        width=52,
-    ).grid(row=1, column=1, columnspan=2, sticky="ew", pady=6)
+    def add_combo(variable, row: int) -> None:
+        ttk.Combobox(
+            body,
+            textvariable=variable,
+            values=names,
+            state="readonly",
+            width=46,
+            font=theme.font("body"),
+        ).grid(row=row, column=1, columnspan=2, sticky="ew", pady=5)
 
-    ttk.Label(frame, text="目标语言").grid(row=2, column=0, sticky="w", pady=6)
-    ttk.Entry(frame, textvariable=language, width=54).grid(
-        row=2,
-        column=1,
-        columnspan=2,
-        sticky="ew",
-        pady=6,
-    )
+    def add_entry(variable, row: int, *, width: int = 46, columnspan: int = 2):
+        shell = ui_widgets.FieldCard(body, theme, background="surface")
+        field = ttk.Entry(shell, textvariable=variable, width=width, font=theme.font("body"))
+        shell.attach(field)
+        shell.grid(row=row, column=1, columnspan=columnspan, sticky="ew", pady=5)
+        return field
 
-    ttk.Label(frame, text="目标音位").grid(row=3, column=0, sticky="w", pady=6)
-    ttk.Entry(frame, textvariable=phoneme_text, width=54).grid(
-        row=3,
-        column=1,
-        columnspan=2,
-        sticky="ew",
-        pady=6,
-    )
-    ttk.Label(frame, text="用空格、逗号或分号分隔 IPA 音位").grid(
-        row=4,
-        column=1,
-        columnspan=2,
-        sticky="w",
-    )
-
-    ttk.Label(frame, text="参考文本").grid(row=5, column=0, sticky="w", pady=6)
-    ttk.Entry(frame, textvariable=transcript_text, width=54).grid(
-        row=5,
-        column=1,
-        columnspan=2,
-        sticky="ew",
-        pady=6,
-    )
-    ttk.Label(frame, text="使用 MFA 词典时填写，例如 hello world").grid(
-        row=6,
-        column=1,
-        columnspan=2,
-        sticky="w",
-    )
-
-    ttk.Label(frame, text="错误阈值").grid(row=7, column=0, sticky="w", pady=6)
-    ttk.Entry(frame, textvariable=threshold, width=12).grid(
-        row=7,
-        column=1,
-        sticky="w",
-        pady=6,
-    )
+    add_label("标准音范本", row=0)
+    add_combo(reference_name, 0)
+    add_label("学习者录音", row=1)
+    add_combo(learner_name, 1)
+    add_label("目标语言", row=2)
+    add_entry(language, 2)
+    add_label("目标音位", row=3)
+    add_entry(phoneme_text, 3)
+    add_label("用空格、逗号或分号分隔 IPA 音位", row=4, muted=True, column=1)
+    add_label("参考文本", row=5)
+    add_entry(transcript_text, 5)
+    add_label("使用 MFA 词典时填写，例如 hello world", row=6, muted=True, column=1)
+    add_label("错误阈值", row=7)
+    add_entry(threshold, 7, width=12, columnspan=1)
 
     ttk.Checkbutton(
-        frame,
+        body,
         text="使用 Qwen 生成解释",
         variable=qwen_explain,
     ).grid(row=8, column=1, sticky="w", pady=4)
     ttk.Checkbutton(
-        frame,
+        body,
         text="把对比图交给 Qwen 视觉模型解释",
         variable=qwen_vision,
     ).grid(row=9, column=1, sticky="w", pady=4)
@@ -164,14 +158,14 @@ def show_tutor_form(sound_objects: list[SelectedObject]) -> TutorFormValues:
         )
         root.destroy()
 
-    button_row = ttk.Frame(frame)
-    button_row.grid(row=10, column=0, columnspan=3, pady=18, sticky="e")
-    ttk.Button(button_row, text="取消", command=root.destroy).pack(
-        side="right",
-        padx=6,
-    )
-    ttk.Button(button_row, text="开始分析", command=analyze).pack(side="right")
+    button_row = tk.Frame(body, background=theme.color("surface"))
+    button_row.grid(row=10, column=0, columnspan=3, pady=(16, 0), sticky="e")
+    ui_widgets.RoundedButton(
+        button_row, theme, "取消", root.destroy, kind="text", background="surface"
+    ).pack(side="right", padx=(8, 0))
+    ui_widgets.RoundedButton(
+        button_row, theme, "开始分析", analyze, kind="filled", background="surface"
+    ).pack(side="right")
 
-    frame.columnconfigure(1, weight=1)
     root.mainloop()
     return result

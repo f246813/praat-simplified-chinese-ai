@@ -314,6 +314,10 @@ Praat 里自己点运行。
   「Praat 语音助手」。
 - **关掉 Praat，前端窗口跟着退**：启动时会记下是哪个 Praat 拉起的（进程号 +
   exe 路径），Praat 一关，对话窗口和 API 配置小窗都自己退出。
+- **界面**：对话窗口、进度小窗、API 配置窗、纠音表单用同一套主题（颜色/卡片/圆角
+  按钮/状态胶囊对齐 TW-Elements 的设计语言，MIT，见 `CREDITS.zh-CN.md`），
+  **深浅色跟随系统**（每 5 秒复查，没有手动开关）；AI 回答里的 `- 列表`、`**粗体**`、
+  `` `代码` `` 会渲染出来，每条回答和结果后面有「⧉ 复制」。
 - **加载/停止模型有进度小窗口**：从菜单启动/停止时是 Praat 自己的进度窗口
   （一根进度条 + 「中断」），从对话窗口点「应用预设」时是一个迷你进度窗
   （一句话 + 一根进度条）。以前这段时间界面什么都不说。
@@ -339,7 +343,7 @@ $env:PYTHONPATH = 'ai'
 python -m unittest discover -s ai/tests -v      # 单元测试
 python ai/tests/verify_chat_templates.py        # 每个工具模板在真 Praat 批处理里跑一遍
 python ai/tests/verify_chat_planning.py         # 真机模型规划一批请求并真跑一遍（准确率）
-python ai/tests/verify_chat_window_ui.py        # 对话窗口能不能正常建起来（会闪一下窗口）
+python ai/tests/verify_chat_window_ui.py        # 对话窗口 + 界面主题（卡片/消息块/一键复制/深浅色跟随）
 python ai/tests/verify_chat_live.py             # 对话窗口链路（会临时开一个 Praat）
 python ai/tests/verify_chat_no_popup.py         # 发指令时 Praat 的窗口一个都不许动（会收进任务栏）
 python ai/tests/verify_plugin.py                # 原生插件（B2）：菜单注册 + 33 个参数在真 Praat 里算一遍
