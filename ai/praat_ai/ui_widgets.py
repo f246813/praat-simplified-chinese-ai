@@ -34,16 +34,20 @@ def _rounded_shapes(
     if right - left <= 0 or bottom - top <= 0:
         return []
     radius = max(0, min(int(radius), (right - left) // 2, (bottom - top) // 2))
+    # Tk rectangles exclude their right/bottom coordinates, but arcs paint through
+    # those coordinates. Include the final pixel so straight edges meet the arcs.
     if radius == 0:
         return [
-            canvas.create_rectangle(left, top, right, bottom, fill=fill, outline="", tags=tags)
+            canvas.create_rectangle(left, top, right + 1, bottom + 1, fill=fill, outline="", tags=tags)
         ]
     ids = [
         canvas.create_rectangle(
-            left + radius, top, right - radius, bottom, fill=fill, outline="", tags=tags
+            left + radius, top, right - radius + 1, bottom + 1,
+            fill=fill, outline="", tags=tags
         ),
         canvas.create_rectangle(
-            left, top + radius, right, bottom - radius, fill=fill, outline="", tags=tags
+            left, top + radius, right + 1, bottom - radius + 1,
+            fill=fill, outline="", tags=tags
         ),
     ]
     diameter = 2 * radius
