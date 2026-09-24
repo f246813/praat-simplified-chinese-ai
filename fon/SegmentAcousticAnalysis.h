@@ -52,41 +52,7 @@ struct ParameterValue {
 
 struct ParameterSnapshot {
 	std::vector<ParameterValue> values;
-	// Explicit subset whose equality is required before metric differences are meaningful.
-	std::vector<std::u32string> compatibilityKeys;
 };
-
-struct TimeSeries {
-	std::u32string metricId;
-	std::u32string unit;
-	std::vector<double> absoluteTimes;
-	std::vector<double> values;
-};
-
-enum class AnalysisKind {
-	VowelNasality,
-	NasalConsonant,
-	RSegment,
-	VOT
-};
-
-// A side of the comparison editor is independent: changing its source or range
-// must not implicitly change the other side.
-struct SegmentAnalysisSelection {
-	SegmentMetadata metadata;
-	AnalysisKind analysisKind { AnalysisKind::VOT };
-	double playbackStartTime { 0.0 };
-	double playbackEndTime { 0.0 };
-};
-
-struct TargetReferenceSegment {
-	SegmentAnalysisSelection target;
-	std::optional<SegmentAnalysisSelection> reference;
-};
-
-void TargetReferenceSegment_setTarget (TargetReferenceSegment *pair, const SegmentAnalysisSelection &target);
-void TargetReferenceSegment_setReference (TargetReferenceSegment *pair, const SegmentAnalysisSelection &reference);
-void TargetReferenceSegment_clearReference (TargetReferenceSegment *pair);
 
 enum class MetricStatus {
 	measured,
@@ -133,80 +99,19 @@ struct MetricResult {
 	std::u32string reason;
 };
 
-struct FrequencySeries {
-	std::u32string metricId;
-	std::u32string unit;
-	std::vector<double> frequencyHz;
-	std::vector<double> values;
-};
-
 struct AnalysisResult {
 	int schemaVersion { 1 };
-	AnalysisKind kind { AnalysisKind::VOT };
 	SegmentMetadata source;
 	ParameterSnapshot parameters;
 	std::vector<MetricResult> metrics;
-	std::vector<TimeSeries> curves;
-	std::vector<FrequencySeries> frequencyCurves;
 };
 
-struct MetricComparison {
-	std::u32string metricId;
-	std::u32string unit;
-	std::optional<double> targetValue;
-	std::optional<double> referenceValue;
-	std::optional<double> difference;
-	MetricStatus targetStatus { MetricStatus::unavailable };
-	MetricStatus referenceStatus { MetricStatus::unavailable };
-	std::u32string targetReason;
-	std::u32string referenceReason;
-	std::u32string reason;
-	std::u32string warning;
-};
-
-struct FrequencyOverlay {
-	std::u32string metricId;
-	std::u32string unit;
-	std::vector<double> frequencyHz;
-	std::vector<double> targetValues;
-	std::vector<double> referenceValues;
-	bool sampleRatesDiffer { false };
-	std::u32string warning;
-	std::u32string reason;
-};
-
-struct ComparisonResult {
-	int schemaVersion { 1 };
-	SegmentMetadata target;
-	SegmentMetadata reference;
-	AnalysisKind targetKind { AnalysisKind::VOT };
-	AnalysisKind referenceKind { AnalysisKind::VOT };
-	ParameterSnapshot targetParameters;
-	ParameterSnapshot referenceParameters;
-	std::vector<MetricComparison> rows;
-	std::vector<FrequencyOverlay> frequencyOverlays;
-};
-
-struct NormalizedTimeSeries {
-	std::u32string metricId;
-	std::u32string unit;
-	std::vector<double> relativePercent;
-	std::vector<double> values;
-};
-
-ComparisonResult compareCompatibleMetrics (const AnalysisResult &target, const AnalysisResult &reference);
-NormalizedTimeSeries normalizeTimeSeriesForOverlay (const TimeSeries &curve, const SegmentMetadata &segment);
-FrequencyOverlay interpolateCommonFrequencyGrid (const FrequencySeries &target, double targetSampleRate,
-		const FrequencySeries &reference, double referenceSampleRate);
 double votMilliseconds (double burstTime, double voicingTime);
 AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burstTime,
 		std::optional<double> voicingTime, VOTBoundaryMode mode,
 		const VOTCandidateSettings &candidateSettings = {});
-AnalysisResult confirmVOTBoundaries (const SegmentInput &input, const AnalysisResult *candidates,
-		double burstTime, double voicingTime);
 std::optional<double> maximumDefinedHnr (const constHarmonicity harmonicity);
 void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output);
-void ComparisonResult_toTsv (const ComparisonResult &result, MelderString *output);
 void writeSegmentAnalysisTsvAtomically (conststring32 resultFileName, conststring32 serialized);
 
 #endif

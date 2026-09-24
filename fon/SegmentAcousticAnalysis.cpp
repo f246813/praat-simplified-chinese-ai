@@ -5,14 +5,13 @@
 #include "Sound_to_Intensity.h"
 #include "Sound_to_Pitch.h"
 #include "melder_app.h"
-#include "melder_atof.h"
 #include "melder_files.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <limits>
-#include <string_view>
+#include <cmath>
 
 #if defined (_WIN32)
 	#include <process.h>
@@ -20,185 +19,7 @@
 	#include <unistd.h>
 #endif
 
-void TargetReferenceSegment_setTarget (TargetReferenceSegment *pair, const SegmentAnalysisSelection &target) {
-	Melder_assert (pair);
-	pair -> target = target;
-}
-
-void TargetReferenceSegment_setReference (TargetReferenceSegment *pair, const SegmentAnalysisSelection &reference) {
-	Melder_assert (pair);
-	pair -> reference = reference;
-}
-
-void TargetReferenceSegment_clearReference (TargetReferenceSegment *pair) {
-	Melder_assert (pair);
-	pair -> reference.reset();
-}
-#include <cmath>
-#include <utility>
-
 namespace {
-
-const ParameterValue *findParameter (const ParameterSnapshot &snapshot, const std::u32string &name) {
-	const auto found = std::find_if (snapshot.values.begin(), snapshot.values.end(), [&] (const ParameterValue &value) {
-		return value.name == name;
-	});
-	return found == snapshot.values.end() ? nullptr : & *found;
-}
-
-bool hasCompatibilityKey (const ParameterSnapshot &snapshot, const std::u32string &name) {
-	return std::find (snapshot.compatibilityKeys.begin(), snapshot.compatibilityKeys.end(), name) != snapshot.compatibilityKeys.end();
-}
-
-std::u32string parameterCompatibilityReason (const ParameterSnapshot &target, const ParameterSnapshot &reference) {
-	for (const std::u32string &key : target.compatibilityKeys) {
-		if (! hasCompatibilityKey (reference, key))
-			return U"incompatible parameters: missing " + key;
-		const ParameterValue *targetValue = findParameter (target, key);
-		const ParameterValue *referenceValue = findParameter (reference, key);
-		if (! targetValue || ! referenceValue)
-			return U"incompatible parameters: missing value for " + key;
-		if (targetValue -> value != referenceValue -> value || targetValue -> unit != referenceValue -> unit)
-			return U"incompatible parameters: " + key;
-	}
-	for (const std::u32string &key : reference.compatibilityKeys) {
-		if (! hasCompatibilityKey (target, key))
-			return U"incompatible parameters: missing " + key;
-	}
-	return {};
-}
-
-const MetricResult *findMetric (const AnalysisResult &result, const std::u32string &metricId) {
-	const auto found = std::find_if (result.metrics.begin(), result.metrics.end(), [&] (const MetricResult &metric) {
-		return metric.id == metricId;
-	});
-	return found == result.metrics.end() ? nullptr : & *found;
-}
-
-conststring32 analysisKindName (AnalysisKind kind);
-
-std::optional<double> requestedMaximumFrequency (const ParameterSnapshot &snapshot) {
-	static const std::u32string_view keys [] { U"maximumFrequency", U"maximumFrequencyHz", U"maxFrequency", U"bandHighHz", U"bandMaximumHz" };
-	for (const ParameterValue &parameter : snapshot.values) {
-		if (parameter.unit != U"Hz")
-			continue;
-		for (const std::u32string_view key : keys) {
-			if (parameter.name == key) {
-				const double value = Melder_atof (parameter.value.c_str());
-				if (std::isfinite (value) && value > 0.0)
-					return value;
-			}
-		}
-	}
-	return {};
-}
-
-std::u32string nyquistCompatibilityReason (const SegmentMetadata &target, const SegmentMetadata &reference,
-		const ParameterSnapshot &targetParameters, const ParameterSnapshot &referenceParameters)
-{
-	const std::optional<double> targetMaximum = requestedMaximumFrequency (targetParameters);
-	const std::optional<double> referenceMaximum = requestedMaximumFrequency (referenceParameters);
-	if (! targetMaximum && ! referenceMaximum)
-		return {};
-	const double requiredMaximum = std::max (targetMaximum.value_or (0.0), referenceMaximum.value_or (0.0));
-	if (target.source.sampleRate > 0.0 && target.source.sampleRate * 0.5 < requiredMaximum)
-		return U"target Nyquist (" + std::u32string (Melder_double (target.source.sampleRate * 0.5)) +
-			U" Hz) is below requested maximum frequency (" + std::u32string (Melder_double (requiredMaximum)) + U" Hz)";
-	if (reference.source.sampleRate > 0.0 && reference.source.sampleRate * 0.5 < requiredMaximum)
-		return U"reference Nyquist (" + std::u32string (Melder_double (reference.source.sampleRate * 0.5)) +
-			U" Hz) is below requested maximum frequency (" + std::u32string (Melder_double (requiredMaximum)) + U" Hz)";
-	return {};
-}
-
-std::u32string burstBandCompatibilityReason (const SegmentMetadata &target, const SegmentMetadata &reference,
-		const ParameterSnapshot &targetParameters, const ParameterSnapshot &referenceParameters)
-{
-	const ParameterValue *targetPath = findParameter (targetParameters, U"burstDetectionPath");
-	const ParameterValue *referencePath = findParameter (referenceParameters, U"burstDetectionPath");
-	if (! targetPath || ! referencePath)
-		return {};
-	if (targetPath -> value != referencePath -> value)
-		return U"incompatible VOT burst detection paths (" + targetPath -> value + U" vs " + referencePath -> value + U")";
-	if (targetPath -> value != U"high-band")
-		return {};
-	const ParameterValue *targetMaximumParameter = findParameter (targetParameters, U"burstBandMaximumHz");
-	const ParameterValue *referenceMaximumParameter = findParameter (referenceParameters, U"burstBandMaximumHz");
-	if (! targetMaximumParameter || ! referenceMaximumParameter)
-		return U"incompatible VOT burst band settings";
-	const double requiredMaximum = std::max (Melder_atof (targetMaximumParameter -> value.c_str()),
-		Melder_atof (referenceMaximumParameter -> value.c_str()));
-	if (target.source.sampleRate > 0.0 && target.source.sampleRate * 0.5 < requiredMaximum)
-		return U"target Nyquist does not cover the VOT burst detection band";
-	if (reference.source.sampleRate > 0.0 && reference.source.sampleRate * 0.5 < requiredMaximum)
-		return U"reference Nyquist does not cover the VOT burst detection band";
-	return {};
-}
-
-bool burstDependentMetric (const std::u32string &metricId) {
-	return metricId == U"burst_time_candidate" || metricId == U"burst_rise_db" ||
-		metricId == U"vot_candidate_s" || metricId == U"vot_candidate_ms";
-}
-
-std::u32string sampleRateWarning (const SegmentMetadata &target, const SegmentMetadata &reference) {
-	if (target.source.sampleRate <= 0.0 || reference.source.sampleRate <= 0.0 ||
-			std::abs (target.source.sampleRate - reference.source.sampleRate) < 1.0e-9)
-		return {};
-	return U"different sample rates (" + std::u32string (Melder_double (target.source.sampleRate)) + U" vs " +
-		std::u32string (Melder_double (reference.source.sampleRate)) + U" Hz); measurements retain their original rates";
-}
-
-void addComparisonRow (	ComparisonResult &comparison,
-		const AnalysisResult &target, const AnalysisResult &reference,
-		const MetricResult *targetMetric, const MetricResult *referenceMetric,
-		const std::u32string &parameterReason, const std::u32string &bandwidthReason, const std::u32string &burstReason,
-		const std::u32string &rateWarning
-) {
-	const MetricResult *identityMetric = targetMetric ? targetMetric : referenceMetric;
-	MetricComparison row;
-	row.metricId = identityMetric -> id;
-	row.unit = targetMetric ? targetMetric -> unit : referenceMetric -> unit;
-	if (targetMetric) {
-		row.targetValue = targetMetric -> value;
-		row.targetStatus = targetMetric -> status;
-		row.targetReason = targetMetric -> reason;
-	}
-	if (referenceMetric) {
-		row.referenceValue = referenceMetric -> value;
-		row.referenceStatus = referenceMetric -> status;
-		row.referenceReason = referenceMetric -> reason;
-	}
-	row.warning = rateWarning;
-
-	if (! targetMetric || ! referenceMetric) {
-		row.reason = ! targetMetric ? U"metric is missing from target analysis" : U"metric is missing from reference analysis";
-	} else if (target.kind != reference.kind) {
-		row.reason = U"analysis kinds differ";
-	} else if (targetMetric -> unit != referenceMetric -> unit) {
-		row.reason = U"metric units differ";
-	} else if (! parameterReason.empty()) {
-		row.reason = parameterReason;
-	} else if (! bandwidthReason.empty()) {
-		row.reason = bandwidthReason;
-	} else if (burstDependentMetric (row.metricId) && ! burstReason.empty()) {
-		row.reason = burstReason;
-	} else if (! targetMetric -> value || ! referenceMetric -> value) {
-		if (! targetMetric -> value) {
-			row.reason = U"target unavailable";
-			if (! targetMetric -> reason.empty())
-				row.reason += U": " + targetMetric -> reason;
-		}
-		if (! referenceMetric -> value) {
-			if (! row.reason.empty())
-				row.reason += U"; ";
-			row.reason += U"reference unavailable";
-			if (! referenceMetric -> reason.empty())
-				row.reason += U": " + referenceMetric -> reason;
-		}
-	} else {
-		row.difference = targetMetric -> value.value() - referenceMetric -> value.value();
-	}
-	comparison.rows.push_back (std::move (row));
-}
 
 void appendTsvField (MelderString *output, const std::u32string &value) {
 	for (const char32 character : value) {
@@ -242,25 +63,8 @@ void appendTsvParameterSnapshot (MelderString *output, const ParameterSnapshot &
 	appendTsvField (output, encoded);
 }
 
-void appendTsvNumberVector (MelderString *output, const std::vector<double> &values) {
-	std::u32string encoded;
-	for (const double value : values) {
-		if (! encoded.empty())
-			encoded += U"; ";
-	encoded += Melder_double (value);
-	}
-	appendTsvField (output, encoded);
-}
-
-const FrequencyOverlay *findFrequencyOverlay (const ComparisonResult &result, const std::u32string &metricId) {
-	const auto found = std::find_if (result.frequencyOverlays.begin(), result.frequencyOverlays.end(), [&] (const FrequencyOverlay &overlay) {
-		return overlay.metricId == metricId;
-	});
-	return found == result.frequencyOverlays.end() ? nullptr : & *found;
-}
-
 void appendTsvSourceMetadata (MelderString *output, const SegmentMetadata &metadata,
-		const ParameterSnapshot &parameters, AnalysisKind kind)
+		const ParameterSnapshot &parameters)
 {
 	appendTsvField (output, metadata.source.displayName);
 	MelderString_appendCharacter (output, U'\t');
@@ -270,7 +74,7 @@ void appendTsvSourceMetadata (MelderString *output, const SegmentMetadata &metad
 	MelderString_append (output, U"\t", Melder_double (metadata.startTime), U"\t", Melder_double (metadata.endTime), U"\t",
 		Melder_double (metadata.endTime - metadata.startTime), U"\t", Melder_double (metadata.source.sampleRate), U"\t",
 		metadata.source.channels, U"\t", metadata.source.kind == SourceKind::sound ? U"Sound" : U"LongSound", U"\t",
-		analysisKindName (kind), U"\t");
+		U"VOT\t");
 	appendTsvParameterSnapshot (output, parameters);
 	MelderString_appendCharacter (output, U'\t');
 	appendTsvOptionalText (output, metadata.annotation.language);
@@ -280,29 +84,6 @@ void appendTsvSourceMetadata (MelderString *output, const SegmentMetadata &metad
 	appendTsvOptionalText (output, metadata.annotation.speakerId);
 	MelderString_appendCharacter (output, U'\t');
 	appendTsvOptionalText (output, metadata.annotation.neighboringVowel);
-}
-
-double interpolateAt (const FrequencySeries &curve, double frequency) {
-	auto upper = std::upper_bound (curve.frequencyHz.begin(), curve.frequencyHz.end(), frequency);
-	if (upper == curve.frequencyHz.begin())
-		return curve.values.front();
-	if (upper == curve.frequencyHz.end())
-		return curve.values.back();
-	const size_t upperIndex = (size_t) (upper - curve.frequencyHz.begin());
-	const size_t lowerIndex = upperIndex - 1;
-	const double fraction = (frequency - curve.frequencyHz [lowerIndex]) /
-		(curve.frequencyHz [upperIndex] - curve.frequencyHz [lowerIndex]);
-	return curve.values [lowerIndex] + fraction * (curve.values [upperIndex] - curve.values [lowerIndex]);
-}
-
-conststring32 analysisKindName (AnalysisKind kind) {
-	switch (kind) {
-		case AnalysisKind::VowelNasality: return U"VowelNasality";
-		case AnalysisKind::NasalConsonant: return U"NasalConsonant";
-		case AnalysisKind::RSegment: return U"RSegment";
-		case AnalysisKind::VOT: return U"VOT";
-	}
-	return U"Unknown";
 }
 
 conststring32 metricStatusName (MetricStatus status) {
@@ -318,16 +99,12 @@ std::u32string numberAsText (double value) {
 	return std::u32string (Melder_double (value));
 }
 
-void addParameter (AnalysisResult &result, conststring32 name, double value, conststring32 unit, bool affectsCompatibility = true) {
+void addParameter (AnalysisResult &result, conststring32 name, double value, conststring32 unit) {
 	result.parameters.values.push_back ({ name, numberAsText (value), unit });
-	if (affectsCompatibility)
-		result.parameters.compatibilityKeys.emplace_back (name);
 }
 
-void addTextParameter (AnalysisResult &result, conststring32 name, conststring32 value, conststring32 unit = U"", bool affectsCompatibility = true) {
+void addTextParameter (AnalysisResult &result, conststring32 name, conststring32 value, conststring32 unit = U"") {
 	result.parameters.values.push_back ({ name, value, unit });
-	if (affectsCompatibility)
-		result.parameters.compatibilityKeys.emplace_back (name);
 }
 
 void addMetric (AnalysisResult &result, conststring32 id, conststring32 unit,
@@ -515,11 +292,10 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	}
 
 	AnalysisResult result;
-	result.kind = AnalysisKind::VOT;
 	result.source = input.metadata;
 	addTextParameter (result, U"boundaryMode", U"estimateCandidates");
 	addTextParameter (result, U"burstDetectionPath",
-		0.5 / sound -> dx >= settings.burstBandMaximumHz ? U"high-band" : U"full-band-fallback", U"", false);
+		0.5 / sound -> dx >= settings.burstBandMaximumHz ? U"high-band" : U"full-band-fallback");
 	addParameter (result, U"burstBandMinimumHz", settings.burstBandMinimumHz, U"Hz");
 	addParameter (result, U"burstBandMaximumHz", settings.burstBandMaximumHz, U"Hz");
 	addParameter (result, U"burstBandSmoothingHz", settings.burstBandSmoothingHz, U"Hz");
@@ -632,127 +408,6 @@ std::optional<double> maximumDefinedHnr (constHarmonicity harmonicity) {
 	return maximum;
 }
 
-ComparisonResult compareCompatibleMetrics (const AnalysisResult &target, const AnalysisResult &reference) {
-	ComparisonResult result;
-	result.target = target.source;
-	result.reference = reference.source;
-	result.schemaVersion = std::max (target.schemaVersion, reference.schemaVersion);
-	result.targetKind = target.kind;
-	result.referenceKind = reference.kind;
-	result.targetParameters = target.parameters;
-	result.referenceParameters = reference.parameters;
-	const std::u32string parameterReason = parameterCompatibilityReason (target.parameters, reference.parameters);
-	const std::u32string bandwidthReason = nyquistCompatibilityReason (target.source, reference.source,
-		target.parameters, reference.parameters);
-	const std::u32string burstReason = burstBandCompatibilityReason (target.source, reference.source,
-		target.parameters, reference.parameters);
-	const std::u32string rateWarning = sampleRateWarning (target.source, reference.source);
-	for (const MetricResult &targetMetric : target.metrics) {
-		addComparisonRow (result, target, reference, & targetMetric, findMetric (reference, targetMetric.id),
-			parameterReason, bandwidthReason, burstReason, rateWarning);
-	}
-	for (const MetricResult &referenceMetric : reference.metrics) {
-		if (! findMetric (target, referenceMetric.id))
-			addComparisonRow (result, target, reference, nullptr, & referenceMetric, parameterReason, bandwidthReason, burstReason, rateWarning);
-	}
-	for (const FrequencySeries &targetCurve : target.frequencyCurves) {
-		const auto referenceCurve = std::find_if (reference.frequencyCurves.begin(), reference.frequencyCurves.end(),
-			[&] (const FrequencySeries &candidate) {
-				return candidate.metricId == targetCurve.metricId && candidate.unit == targetCurve.unit;
-			});
-		if (referenceCurve == reference.frequencyCurves.end())
-			continue;
-		if (target.kind != reference.kind || ! parameterReason.empty() || ! bandwidthReason.empty()) {
-			FrequencyOverlay unavailable;
-			unavailable.metricId = targetCurve.metricId;
-			unavailable.unit = targetCurve.unit;
-			unavailable.reason = target.kind != reference.kind ? U"analysis kinds differ" :
-				! parameterReason.empty() ? parameterReason : bandwidthReason;
-			result.frequencyOverlays.push_back (std::move (unavailable));
-			continue;
-		}
-		try {
-			result.frequencyOverlays.push_back (interpolateCommonFrequencyGrid (targetCurve, target.source.source.sampleRate,
-				* referenceCurve, reference.source.source.sampleRate));
-		} catch (MelderError) {
-			FrequencyOverlay unavailable;
-			unavailable.metricId = targetCurve.metricId;
-			unavailable.unit = targetCurve.unit;
-			unavailable.reason = Melder_getError();
-			result.frequencyOverlays.push_back (std::move (unavailable));
-			Melder_clearError ();
-		}
-	}
-	return result;
-}
-
-NormalizedTimeSeries normalizeTimeSeriesForOverlay (const TimeSeries &curve, const SegmentMetadata &segment) {
-	Melder_require (std::isfinite (segment.startTime) && std::isfinite (segment.endTime) && segment.startTime < segment.endTime,
-		U"A time-series overlay requires a valid segment interval.");
-	Melder_require (curve.absoluteTimes.size() == curve.values.size() && ! curve.values.empty(),
-		U"A time-series overlay requires one value for every absolute time.");
-	NormalizedTimeSeries result;
-	result.metricId = curve.metricId;
-	result.unit = curve.unit;
-	result.values = curve.values;
-	result.relativePercent.reserve (curve.absoluteTimes.size());
-	double previousTime = - std::numeric_limits<double>::infinity();
-	for (const double time : curve.absoluteTimes) {
-		Melder_require (std::isfinite (time) && time >= segment.startTime && time <= segment.endTime && time > previousTime,
-			U"Time-series points must be ordered and stay inside the recorded segment interval.");
-		result.relativePercent.push_back (100.0 * (time - segment.startTime) / (segment.endTime - segment.startTime));
-		previousTime = time;
-	}
-	return result;
-}
-
-FrequencyOverlay interpolateCommonFrequencyGrid (const FrequencySeries &target, double targetSampleRate,
-		const FrequencySeries &reference, double referenceSampleRate)
-{
-	Melder_require (target.metricId == reference.metricId && target.unit == reference.unit,
-		U"Frequency overlays require the same metric and unit.");
-	Melder_require (target.frequencyHz.size() == target.values.size() && reference.frequencyHz.size() == reference.values.size() &&
-		target.frequencyHz.size() >= 2 && reference.frequencyHz.size() >= 2,
-		U"Each frequency series requires at least two frequency/value pairs.");
-	Melder_require (std::isfinite (targetSampleRate) && targetSampleRate > 0.0 &&
-		std::isfinite (referenceSampleRate) && referenceSampleRate > 0.0,
-		U"Frequency overlay sample rates must be positive.");
-	auto validateSeries = [] (const FrequencySeries &series) {
-		double previous = - std::numeric_limits<double>::infinity();
-		for (size_t index = 0; index < series.frequencyHz.size(); index ++) {
-			Melder_require (std::isfinite (series.frequencyHz [index]) && std::isfinite (series.values [index]) &&
-				series.frequencyHz [index] > previous,
-				U"Frequency points must be finite and strictly increasing, with finite values.");
-			previous = series.frequencyHz [index];
-		}
-	};
-	validateSeries (target);
-	validateSeries (reference);
-	const double minimumFrequency = std::max (target.frequencyHz.front(), reference.frequencyHz.front());
-	const double maximumFrequency = std::min ({ target.frequencyHz.back(), reference.frequencyHz.back(),
-		targetSampleRate * 0.5, referenceSampleRate * 0.5 });
-	Melder_require (minimumFrequency < maximumFrequency,
-		U"The two spectra have no common frequency range below both Nyquist limits.");
-	const size_t numberOfPoints = std::max<size_t> (2, std::min (target.frequencyHz.size(), reference.frequencyHz.size()));
-	FrequencyOverlay result;
-	result.metricId = target.metricId;
-	result.unit = target.unit;
-	result.frequencyHz.reserve (numberOfPoints);
-	result.targetValues.reserve (numberOfPoints);
-	result.referenceValues.reserve (numberOfPoints);
-	for (size_t index = 0; index < numberOfPoints; index ++) {
-		const double fraction = (double) index / (double) (numberOfPoints - 1);
-		const double frequency = minimumFrequency + fraction * (maximumFrequency - minimumFrequency);
-		result.frequencyHz.push_back (frequency);
-		result.targetValues.push_back (interpolateAt (target, frequency));
-		result.referenceValues.push_back (interpolateAt (reference, frequency));
-	}
-	result.sampleRatesDiffer = std::abs (targetSampleRate - referenceSampleRate) >= 1.0e-9;
-	if (result.sampleRatesDiffer)
-		result.warning = U"Different sample rates; both spectra are interpolated only over the common band below the lower Nyquist frequency.";
-	return result;
-}
-
 double votMilliseconds (double burstTime, double voicingTime) {
 	return (voicingTime - burstTime) * 1000.0;
 }
@@ -787,44 +442,12 @@ AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burs
 	const double votInSeconds = voicingTime.value() - burstTime.value();
 	const double votInMilliseconds = votMilliseconds (burstTime.value(), voicingTime.value());
 	AnalysisResult result;
-	result.kind = AnalysisKind::VOT;
 	result.source = input.metadata;
 	result.source.burstTime = burstTime;
 	result.source.voicingTime = voicingTime;
 	result.parameters.values.push_back ({ U"boundaryMode", U"manual", U"" });
-	result.parameters.compatibilityKeys.push_back (U"boundaryMode");
 	result.metrics.push_back ({ U"vot_s", U"s", votInSeconds, MetricStatus::measured, U"" });
 	result.metrics.push_back ({ U"vot_ms", U"ms", votInMilliseconds, MetricStatus::measured, U"" });
-	return result;
-}
-
-AnalysisResult confirmVOTBoundaries (const SegmentInput &input, const AnalysisResult *candidates,
-		double burstTime, double voicingTime)
-{
-	if (candidates)
-		Melder_require (candidates -> kind == AnalysisKind::VOT,
-			U"Only VOT candidates can be confirmed as VOT boundaries.");
-	AnalysisResult result = analyseVOT (input, burstTime, voicingTime, VOTBoundaryMode::manual);
-	for (ParameterValue &parameter : result.parameters.values) {
-		if (parameter.name == U"boundaryMode")
-			parameter.value = U"manualConfirmed";
-	}
-	if (candidates) {
-		for (const ParameterValue &parameter : candidates -> parameters.values) {
-			if (parameter.name == U"boundaryMode")
-				continue;
-			result.parameters.values.push_back ({ U"candidate." + parameter.name, parameter.value, parameter.unit });
-		}
-		for (const MetricResult &metric : candidates -> metrics) {
-			if (metric.id == U"burst_time_candidate" || metric.id == U"burst_rise_db" ||
-				metric.id == U"voicing_time_candidate" || metric.id == U"voicing_f0_hz")
-				result.metrics.push_back (metric);
-		}
-	}
-	result.metrics.push_back ({ U"burst_time_confirmed", U"s", burstTime, MetricStatus::measured,
-		U"Manually confirmed boundary; see burst_time_s in source metadata." });
-	result.metrics.push_back ({ U"voicing_time_confirmed", U"s", voicingTime, MetricStatus::measured,
-		U"Manually confirmed boundary; see voicing_time_s in source metadata." });
 	return result;
 }
 
@@ -836,7 +459,7 @@ void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output) {
 		MelderString_append (output, result.schemaVersion, U"\t");
 		appendTsvField (output, Melder_appVersionSTR());
 		MelderString_appendCharacter (output, U'\t');
-		appendTsvSourceMetadata (output, result.source, result.parameters, result.kind);
+		appendTsvSourceMetadata (output, result.source, result.parameters);
 		MelderString_appendCharacter (output, U'\t');
 		appendTsvOptionalNumber (output, result.source.burstTime);
 		MelderString_appendCharacter (output, U'\t');
@@ -850,58 +473,6 @@ void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output) {
 		appendTsvField (output, metric.unit);
 		MelderString_append (output, U"\t", metricStatusName (metric.status), U"\t");
 		appendTsvField (output, metric.reason);
-		MelderString_appendCharacter (output, U'\n');
-	}
-}
-
-void ComparisonResult_toTsv (const ComparisonResult &result, MelderString *output) {
-	MelderString_empty (output);
-	MelderString_append (output,
-		U"schema_version\tpraat_version\tmetric_id\ttarget_source\ttarget_object_id\ttarget_file\ttarget_start_s\ttarget_end_s\ttarget_duration_s\ttarget_sample_rate_hz\ttarget_channels\ttarget_source_kind\ttarget_analysis_kind\ttarget_parameters\ttarget_language\ttarget_ipa\ttarget_speaker_id\ttarget_neighboring_vowel"
-		U"\treference_source\treference_object_id\treference_file\treference_start_s\treference_end_s\treference_duration_s\treference_sample_rate_hz\treference_channels\treference_source_kind\treference_analysis_kind\treference_parameters\treference_language\treference_ipa\treference_speaker_id\treference_neighboring_vowel"
-		U"\tunit\ttarget_value\treference_value\tdifference\ttarget_status\treference_status\ttarget_reason\treference_reason\treason\twarning\tfrequency_grid_hz\ttarget_frequency_values\treference_frequency_values\tfrequency_warning\tfrequency_reason\n");
-	for (const MetricComparison &row : result.rows) {
-		MelderString_append (output, result.schemaVersion, U"\t");
-		appendTsvField (output, Melder_appVersionSTR());
-		MelderString_appendCharacter (output, U'\t');
-		appendTsvField (output, row.metricId);
-		MelderString_appendCharacter (output, U'\t');
-		appendTsvSourceMetadata (output, result.target, result.targetParameters, result.targetKind);
-		MelderString_appendCharacter (output, U'\t');
-		appendTsvSourceMetadata (output, result.reference, result.referenceParameters, result.referenceKind);
-		MelderString_appendCharacter (output, U'\t');
-		appendTsvField (output, row.unit);
-		MelderString_appendCharacter (output, U'\t');
-		if (row.targetStatus != MetricStatus::unavailable)
-			appendTsvOptionalNumber (output, row.targetValue);
-		MelderString_appendCharacter (output, U'\t');
-		if (row.referenceStatus != MetricStatus::unavailable)
-			appendTsvOptionalNumber (output, row.referenceValue);
-		MelderString_appendCharacter (output, U'\t');
-		appendTsvOptionalNumber (output, row.difference);
-		MelderString_append (output, U"\t", metricStatusName (row.targetStatus), U"\t", metricStatusName (row.referenceStatus), U"\t");
-		appendTsvField (output, row.targetReason);
-		MelderString_appendCharacter (output, U'\t');
-		appendTsvField (output, row.referenceReason);
-		MelderString_appendCharacter (output, U'\t');
-		appendTsvField (output, row.reason);
-		MelderString_appendCharacter (output, U'\t');
-		appendTsvField (output, row.warning);
-		MelderString_appendCharacter (output, U'\t');
-		const FrequencyOverlay *overlay = findFrequencyOverlay (result, row.metricId);
-		if (overlay) {
-			appendTsvNumberVector (output, overlay -> frequencyHz);
-			MelderString_appendCharacter (output, U'\t');
-			appendTsvNumberVector (output, overlay -> targetValues);
-			MelderString_appendCharacter (output, U'\t');
-			appendTsvNumberVector (output, overlay -> referenceValues);
-			MelderString_appendCharacter (output, U'\t');
-			appendTsvField (output, overlay -> warning);
-			MelderString_appendCharacter (output, U'\t');
-			appendTsvField (output, overlay -> reason);
-		} else {
-			MelderString_append (output, U"\t\t\t");
-		}
 		MelderString_appendCharacter (output, U'\n');
 	}
 }

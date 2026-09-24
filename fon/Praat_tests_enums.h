@@ -70,8 +70,6 @@ enums_begin (kPraatTests, 0)
 	enums_add (kPraatTests, 50, CHECK_SEGMENT_ANALYSIS_RESULT, U"CheckSegmentAnalysisResult")
 	enums_add (kPraatTests, 51, CHECK_SEGMENT_VOT_BOUNDARIES, U"CheckSegmentVOTBoundaries")
 	enums_add (kPraatTests, 52, CHECK_SEGMENT_VOT_ESTIMATOR, U"CheckSegmentVOTEstimator")
-	enums_add (kPraatTests, 53, CHECK_SEGMENT_COMPARISON_DESCRIPTOR, U"CheckSegmentComparisonDescriptor")
-	enums_add (kPraatTests, 54, CHECK_SEGMENT_COMPARISON_OUTPUT, U"CheckSegmentComparisonOutput")
-enums_end (kPraatTests, 54, CHECK_RANDOM_1009_2009)
+enums_end (kPraatTests, 52, CHECK_RANDOM_1009_2009)
 
 /* End of file Praat_tests_enums.h */

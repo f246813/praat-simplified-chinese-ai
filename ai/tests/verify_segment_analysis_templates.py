@@ -18,6 +18,10 @@ PROJECT = Path(__file__).resolve().parents[2]
 PRAAT = Path(os.environ.get("PRAAT_EXE", str(PROJECT / "Praat.exe")))
 CORE_SCRIPT = PROJECT / "test/fon/segmentAcousticCore.praat"
 VOT_SCRIPT = PROJECT / "test/fon/segmentAcousticVOT.praat"
+CORE_ANALYSIS_HEADER = PROJECT / "fon/SegmentAcousticAnalysis.h"
+CORE_ANALYSIS_SOURCE = PROJECT / "fon/SegmentAcousticAnalysis.cpp"
+CORE_TEST_SOURCE = PROJECT / "fon/Praat_tests.cpp"
+CORE_TEST_ENUMS = PROJECT / "fon/Praat_tests_enums.h"
 FONED_MAKEFILE = PROJECT / "foned/Makefile"
 FONED_MESON = PROJECT / "foned/meson.build"
 SOUND_ANALYSIS_AREA_SOURCE = PROJECT / "foned/SoundAnalysisArea.cpp"
@@ -105,6 +109,43 @@ def verify_comparison_editor_removed() -> None:
         raise AssertionError(f"Sound editor still references comparison workflow: {remaining!r}")
 
 
+def verify_vot_only_api() -> None:
+    core_code = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (CORE_ANALYSIS_HEADER, CORE_ANALYSIS_SOURCE)
+    )
+    removed_api = (
+        "AnalysisKind",
+        "compatibilityKeys",
+        "ComparisonResult",
+        "MetricComparison",
+        "FrequencyOverlay",
+        "TimeSeries",
+        "FrequencySeries",
+        "compareCompatibleMetrics",
+        "normalizeTimeSeriesForOverlay",
+        "interpolateCommonFrequencyGrid",
+        "confirmVOTBoundaries",
+        "TargetReferenceSegment",
+        "SegmentAnalysisSelection",
+    )
+    remaining = [item for item in removed_api if item in core_code]
+    if remaining:
+        raise AssertionError(f"comparison/overlay API remains in the VOT core: {remaining!r}")
+
+    required_vot_api = ("analyseVOT", "AnalysisResult_toTsv", "writeSegmentAnalysisTsvAtomically")
+    missing = [item for item in required_vot_api if item not in core_code]
+    if missing:
+        raise AssertionError(f"VOT result APIs are missing from the core: {missing!r}")
+
+    test_code = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (CORE_TEST_SOURCE, CORE_TEST_ENUMS, VOT_SCRIPT)
+    )
+    if "CHECK_SEGMENT_COMPARISON" in test_code or "CheckSegmentComparison" in test_code:
+        raise AssertionError("comparison-only C++ tests remain registered or invoked")
+
+
 def main() -> None:
     core_output_dir = Path.home()
     core_prefix = f"praat-segment-acoustic-core-{uuid.uuid4().hex}"
@@ -126,6 +167,7 @@ def main() -> None:
             run_praat(core_script, "C++ Sound/LongSound object actions")
             run_praat(VOT_SCRIPT, "C++ VOT acoustic regression")
             verify_comparison_editor_removed()
+            verify_vot_only_api()
 
             core_zero = read_rows(core_files[0])
             zero = assert_metric(core_zero, "vot_ms", unit="ms")
