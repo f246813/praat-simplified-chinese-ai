@@ -67,6 +67,7 @@ enums_begin (kPraatTests, 0)
 	enums_add (kPraatTests, 47, TIME_NS_DATE, U"TimeNsDate")
 	enums_add (kPraatTests, 48, TIME_MELDER_CLOCK, U"TimeMelderClock")
 	enums_add (kPraatTests, 49, TIME_STOPWATCH, U"TimeStopwatch")
-enums_end (kPraatTests, 49, CHECK_RANDOM_1009_2009)
+	enums_add (kPraatTests, 50, CHECK_SEGMENT_ANALYSIS_RESULT, U"CheckSegmentAnalysisResult")
+enums_end (kPraatTests, 50, CHECK_RANDOM_1009_2009)
 
 /* End of file Praat_tests_enums.h */

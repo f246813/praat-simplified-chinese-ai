@@ -31,6 +31,7 @@
 #include "praat.h"
 #include "NUM2.h"
 #include "Sound.h"
+#include "SegmentAcousticAnalysis.h"
 
 #include "enums_getText.h"
 #include "Praat_tests_enums.h"
@@ -696,6 +697,45 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			for (int64 i = 1; i <= n; i ++)
 				Melder_stopwatch();
 			t = stopwatch ();
+		} break;
+		case kPraatTests::CHECK_SEGMENT_ANALYSIS_RESULT: {
+			AnalysisResult target {};
+			target.schemaVersion = 1;
+			target.kind = AnalysisKind::VOT;
+			target.source.source.displayName = U"synthetic";
+			target.source.startTime = 0.0;
+			target.source.endTime = 1.0;
+			target.metrics.push_back ({ U"duration", U"ms", 0.0, MetricStatus::measured, U"" });
+			target.metrics.push_back ({ U"A1-P0", U"dB", {}, MetricStatus::unavailable, U"no P0 peak" });
+			Melder_assert (target.metrics [0].value.has_value() && target.metrics [0].value.value() == 0.0);
+			Melder_assert (! target.metrics [1].value.has_value());
+			autoMelderString tsv;
+			AnalysisResult_toTsv (target, & tsv);
+			Melder_assert (str32str (tsv.string, U"schema_version\tanalysis_kind\tmetric_id\tvalue\tunit\tstatus\treason") != nullptr);
+			Melder_assert (str32str (tsv.string, U"1\tVOT\tduration\t0\tms\tmeasured") != nullptr);
+			Melder_assert (str32str (tsv.string, U"1\tVOT\tA1-P0\t\tdB\tunavailable\tno P0 peak") != nullptr);
+
+			AnalysisResult reference = target;
+			target.parameters.compatibilityKeys.push_back (U"windowLength");
+			target.parameters.values.push_back ({ U"windowLength", U"25", U"ms" });
+			reference.parameters.compatibilityKeys.push_back (U"windowLength");
+			reference.parameters.values.push_back ({ U"windowLength", U"50", U"ms" });
+			const ComparisonResult incompatible = compareCompatibleMetrics (target, reference);
+			Melder_assert (incompatible.rows.size() == 2);
+			Melder_assert (! incompatible.rows [0].difference.has_value());
+			Melder_assert (! incompatible.rows [0].reason.empty());
+			Melder_assert (incompatible.rows [0].targetValue.value() == 0.0);
+			Melder_assert (incompatible.rows [0].referenceValue.value() == 0.0);
+
+			AnalysisResult compatibleReference = reference;
+			compatibleReference.parameters.values [0].value = U"25";
+			compatibleReference.metrics [0].value = 10.0;
+			const ComparisonResult compatible = compareCompatibleMetrics (target, compatibleReference);
+			Melder_assert (compatible.rows [0].difference.value() == -10.0);
+			Melder_assert (compatible.rows [0].targetStatus == MetricStatus::measured);
+			Melder_assert (compatible.rows [1].targetStatus == MetricStatus::unavailable);
+			Melder_assert (! compatible.rows [1].difference.has_value());
+			Melder_assert (str32str (compatible.rows [1].reason.c_str(), U"no P0 peak") != nullptr);
 		} break;
 	}
 	MelderInfo_writeLine (Melder_single (t * 1e9 / n), U" nanoseconds per iteration");

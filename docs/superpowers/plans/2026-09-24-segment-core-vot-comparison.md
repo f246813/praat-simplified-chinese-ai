@@ -41,15 +41,14 @@
 - Modify: `fon/meson.build`
 - Modify: `fon/Praat_tests_enums.h`
 - Modify: `fon/Praat_tests.cpp`
-- Test: `test/fon/segmentAcousticCore.praat`
 
 **Interfaces:**
-- Produces: `SourceIdentity`, `SegmentMetadata`, borrowed `SegmentInput`, `AnalysisKind`, `ParameterSnapshot`, `TimeSeries`, `MetricStatus`, `MetricResult`, `AnalysisResult`, `ComparisonResult`, and `compareCompatibleMetrics(...)`.
+- Produces: `SourceIdentity`, `SegmentMetadata`, borrowed `SegmentInput`, `AnalysisKind`, `ParameterSnapshot`, `TimeSeries`, `MetricStatus`, `MetricResult`, `AnalysisResult`, `ComparisonResult`, `compareCompatibleMetrics(...)`, and the shared `AnalysisResult_toTsv(...)` formatter.
 - `AnalysisResult` contains a `schemaVersion` and generic result/parameter extension points so a later design may add F0 normalization fields without changing current exported columns; this work leaves those future values absent.
 - `AnalysisResult` stores metadata by value and must never retain the temporary extracted `Sound *`.
 - `fon/Makefile` and `fon/meson.build` must list every new C++ translation unit.
 
-- [ ] **Step 1: Add a failing result-contract case**
+- [x] **Step 1: Add a failing result-contract case**
 
 Add a `CHECK_SEGMENT_ANALYSIS_RESULT` item to `fon/Praat_tests_enums.h`. In `fon/Praat_tests.cpp`, add a case that constructs measured-zero and unavailable metrics, then asserts the zero remains present, unavailable has no value, and incompatible parameter snapshots yield no difference.
 
@@ -62,11 +61,11 @@ case kPraatTests::CHECK_SEGMENT_ANALYSIS_RESULT: {
 } break;
 ```
 
-- [ ] **Step 2: Build to confirm the new case fails to compile**
+- [x] **Step 2: Build to confirm the new case fails to compile**
 
 Run the Windows build command in Task 6 after the test edit. Expected: missing segment-analysis types or enum case; save the build output in the task notes.
 
-- [ ] **Step 3: Implement the shared value types and compatibility function**
+- [x] **Step 3: Implement the shared value types and compatibility function**
 
 Define the spec's source, result, parameter-snapshot and comparison types in `fon/SegmentAcousticAnalysis.h`. Implement `compareCompatibleMetrics` in `.cpp`: match rows by metric ID, require identical units and compatibility keys, compute `target - reference` only when both values exist, and preserve each side's status and reason otherwise. Add the source file to both build manifests.
 
@@ -79,14 +78,14 @@ struct MetricResult {
 };
 ```
 
-- [ ] **Step 4: Add and run the core script smoke test**
+- [x] **Step 4: Add and run the result serialization contract test**
 
-Create `test/fon/segmentAcousticCore.praat` with a synthetic Sound, invoke the file-writing action, read the generated TSV and assert the schema version, metric ID, zero value, unavailable reason and row units. Run `Praat` > `Praat test...` with `CHECK_SEGMENT_ANALYSIS_RESULT`, then run the built executable against this script. Expected: all assertions pass.
+Extend `CHECK_SEGMENT_ANALYSIS_RESULT` to format a synthetic `AnalysisResult` through `AnalysisResult_toTsv(...)`, then assert the schema version, metric ID, measured zero, explicit unavailable field, reason and units. Run `Praat` > `Praat test...` with `CHECK_SEGMENT_ANALYSIS_RESULT`. The script-level writer smoke test moves to Task 4, when the VOT object action is registered.
 
-- [ ] **Step 5: Commit the shared contract**
+- [x] **Step 5: Commit the shared contract**
 
 ```powershell
-git add fon/SegmentAcousticAnalysis.h fon/SegmentAcousticAnalysis.cpp fon/Makefile fon/meson.build fon/Praat_tests_enums.h fon/Praat_tests.cpp test/fon/segmentAcousticCore.praat
+git add fon/SegmentAcousticAnalysis.h fon/SegmentAcousticAnalysis.cpp fon/Makefile fon/meson.build fon/Praat_tests_enums.h fon/Praat_tests.cpp
 git commit -m "feat: add shared segment analysis contract"
 ```
 
@@ -172,6 +171,7 @@ git commit -m "feat: move VOT estimation into C++ core"
 - Test: `ai/tests/test_segment_analysis_tools.py`
 - Test: `ai/tests/verify_segment_analysis_templates.py`
 - Test: `test/fon/segmentAcousticVOT.praat`
+- Test: `test/fon/segmentAcousticCore.praat`
 
 **Interfaces:**
 - Produces: a native editor action `辅音分析 > VOT...` and Sound/LongSound script action `Write VOT analysis to file...`; both call `analyseVOT` and the shared serializer.
@@ -205,12 +205,12 @@ Register matching actions in `fon/praat_Sound.cpp`; extract LongSound only for t
 
 - [ ] **Step 4: Run adapter and real-Praat template tests**
 
-Run the new unittest file and `ai/tests/verify_segment_analysis_templates.py`. The verifier must create the synthetic Sound in Praat, invoke the C++ action, read the result file and verify the numeric value/status. Expected: no `writeInfoLine`/Info popup and no Python-side acoustic calculation.
+Run the new unittest file and `ai/tests/verify_segment_analysis_templates.py`. The verifier must create a synthetic Sound in Praat, invoke the C++ VOT action, read its TSV and verify schema, metric ID, explicit zero/negative values, units, status and reason. Run both `test/fon/segmentAcousticCore.praat` and `test/fon/segmentAcousticVOT.praat`; the core script must check the same shared formatter through an object action. Expected: no `writeInfoLine`/Info popup and no Python-side acoustic calculation.
 
 - [ ] **Step 5: Commit the entry-point migration**
 
 ```powershell
-git add fon/praat_Sound.cpp ai/praat_ai/tools.py ai/tests/test_segment_analysis_tools.py ai/tests/verify_segment_analysis_templates.py test/fon/segmentAcousticVOT.praat
+git add fon/praat_Sound.cpp ai/praat_ai/tools.py ai/tests/test_segment_analysis_tools.py ai/tests/verify_segment_analysis_templates.py test/fon/segmentAcousticVOT.praat test/fon/segmentAcousticCore.praat
 git commit -m "feat: route VOT tools through C++ analysis"
 ```
 
