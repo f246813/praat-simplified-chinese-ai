@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -14,13 +15,14 @@ from praat_ai import tools  # noqa: E402
 
 
 PROJECT = Path(__file__).resolve().parents[2]
-PRAAT = PROJECT / "Praat.exe"
+PRAAT = Path(os.environ.get("PRAAT_EXE", str(PROJECT / "Praat.exe")))
 CORE_SCRIPT = PROJECT / "test/fon/segmentAcousticCore.praat"
 VOT_SCRIPT = PROJECT / "test/fon/segmentAcousticVOT.praat"
-COMPARISON_SCRIPT = PROJECT / "test/fon/segmentAcousticComparison.praat"
-CORE_ANALYSIS_SOURCE = PROJECT / "fon/SegmentAcousticAnalysis.cpp"
-COMPARISON_EDITOR_SOURCE = PROJECT / "foned/SegmentAcousticEditor.cpp"
+FONED_MAKEFILE = PROJECT / "foned/Makefile"
+FONED_MESON = PROJECT / "foned/meson.build"
 SOUND_ANALYSIS_AREA_SOURCE = PROJECT / "foned/SoundAnalysisArea.cpp"
+EDITOR_SOURCE = PROJECT / "foned/SegmentAcousticEditor.cpp"
+EDITOR_HEADER = PROJECT / "foned/SegmentAcousticEditor.h"
 VOT_SOUND = (
     'Create Sound from formula: "vot-fixture", 1, 0, 0.6, 44100, '
     '~ if x < 0.30 then 0 else if x < 0.33 then 0.3 * randomGauss (0, 1) '
@@ -88,61 +90,19 @@ def verify_generated_template(root: Path, name: str, arguments: dict[str, object
     return read_rows(context.result_path.with_suffix(".vot.tsv"))
 
 
-def verify_comparison_editor(root: Path) -> None:
-    editor_source = COMPARISON_EDITOR_SOURCE.read_text(encoding="utf-8")
-    sound_area_source = SOUND_ANALYSIS_AREA_SOURCE.read_text(encoding="utf-8")
-    core_source = CORE_ANALYSIS_SOURCE.read_text(encoding="utf-8")
-    required_editor_contract = (
-        "GuiFileSelect_getInfileNames",
-        "LongSound_open",
-        "Sound_readFromSoundFile",
-        "classLongSound",
-        "Data_copy",
-        "GuiOptionMenu_addOption",
-        "TargetReferenceSegment_clearReference",
-        "TargetReferenceSegment_setTarget",
-        "referenceMono = Sound_resample",
-        "Spectrogram_paintInside",
-        "Sound_draw",
-        "TargetReferenceSegment_setReference",
-        "analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates)",
-        "confirmVOTBoundaries (",
-        "compareCompatibleMetrics",
-        "ComparisonResult_toTsv",
-        "normalizeTimeSeriesForOverlay",
-        "GuiFileSelect_getOutfileName",
-        "writeSegmentAnalysisTsvAtomically",
-        "boundaryBurstField",
-        "boundaryVoicingField",
-        "confirmAndCompareBoundaries",
-        "确认边界并比较",
-    )
-    missing = [fragment for fragment in required_editor_contract if fragment not in editor_source]
-    if missing:
-        raise AssertionError(f"comparison editor is missing required native operations: {missing!r}")
-    required_core_contract = (
-        "interpolateCommonFrequencyGrid",
-        "target Nyquist",
-        "different sample rates",
-        "frequency_grid_hz",
-        "target_duration_s",
-        "praat_version",
-        "target_reason",
-        "reference_reason",
-    )
-    missing_core = [fragment for fragment in required_core_contract if fragment not in core_source]
-    if missing_core:
-        raise AssertionError(f"comparison core is missing required compatibility/export operations: {missing_core!r}")
-    if 'U"目标/参照比较..."' not in sound_area_source:
-        raise AssertionError("Sound editor does not expose the target/reference comparison command")
+def verify_comparison_editor_removed() -> None:
+    if EDITOR_SOURCE.exists() or EDITOR_HEADER.exists():
+        raise AssertionError("comparison editor files are still present")
 
-    descriptor_script = root / "segmentComparisonDescriptor.praat"
-    descriptor_script.write_text(
-        'Praat test: "CheckSegmentComparisonDescriptor", "", "", "", ""\n',
-        encoding="utf-8",
-    )
-    run_praat(descriptor_script, "target/reference Sound and LongSound isolation")
-    run_praat(COMPARISON_SCRIPT, "comparison compatibility, normalized overlays, and export")
+    build_sources = FONED_MAKEFILE.read_text(encoding="utf-8") + FONED_MESON.read_text(encoding="utf-8")
+    if "SegmentAcousticEditor.cpp" in build_sources:
+        raise AssertionError("foned build files still register SegmentAcousticEditor")
+
+    sound_area_source = SOUND_ANALYSIS_AREA_SOURCE.read_text(encoding="utf-8")
+    removed_editor_items = ("SegmentAcousticEditor", "menu_cb_segmentVOT", "辅音分析", "目标/参照比较")
+    remaining = [item for item in removed_editor_items if item in sound_area_source]
+    if remaining:
+        raise AssertionError(f"Sound editor still references comparison workflow: {remaining!r}")
 
 
 def main() -> None:
@@ -165,7 +125,7 @@ def main() -> None:
             legacy_temp_path.write_text("unrelated pre-existing temp file", encoding="utf-8")
             run_praat(core_script, "C++ Sound/LongSound object actions")
             run_praat(VOT_SCRIPT, "C++ VOT acoustic regression")
-            verify_comparison_editor(root)
+            verify_comparison_editor_removed()
 
             core_zero = read_rows(core_files[0])
             zero = assert_metric(core_zero, "vot_ms", unit="ms")
@@ -218,7 +178,7 @@ def main() -> None:
             legacy_temp_path.unlink(missing_ok=True)
             core_wave.unlink(missing_ok=True)
 
-    print("SEGMENT_ANALYSIS_TEMPLATE_PASS: VOT contract, target/reference comparison, overlays, and export")
+    print("SEGMENT_ANALYSIS_TEMPLATE_PASS: VOT contract and AI template bridge")
 
 
 if __name__ == "__main__":

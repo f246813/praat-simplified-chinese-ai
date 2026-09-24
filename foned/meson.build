@@ -3,7 +3,7 @@
 
 sources = '''
 	SoundRecorder.cpp
-   FunctionArea.cpp SoundArea.cpp SoundAnalysisArea.cpp SegmentAcousticEditor.cpp TextGridArea.cpp
+	FunctionArea.cpp SoundArea.cpp SoundAnalysisArea.cpp TextGridArea.cpp
    SpectrumArea.cpp PointArea.cpp PitchArea.cpp SpectrogramArea.cpp
    RealTierArea.cpp PitchTierArea.cpp IntensityTierArea.cpp DurationTierArea.cpp AmplitudeTierArea.cpp
    FormantGridArea.cpp MovieArea.cpp
