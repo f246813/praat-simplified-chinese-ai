@@ -302,3 +302,43 @@ foned/FunctionEditor.cpp:2107    PraatAiControl_noteEditorSelection (…)
    的单测覆盖 1.0/1.25/1.5，但没人真的在缩放机器上看过。
 5. `verify_*.py` 手动脚本越来越多（19 个），要合并的话记得同步 `ai/README.zh-CN.md`
    里的引用（`verify_chat_live.py` 与 `verify_chat_window_ui.py --ask` 有重叠）。
+
+## 7. 段级目标/参照声学分析（2026-09）
+
+共享 C++ API 位于 `fon/SegmentAcousticAnalysis.h/.cpp`，Sound/LongSound 对象动作、AI 的
+VOT 模板和 `foned/SegmentAcousticEditor` 都调用它。当前可运行的是 VOT 手动边界核心及
+自动候选估计。编辑器可分别选目标和参照来源/范围，运行候选比较、查看指标状态和差值、
+在波形上查看 burst/voicing 候选标记，并把结果导出为 UTF-8 TSV。候选仍是 warning，不能
+当作用户确认过的测量值。
+
+通用比较核心会保留两侧来源、对象 ID/文件路径、绝对起止时间、真实时长、采样率、声道、
+分析类别、参数快照和可选音类元数据。只有指标定义、单位和兼容参数相同时才计算
+target-reference；带宽超过任一侧 Nyquist 时保留两侧读数并写明原因。采样率不同时保留
+原始测量并提示 warning。时间曲线在绘图副本中映射到 0–100%，频谱曲线插值到两侧都覆盖的
+共同频率网格；TSV 保留实际时间和共同网格。缺失值写为空字段并带 unavailable 状态，数值
+0 保留为 0。
+
+当前尚未实现元音鼻化、鼻辅音和 R 音测量函数。编辑器中选择这些类别后会明确提示算法未
+实现，不会借用 VOT 或通用谱指标代替。VOT 候选的 burst/voicing 边界目前显示为标记，比较
+编辑器还没有拖动/输入后重新确认边界的控件；正式报告前仍需用已支持的显式边界对象动作
+或后续 UI 完成人工确认。不同长度片段的时长和范围始终按原始秒值导出。
+
+回归命令（从仓库根目录运行，使用项目 Python）：
+
+```powershell
+$env:PYTHONPATH = 'ai'; $env:PYTHONIOENCODING = 'utf-8'
+& 'D:\Praat-work\venv-ai\Scripts\python.exe' -m unittest discover -s ai/tests
+& 'D:\Praat-work\venv-ai\Scripts\python.exe' ai/tests/verify_segment_analysis_templates.py
+$env:MSYSTEM = 'CLANG64'
+# 然后从 MSYS2 CLANG64 shell 构建：make PRAAT_COMPILER=clang -j16
+```
+
+`verify_segment_analysis_templates.py` 会运行 `test/fon/segmentAcousticCore.praat`、
+`segmentAcousticVOT.praat`、`segmentAcousticComparison.praat` 及生成的 AI 模板。真实 GUI
+手工复核步骤：在 Praat 打开 Sound/LongSound 编辑器，从“辅音分析 → 目标/参照比较...”进入；
+分别应用来源与范围，运行“分析并比较 VOT 候选”，确认两侧波形标记、状态/差值、绝对范围，
+再导出 TSV 检查来源、采样率、真实时长和空值。当前自动测试覆盖了 C++ 契约和原生构建；
+窗口截图接口在本机失败，尚未完成这项视觉核验。
+
+科学验收仍需带人工边界/音类标注的普通话样本：鼻化至少覆盖 `/a i ə/` 环境，另需鼻辅音、
+擦音/塞擦音和近音类 r；合成 VOT 只能证明工程链路，不能替代真实录音复核或算法有效性。

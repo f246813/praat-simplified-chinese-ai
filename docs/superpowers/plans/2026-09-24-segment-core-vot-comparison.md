@@ -271,19 +271,19 @@ git commit -m "feat: add native segment comparison editor"
 **Interfaces:**
 - Produces: a shared comparison renderer for value/unit/difference/status/reason, normalized-time plot coordinates, and TSV/CSV export from `ComparisonResult`.
 
-- [ ] **Step 1: Add compatibility and export tests**
+- [x] **Step 1: Add compatibility and export tests**
 
 Test equal settings, a changed band edge, different sample rates with a common band, and insufficient Nyquist bandwidth. Assert compatible rows contain `target-reference`; incompatible rows retain both original values, have no difference and name the reason. Assert real interval durations remain unchanged in exported fields.
 
-- [ ] **Step 2: Implement common comparison rows and output serialization**
+- [x] **Step 2: Implement common comparison rows and output serialization**
 
 Use `compareCompatibleMetrics`; add target/reference labels and source/range to each result. Export schema version, source, boundaries, sample rate, channel, analysis kind, parameters, metrics, difference, status and reason. Serialize unavailable values as an explicit empty/NA field, never numeric zero.
 
-- [ ] **Step 3: Add labeled overlays without rewriting source times**
+- [x] **Step 3: Add labeled overlays without rewriting source times**
 
 For plots only, map each curve's absolute time interval to 0–100% relative duration. Label color/legend with source name and absolute range. For frequency plots, interpolate onto and record one common frequency grid; retain original sample rates and issue a warning when they differ.
 
-- [ ] **Step 4: Run required regression and build checks**
+- [x] **Step 4: Run required regression and build checks**
 
 ```powershell
 $venv = 'D:\Praat-work\venv-ai\Scripts\python.exe'
@@ -294,7 +294,7 @@ $env:PYTHONPATH = 'ai'; $env:PYTHONIOENCODING = 'utf-8'
 
 Rebuild with Task 6's MSYS2 command and run the two new `test/fon` scripts. Expected: all existing AI tests and templates pass; no user configuration or unrelated fixture is changed.
 
-- [ ] **Step 5: Update handoff, inspect the diff and commit**
+- [x] **Step 5: Update handoff, inspect the diff and commit**
 
 Document the shared API/actions, how to run its tests, manual GUI steps, and the remaining Mandarin sample validation gate in `ai/HANDOFF.md` and `ai/README.zh-CN.md`. Review only the isolated worktree diff, then commit the plan deliverable.
 

@@ -2,6 +2,25 @@
 
 本目录在 `praat-simplified-chinese` 的 Python 桥接之上实现 Qwen3.5-0.8B 本地纠音前端。
 
+## 段级目标/参照声学分析
+
+Praat 原生 Sound/LongSound 编辑器的“辅音分析 → 目标/参照比较...”可分别设置两段来源和
+绝对时间范围。当前已接入 VOT 自动候选分析、对照值/状态、波形候选标记和 UTF-8 TSV 导出；
+候选边界仍需人工确认。目标/参照采样率不同会保留原始读数并提示；参数或 Nyquist 带宽
+不兼容时显示两侧值但不计算差值。导出包含来源、原始范围/时长、采样率、参数、状态、原因，
+缺失值为空字段，数值 0 不会被当成缺失值。
+
+元音鼻化、鼻辅音和 R 音的分析核心仍未实现，选择这些类别会显示明确提示。时间曲线和频谱
+共同网格的叠图接口已就位，但 VOT 结果当前没有这类连续曲线；编辑器会显示相应占位说明。
+候选边界拖动/手动确认控件也仍待补齐。科学验收需另用人工标注的普通话样本，合成音和
+自动化契约测试不能证明测量指标对普通话有效。
+
+```powershell
+$env:PYTHONPATH = 'ai'; $env:PYTHONIOENCODING = 'utf-8'
+& 'D:\Praat-work\venv-ai\Scripts\python.exe' -m unittest discover -s ai/tests
+& 'D:\Praat-work\venv-ai\Scripts\python.exe' ai/tests/verify_segment_analysis_templates.py
+```
+
 ## 快速开始
 
 1. 安装 Python 3.10 或更高版本，并在 Praat 的 `Python settings...` 中设置解释器路径。

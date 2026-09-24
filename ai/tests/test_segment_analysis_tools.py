@@ -52,6 +52,14 @@ class SegmentAnalysisToolTests(unittest.TestCase):
         self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
         self.assertIn("readFile$", script)
 
+    def test_candidate_export_keeps_the_selected_absolute_interval(self) -> None:
+        script = tools._build_vot({"object": "Sound tone"}, self.context)
+
+        self.assertIn("tmin = 0.250000", script)
+        self.assertIn("tmax = 0.500000", script)
+        self.assertIn("Write VOT analysis to file: tmin, tmax, undefined, undefined", script)
+        self.assertIn("VOT 候选（C++ 自动估计，需人工确认）", script)
+
     def test_one_sided_boundary_fails_before_script_dispatch(self) -> None:
         with self.assertRaises(tools.ToolError):
             tools._build_vot(

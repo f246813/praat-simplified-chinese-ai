@@ -17,6 +17,8 @@ PROJECT = Path(__file__).resolve().parents[2]
 PRAAT = PROJECT / "Praat.exe"
 CORE_SCRIPT = PROJECT / "test/fon/segmentAcousticCore.praat"
 VOT_SCRIPT = PROJECT / "test/fon/segmentAcousticVOT.praat"
+COMPARISON_SCRIPT = PROJECT / "test/fon/segmentAcousticComparison.praat"
+CORE_ANALYSIS_SOURCE = PROJECT / "fon/SegmentAcousticAnalysis.cpp"
 COMPARISON_EDITOR_SOURCE = PROJECT / "foned/SegmentAcousticEditor.cpp"
 SOUND_ANALYSIS_AREA_SOURCE = PROJECT / "foned/SoundAnalysisArea.cpp"
 VOT_SOUND = (
@@ -84,6 +86,7 @@ def verify_generated_template(root: Path, name: str, arguments: dict[str, object
 def verify_comparison_editor(root: Path) -> None:
     editor_source = COMPARISON_EDITOR_SOURCE.read_text(encoding="utf-8")
     sound_area_source = SOUND_ANALYSIS_AREA_SOURCE.read_text(encoding="utf-8")
+    core_source = CORE_ANALYSIS_SOURCE.read_text(encoding="utf-8")
     required_editor_contract = (
         "GuiFileSelect_getInfileNames",
         "LongSound_open",
@@ -97,10 +100,27 @@ def verify_comparison_editor(root: Path) -> None:
         "Spectrogram_paintInside",
         "Sound_draw",
         "TargetReferenceSegment_setReference",
+        "analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates)",
+        "compareCompatibleMetrics",
+        "ComparisonResult_toTsv",
+        "normalizeTimeSeriesForOverlay",
+        "GuiFileSelect_getOutfileName",
+        "MelderFile_writeText_e",
     )
     missing = [fragment for fragment in required_editor_contract if fragment not in editor_source]
     if missing:
         raise AssertionError(f"comparison editor is missing required native operations: {missing!r}")
+    required_core_contract = (
+        "interpolateCommonFrequencyGrid",
+        "target Nyquist",
+        "different sample rates",
+        "frequency_grid_hz",
+        "target_duration_s",
+        "praat_version",
+    )
+    missing_core = [fragment for fragment in required_core_contract if fragment not in core_source]
+    if missing_core:
+        raise AssertionError(f"comparison core is missing required compatibility/export operations: {missing_core!r}")
     if 'U"目标/参照比较..."' not in sound_area_source:
         raise AssertionError("Sound editor does not expose the target/reference comparison command")
 
@@ -110,6 +130,7 @@ def verify_comparison_editor(root: Path) -> None:
         encoding="utf-8",
     )
     run_praat(descriptor_script, "target/reference Sound and LongSound isolation")
+    run_praat(COMPARISON_SCRIPT, "comparison compatibility, normalized overlays, and export")
 
 
 def main() -> None:
@@ -175,7 +196,7 @@ def main() -> None:
                 path.unlink(missing_ok=True)
             core_wave.unlink(missing_ok=True)
 
-    print("SEGMENT_ANALYSIS_TEMPLATE_PASS: VOT contract, LongSound, and target/reference isolation")
+    print("SEGMENT_ANALYSIS_TEMPLATE_PASS: VOT contract, target/reference comparison, overlays, and export")
 
 
 if __name__ == "__main__":

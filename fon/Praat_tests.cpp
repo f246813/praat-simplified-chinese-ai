@@ -38,6 +38,7 @@
 #include "enums_getValue.h"
 #include "Praat_tests_enums.h"
 #include <string>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <random>
@@ -916,6 +917,99 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (pair.target.metadata.startTime == 0.25 && pair.target.metadata.endTime == 0.50);
 			TargetReferenceSegment_clearReference (& pair);
 			Melder_assert (! pair.reference && pair.target.metadata.source.objectId.value() == 17);
+		} break;
+		case kPraatTests::CHECK_SEGMENT_COMPARISON_OUTPUT: {
+			AnalysisResult target {};
+			target.kind = AnalysisKind::VOT;
+			target.source.source.displayName = U"target audio";
+			target.source.source.sampleRate = 16000.0;
+			target.source.source.channels = 1;
+			target.source.startTime = 1.25;
+			target.source.endTime = 2.25;
+			target.source.annotation.language = U"zh";
+			target.parameters.values.push_back ({ U"maximumFrequency", U"5000", U"Hz" });
+			target.parameters.compatibilityKeys.push_back (U"maximumFrequency");
+			target.parameters.values.push_back ({ U"windowLength", U"0.025", U"s" });
+			target.parameters.compatibilityKeys.push_back (U"windowLength");
+			target.metrics.push_back ({ U"energy_ratio", U"ratio", 0.4, MetricStatus::measured, U"" });
+			target.metrics.push_back ({ U"missing_metric", U"dB", {}, MetricStatus::unavailable, U"no peak" });
+			target.frequencyCurves.push_back ({ U"energy_ratio", U"ratio", { 500.0, 1000.0, 1500.0 }, { 0.5, 1.0, 1.5 } });
+
+			AnalysisResult reference = target;
+			reference.source.source.displayName = U"reference audio";
+			reference.source.source.sampleRate = 22050.0;
+			reference.source.startTime = 8.0;
+			reference.source.endTime = 8.25;
+			reference.metrics [0].value = 0.2;
+			reference.frequencyCurves [0] = { U"energy_ratio", U"ratio", { 600.0, 1000.0, 1400.0 }, { 1.2, 2.0, 2.8 } };
+			const ComparisonResult commonBand = compareCompatibleMetrics (target, reference);
+			Melder_assert (commonBand.rows.size() == 2);
+			Melder_assert (std::abs (commonBand.rows [0].difference.value() - 0.2) < 1.0e-12);
+			Melder_assert (! commonBand.rows [0].warning.empty());
+			Melder_assert (commonBand.rows [1].reason.find (U"no peak") != std::u32string::npos);
+			Melder_assert (commonBand.frequencyOverlays.size() == 1);
+			Melder_assert (commonBand.frequencyOverlays [0].frequencyHz.size() == 3);
+			Melder_assert (commonBand.frequencyOverlays [0].frequencyHz [0] == 600.0 && commonBand.frequencyOverlays [0].frequencyHz [2] == 1400.0);
+
+			AnalysisResult changedBand = reference;
+			changedBand.parameters.values [0].value = U"6000";
+			const ComparisonResult incompatibleBand = compareCompatibleMetrics (target, changedBand);
+			Melder_assert (! incompatibleBand.rows [0].difference);
+			Melder_assert (incompatibleBand.rows [0].targetValue.value() == 0.4);
+			Melder_assert (incompatibleBand.rows [0].referenceValue.value() == 0.2);
+			Melder_assert (! incompatibleBand.rows [0].reason.empty());
+			Melder_assert (incompatibleBand.frequencyOverlays.size() == 1 && ! incompatibleBand.frequencyOverlays [0].reason.empty());
+
+			AnalysisResult belowNyquist = target;
+			belowNyquist.source.source.sampleRate = 8000.0;
+			const ComparisonResult insufficientBandwidth = compareCompatibleMetrics (belowNyquist, reference);
+			Melder_assert (! insufficientBandwidth.rows [0].difference);
+			Melder_assert (insufficientBandwidth.rows [0].reason.find (U"Nyquist") != std::u32string::npos);
+			Melder_assert (insufficientBandwidth.frequencyOverlays.size() == 1 && ! insufficientBandwidth.frequencyOverlays [0].reason.empty());
+
+			TimeSeries curve { U"energy_ratio", U"ratio", { 1.25, 1.75, 2.25 }, { 0.2, 0.4, 0.3 } };
+			const NormalizedTimeSeries normalized = normalizeTimeSeriesForOverlay (curve, target.source);
+			Melder_assert (normalized.relativePercent.size() == 3);
+			Melder_assert (normalized.relativePercent [0] == 0.0 && normalized.relativePercent [1] == 50.0 && normalized.relativePercent [2] == 100.0);
+			Melder_assert (curve.absoluteTimes [1] == 1.75);
+
+			const FrequencySeries targetSpectrum { U"spectrum", U"dB", { 500.0, 1000.0, 1500.0 }, { 0.5, 1.0, 1.5 } };
+			const FrequencySeries referenceSpectrum { U"spectrum", U"dB", { 600.0, 1000.0, 1400.0 }, { 1.2, 2.0, 2.8 } };
+			const FrequencyOverlay overlay = interpolateCommonFrequencyGrid (targetSpectrum, 16000.0, referenceSpectrum, 22050.0);
+			Melder_assert (overlay.frequencyHz.size() == 3 && overlay.frequencyHz [0] == 600.0 && overlay.frequencyHz [2] == 1400.0);
+			Melder_assert (std::abs (overlay.targetValues [0] - 0.6) < 1.0e-12);
+			Melder_assert (overlay.sampleRatesDiffer && ! overlay.warning.empty());
+			bool rejectedAboveNyquist = false;
+			try {
+				const FrequencySeries highFrequency { U"spectrum", U"dB", { 5000.0, 6000.0, 7000.0 }, { 1.0, 2.0, 3.0 } };
+				(void) interpolateCommonFrequencyGrid (highFrequency, 8000.0, highFrequency, 16000.0);
+			} catch (MelderError) {
+				Melder_clearError ();
+				rejectedAboveNyquist = true;
+			}
+			Melder_assert (rejectedAboveNyquist);
+
+			autoMelderString serialized;
+			ComparisonResult_toTsv (commonBand, & serialized);
+			const std::u32string serializedText = serialized.string;
+			const size_t headerEnd = serializedText.find (U'\n');
+			const size_t firstRowEnd = serializedText.find (U'\n', headerEnd + 1);
+			auto tabCount = [] (const std::u32string &text, size_t begin, size_t end) {
+				return std::count (text.begin() + begin, text.begin() + end, U'\t');
+			};
+			Melder_assert (headerEnd != std::u32string::npos && firstRowEnd != std::u32string::npos);
+			Melder_assert (tabCount (serializedText, 0, headerEnd) == tabCount (serializedText, headerEnd + 1, firstRowEnd));
+			Melder_assert (str32str (serialized.string, U"schema_version\tpraat_version\tmetric_id\ttarget_source") != nullptr);
+			Melder_assert (str32str (serialized.string, U"target_start_s\ttarget_end_s\ttarget_duration_s") != nullptr);
+			Melder_assert (str32str (serialized.string, U"frequency_grid_hz\ttarget_frequency_values\treference_frequency_values") != nullptr);
+			Melder_assert (str32str (serialized.string, U"target audio") != nullptr && str32str (serialized.string, U"reference audio") != nullptr);
+			Melder_assert (str32str (serialized.string, U"1.25") != nullptr && str32str (serialized.string, U"8.25") != nullptr);
+			Melder_assert (str32str (serialized.string, U"\t2.25\t1\t16000\t1\tSound") != nullptr);
+			Melder_assert (str32str (serialized.string, U"\t8.25\t0.25\t22050\t1\tSound") != nullptr);
+			Melder_assert (str32str (serialized.string, U"maximumFrequency=5000 Hz") != nullptr);
+			Melder_assert (str32str (serialized.string, U"600; 1000; 1400") != nullptr);
+			Melder_assert (str32str (serialized.string, U"\tratio\t0.4\t0.2\t0.2\tmeasured\tmeasured") != nullptr);
+			Melder_assert (str32str (serialized.string, U"\tdB\t\t\t\tunavailable\tunavailable") != nullptr);
 		} break;
 	}
 	MelderInfo_writeLine (Melder_single (t * 1e9 / n), U" nanoseconds per iteration");

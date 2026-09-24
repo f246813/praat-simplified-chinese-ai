@@ -6,8 +6,10 @@
 #include "praat.h"
 #include "melder_files.h"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -37,10 +39,18 @@ struct SegmentEditorState {
 	GuiText endField [2] { nullptr, nullptr };
 	GuiLabel sourceStatus [2] { nullptr, nullptr };
 	GuiLabel previewStatus [2] { nullptr, nullptr };
+	GuiLabel comparisonSummary { nullptr };
 	GuiDrawingArea waveformArea [2] { nullptr, nullptr };
 	GuiDrawingArea spectrogramArea [2] { nullptr, nullptr };
+	GuiDrawingArea comparisonPlotArea { nullptr };
+	GuiDrawingArea frequencyPlotArea { nullptr };
 	autoGraphics waveformGraphics [2];
 	autoGraphics spectrogramGraphics [2];
+	autoGraphics comparisonPlotGraphics;
+	autoGraphics frequencyPlotGraphics;
+	std::optional<AnalysisResult> analyses [2];
+	std::optional<ComparisonResult> comparison;
+	std::vector<FrequencyOverlay> frequencyOverlays;
 	std::vector <SegmentSourceChoice> choices [2];
 	std::shared_ptr <SegmentSourceData> activeSource [2];
 	SegmentAnalysisSelection initialTarget;
@@ -57,6 +67,19 @@ SegmentAnalysisSelection &selectionFor (SegmentAcousticEditor me, integer side) 
 		return my selection.target;
 	Melder_assert (my selection.reference);
 	return my selection.reference.value();
+}
+
+void invalidateComparison (SegmentAcousticEditor me, integer side) {
+	SegmentEditorState *editorState = state (me);
+	editorState -> analyses [side].reset();
+	editorState -> comparison.reset();
+	editorState -> frequencyOverlays.clear();
+	if (editorState -> comparisonSummary)
+		GuiLabel_setText (editorState -> comparisonSummary, U"来源或范围已更改。重新运行“分析并比较 VOT 候选”后显示结果。");
+	if (editorState -> comparisonPlotGraphics)
+		Graphics_updateWs (editorState -> comparisonPlotGraphics.get());
+	if (editorState -> frequencyPlotGraphics)
+		Graphics_updateWs (editorState -> frequencyPlotGraphics.get());
 }
 
 void setStatus (SegmentAcousticEditor me, integer side, conststring32 message) {
@@ -150,6 +173,8 @@ void appendFileChoice (SegmentAcousticEditor me, integer side, const std::shared
 
 void syncSourceIdentity (SegmentAcousticEditor me, integer side, bool clearRange) {
 	SegmentEditorState *editorState = state (me);
+	if (clearRange)
+		invalidateComparison (me, side);
 	const std::shared_ptr<SegmentSourceData> source = editorState -> activeSource [side];
 	if (side == 1 && ! my selection.reference)
 		my selection.reference = SegmentAnalysisSelection {};
@@ -275,6 +300,7 @@ void applyRange (SegmentAcousticEditor me, integer side) {
 		TargetReferenceSegment_setTarget (& my selection, current);
 	else
 		TargetReferenceSegment_setReference (& my selection, current);
+	invalidateComparison (me, side);
 	setStatus (me, side, Melder_cat (U"范围已应用：", Melder_single (start), U"–", Melder_single (end), U" 秒；分析类型：",
 		current.analysisKind == AnalysisKind::VOT ? U"VOT" : current.analysisKind == AnalysisKind::RSegment ? U"R 音" :
 		current.analysisKind == AnalysisKind::NasalConsonant ? U"鼻音辅音" : U"元音鼻化"));
@@ -309,6 +335,22 @@ void renderPreview (SegmentAcousticEditor me, integer side, bool spectrogram) {
 			12.0, GuiControl_getHeight (editorState -> waveformArea [side]) - 26.0);
 		Graphics_setWindow (graphics, start, end, -1.0, 1.0);
 		Sound_draw (preview.get(), graphics, start, end, 0.0, 0.0, true, U"curve");
+		if (editorState -> analyses [side]) {
+			const AnalysisResult &analysis = editorState -> analyses [side].value();
+			for (const MetricResult &metric : analysis.metrics) {
+				if (! metric.value || (metric.id != U"burst_time_candidate" && metric.id != U"voicing_time_candidate"))
+					continue;
+				const double time = metric.value.value();
+				if (time < start || time > end)
+					continue;
+				const bool isBurst = metric.id == U"burst_time_candidate";
+				Graphics_setColour (graphics, isBurst ? Melder_RED : Melder_BLUE);
+				Graphics_line (graphics, time, -1.0, time, 1.0);
+				Graphics_text (graphics, time, isBurst ? 0.85 : 0.70,
+					isBurst ? U"burst candidate" : U"voicing candidate");
+			}
+			Graphics_setColour (graphics, Melder_BLACK);
+		}
 	} else {
 		const double topFrequency = std::min (8000.0, 0.5 / preview -> dx);
 		Melder_require (topFrequency > 0.0, U"采样率不足以绘制频谱预览。");
@@ -354,6 +396,283 @@ void exposeSpectrogram (SegmentAcousticEditor me, GuiDrawingArea_ExposeEvent eve
 		GuiLabel_setText (state (me) -> previewStatus [side], U"频谱预览失败：未知错误");
 		Melder_clearError ();
 	}
+}
+
+const MetricResult *findResultMetric (const AnalysisResult &analysis, const std::u32string &id) {
+	for (const MetricResult &metric : analysis.metrics)
+		if (metric.id == id)
+			return & metric;
+	return nullptr;
+}
+
+void renderComparisonPlot (SegmentAcousticEditor me) {
+	SegmentEditorState *editorState = state (me);
+	Graphics graphics = editorState -> comparisonPlotGraphics.get();
+	Graphics_clearWs (graphics);
+	Graphics_setViewport (graphics, 42.0, GuiControl_getWidth (editorState -> comparisonPlotArea) - 12.0,
+		12.0, GuiControl_getHeight (editorState -> comparisonPlotArea) - 28.0);
+	if (! editorState -> analyses [0] || ! editorState -> analyses [1]) {
+		Graphics_setWindow (graphics, 0.0, 100.0, 0.0, 1.0);
+		Graphics_text (graphics, 50.0, 0.5, U"完成两侧分析后显示相对时长曲线叠图");
+		return;
+	}
+	const AnalysisResult &target = editorState -> analyses [0].value();
+	const AnalysisResult &reference = editorState -> analyses [1].value();
+	struct OverlayPair { NormalizedTimeSeries target, reference; };
+	std::vector<OverlayPair> overlays;
+	double minimumValue = std::numeric_limits<double>::infinity();
+	double maximumValue = - std::numeric_limits<double>::infinity();
+	for (const TimeSeries &targetCurve : target.curves) {
+		for (const TimeSeries &referenceCurve : reference.curves) {
+			if (targetCurve.metricId != referenceCurve.metricId || targetCurve.unit != referenceCurve.unit)
+				continue;
+			OverlayPair pair {
+				normalizeTimeSeriesForOverlay (targetCurve, target.source),
+				normalizeTimeSeriesForOverlay (referenceCurve, reference.source)
+			};
+			for (const double value : pair.target.values) {
+				minimumValue = std::min (minimumValue, value);
+				maximumValue = std::max (maximumValue, value);
+			}
+			for (const double value : pair.reference.values) {
+				minimumValue = std::min (minimumValue, value);
+				maximumValue = std::max (maximumValue, value);
+			}
+			overlays.push_back (std::move (pair));
+			break;
+		}
+	}
+	if (overlays.empty()) {
+		Graphics_setWindow (graphics, 0.0, 100.0, 0.0, 1.0);
+		Graphics_text (graphics, 50.0, 0.5, U"当前分析没有两侧共有的连续时间曲线");
+		return;
+	}
+	if (maximumValue <= minimumValue) {
+		minimumValue -= 1.0;
+		maximumValue += 1.0;
+	} else {
+		const double margin = (maximumValue - minimumValue) * 0.05;
+		minimumValue -= margin;
+		maximumValue += margin;
+	}
+	Graphics_setWindow (graphics, 0.0, 100.0, minimumValue, maximumValue);
+	Graphics_drawInnerBox (graphics);
+	for (const OverlayPair &pair : overlays) {
+		for (size_t index = 1; index < pair.target.values.size(); index ++) {
+			Graphics_setColour (graphics, Melder_BLUE);
+			Graphics_line (graphics, pair.target.relativePercent [index - 1], pair.target.values [index - 1],
+				pair.target.relativePercent [index], pair.target.values [index]);
+		}
+		for (size_t index = 1; index < pair.reference.values.size(); index ++) {
+			Graphics_setColour (graphics, Melder_RED);
+			Graphics_line (graphics, pair.reference.relativePercent [index - 1], pair.reference.values [index - 1],
+				pair.reference.relativePercent [index], pair.reference.values [index]);
+		}
+	}
+	Graphics_setColour (graphics, Melder_BLUE);
+	Graphics_text (graphics, 2.0, maximumValue, Melder_cat (U"目标：", target.source.source.displayName.c_str(), U" [",
+		Melder_single (target.source.startTime), U"–", Melder_single (target.source.endTime), U" s]"));
+	Graphics_setColour (graphics, Melder_RED);
+	Graphics_text (graphics, 54.0, maximumValue, Melder_cat (U"参照：", reference.source.source.displayName.c_str(), U" [",
+		Melder_single (reference.source.startTime), U"–", Melder_single (reference.source.endTime), U" s]"));
+	Graphics_setColour (graphics, Melder_BLACK);
+}
+
+void exposeComparisonPlot (SegmentAcousticEditor me, GuiDrawingArea_ExposeEvent) {
+	try {
+		renderComparisonPlot (me);
+	} catch (MelderError) {
+		GuiLabel_setText (state (me) -> comparisonSummary, Melder_cat (U"曲线叠图失败：", Melder_getError()));
+		Melder_clearError ();
+	} catch (const std::exception &error) {
+		GuiLabel_setText (state (me) -> comparisonSummary, Melder_cat (U"曲线叠图失败：", Melder_peek8to32_u (error.what())));
+		Melder_clearError ();
+	} catch (...) {
+		GuiLabel_setText (state (me) -> comparisonSummary, U"曲线叠图失败：未知错误");
+		Melder_clearError ();
+	}
+}
+
+void renderFrequencyPlot (SegmentAcousticEditor me) {
+	SegmentEditorState *editorState = state (me);
+	Graphics graphics = editorState -> frequencyPlotGraphics.get();
+	Graphics_clearWs (graphics);
+	Graphics_setViewport (graphics, 42.0, GuiControl_getWidth (editorState -> frequencyPlotArea) - 12.0,
+		12.0, GuiControl_getHeight (editorState -> frequencyPlotArea) - 28.0);
+	if (editorState -> frequencyOverlays.empty()) {
+		Graphics_setWindow (graphics, 0.0, 1.0, 0.0, 1.0);
+		Graphics_text (graphics, 0.5, 0.5, U"当前分析没有可叠加的频率曲线");
+		return;
+	}
+	double minimumValue = std::numeric_limits<double>::infinity();
+	double maximumValue = - std::numeric_limits<double>::infinity();
+	double minimumFrequency = std::numeric_limits<double>::infinity();
+	double maximumFrequency = - std::numeric_limits<double>::infinity();
+	for (const FrequencyOverlay &overlay : editorState -> frequencyOverlays) {
+		for (const double value : overlay.targetValues) {
+			minimumValue = std::min (minimumValue, value);
+			maximumValue = std::max (maximumValue, value);
+		}
+		for (const double value : overlay.referenceValues) {
+			minimumValue = std::min (minimumValue, value);
+			maximumValue = std::max (maximumValue, value);
+		}
+		if (! overlay.frequencyHz.empty()) {
+			minimumFrequency = std::min (minimumFrequency, overlay.frequencyHz.front());
+			maximumFrequency = std::max (maximumFrequency, overlay.frequencyHz.back());
+		}
+	}
+	if (! std::isfinite (minimumFrequency) || ! std::isfinite (minimumValue)) {
+		Graphics_setWindow (graphics, 0.0, 1.0, 0.0, 1.0);
+		Graphics_text (graphics, 0.5, 0.5, editorState -> frequencyOverlays.front().reason.c_str());
+		return;
+	}
+	if (maximumFrequency <= minimumFrequency)
+		maximumFrequency = minimumFrequency + 1.0;
+	if (maximumValue <= minimumValue) {
+		minimumValue -= 1.0;
+		maximumValue += 1.0;
+	} else {
+		const double margin = (maximumValue - minimumValue) * 0.05;
+		minimumValue -= margin;
+		maximumValue += margin;
+	}
+	Graphics_setWindow (graphics, minimumFrequency, maximumFrequency, minimumValue, maximumValue);
+	Graphics_drawInnerBox (graphics);
+	for (const FrequencyOverlay &overlay : editorState -> frequencyOverlays) {
+		for (size_t index = 1; index < overlay.targetValues.size(); index ++) {
+			Graphics_setColour (graphics, Melder_BLUE);
+			Graphics_line (graphics, overlay.frequencyHz [index - 1], overlay.targetValues [index - 1],
+				overlay.frequencyHz [index], overlay.targetValues [index]);
+		}
+		for (size_t index = 1; index < overlay.referenceValues.size(); index ++) {
+			Graphics_setColour (graphics, Melder_RED);
+			Graphics_line (graphics, overlay.frequencyHz [index - 1], overlay.referenceValues [index - 1],
+				overlay.frequencyHz [index], overlay.referenceValues [index]);
+		}
+	}
+	if (! editorState -> frequencyOverlays.front().warning.empty()) {
+		Graphics_setColour (graphics, Melder_RED);
+		Graphics_text (graphics, minimumFrequency, maximumValue, editorState -> frequencyOverlays.front().warning.c_str());
+	}
+	Graphics_setColour (graphics, Melder_BLACK);
+}
+
+void exposeFrequencyPlot (SegmentAcousticEditor me, GuiDrawingArea_ExposeEvent) {
+	try {
+		renderFrequencyPlot (me);
+	} catch (MelderError) {
+		GuiLabel_setText (state (me) -> comparisonSummary, Melder_cat (U"频率叠图失败：", Melder_getError()));
+		Melder_clearError ();
+	} catch (const std::exception &error) {
+		GuiLabel_setText (state (me) -> comparisonSummary, Melder_cat (U"频率叠图失败：", Melder_peek8to32_u (error.what())));
+		Melder_clearError ();
+	} catch (...) {
+		GuiLabel_setText (state (me) -> comparisonSummary, U"频率叠图失败：未知错误");
+		Melder_clearError ();
+	}
+}
+
+void analyseAndCompare (SegmentAcousticEditor me) {
+	SegmentEditorState *editorState = state (me);
+	Melder_require (my selection.reference, U"请先设置并应用有效的参照来源和范围。");
+	AnalysisResult completedAnalyses [2];
+	for (integer side = 0; side < 2; side ++) {
+		const SegmentAnalysisSelection &selected = selectionFor (me, side);
+		Melder_require (selected.analysisKind == AnalysisKind::VOT,
+			U"当前只有 VOT 分析核心可运行；其他分析类别尚未实现。");
+		const std::shared_ptr<SegmentSourceData> source = editorState -> activeSource [side];
+		Melder_require (source, side == 0 ? U"请先设置有效的目标来源和范围。" : U"请先设置有效的参照来源和范围。");
+		Melder_require (selected.metadata.startTime < selected.metadata.endTime &&
+			selected.metadata.startTime >= source -> xmin && selected.metadata.endTime <= source -> xmax,
+			U"请先在目标和参照两侧分别输入并应用有效时间范围。");
+		autoSound samples = extractPreview (*source, selected.metadata.startTime, selected.metadata.endTime);
+		SegmentInput input;
+		input.samples = samples.get();
+		input.metadata = selected.metadata;
+		input.metadata.source = source -> identity;
+		completedAnalyses [side] = analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates);
+	}
+	ComparisonResult completedComparison = compareCompatibleMetrics (completedAnalyses [0], completedAnalyses [1]);
+	std::vector<FrequencyOverlay> completedFrequencyOverlays = completedComparison.frequencyOverlays;
+	editorState -> analyses [0] = std::move (completedAnalyses [0]);
+	editorState -> analyses [1] = std::move (completedAnalyses [1]);
+	editorState -> comparison = std::move (completedComparison);
+	editorState -> frequencyOverlays = std::move (completedFrequencyOverlays);
+	autoMelderString summary;
+	MelderString_append (& summary, U"VOT 自动候选对照（候选边界仍需人工确认）\n",
+		U"目标：", editorState -> comparison -> target.source.displayName.c_str(), U" [",
+		Melder_single (editorState -> comparison -> target.startTime), U"–", Melder_single (editorState -> comparison -> target.endTime), U" s]；",
+		Melder_single (editorState -> comparison -> target.endTime - editorState -> comparison -> target.startTime), U" s\n",
+		U"参照：", editorState -> comparison -> reference.source.displayName.c_str(), U" [",
+		Melder_single (editorState -> comparison -> reference.startTime), U"–", Melder_single (editorState -> comparison -> reference.endTime), U" s]；",
+		Melder_single (editorState -> comparison -> reference.endTime - editorState -> comparison -> reference.startTime), U" s\n");
+	if (! editorState -> comparison -> rows.empty() && ! editorState -> comparison -> rows.front().warning.empty())
+		MelderString_append (& summary, U"采样率提示：", editorState -> comparison -> rows.front().warning.c_str(), U"\n");
+	MelderString_append (& summary, U"指标\t目标\t参照\t目标−参照\t状态\t原因\n");
+	for (const MetricComparison &row : editorState -> comparison -> rows) {
+		MelderString_append (& summary, row.metricId.c_str(), U"\t");
+		if (row.targetValue && row.targetStatus != MetricStatus::unavailable)
+			MelderString_append (& summary, Melder_double (row.targetValue.value()));
+		else
+			MelderString_append (& summary, U"NA");
+		MelderString_append (& summary, U"\t");
+		if (row.referenceValue && row.referenceStatus != MetricStatus::unavailable)
+			MelderString_append (& summary, Melder_double (row.referenceValue.value()));
+		else
+			MelderString_append (& summary, U"NA");
+		MelderString_append (& summary, U"\t");
+		if (row.difference)
+			MelderString_append (& summary, Melder_double (row.difference.value()));
+		else
+			MelderString_append (& summary, U"不可比较");
+		MelderString_append (& summary, U"\t", row.reason.empty() ? U"可比较" : U"不可比较", U"\t");
+		if (! row.reason.empty())
+			MelderString_append (& summary, row.reason.c_str());
+		MelderString_appendCharacter (& summary, U'\n');
+	}
+	GuiLabel_setText (editorState -> comparisonSummary, summary.string);
+	for (integer side = 0; side < 2; side ++)
+		Graphics_updateWs (editorState -> waveformGraphics [side].get());
+	Graphics_updateWs (editorState -> comparisonPlotGraphics.get());
+	Graphics_updateWs (editorState -> frequencyPlotGraphics.get());
+}
+
+void exportComparison (SegmentAcousticEditor me) {
+	SegmentEditorState *editorState = state (me);
+	Melder_require (editorState -> comparison, U"请先运行目标/参照比较，再导出结果。");
+	autostring32 path = GuiFileSelect_getOutfileName (my windowForm, U"导出目标/参照比较 TSV", U"segment-comparison.tsv");
+	if (! path)
+		return;
+	autoMelderString serialized;
+	ComparisonResult_toTsv (editorState -> comparison.value(), & serialized);
+	structMelderFile outputFile {}, temporaryFile {};
+	Melder_pathToFile (path.get(), & outputFile);
+	autoMelderString temporaryPath;
+	MelderString_append (& temporaryPath, path.get(), U".tmp");
+	Melder_pathToFile (temporaryPath.string, & temporaryFile);
+	MelderFile_delete (& temporaryFile);
+	try {
+		MelderFile_writeText_e (& temporaryFile, serialized.string, kMelder_textOutputEncoding::UTF8);
+		if (MelderFile_exists (& outputFile))
+			MelderFile_delete (& outputFile);
+		MelderFile_moveAndOrRename (& temporaryFile, & outputFile);
+	} catch (MelderError) {
+		MelderFile_delete (& temporaryFile);
+		throw;
+	} catch (const std::exception &) {
+		MelderFile_delete (& temporaryFile);
+		throw;
+	}
+	GuiLabel_setText (editorState -> sourceStatus [0], Melder_cat (U"目标/参照比较 TSV 已保存：", path.get()));
+}
+
+void analyseAndCompareButton (SegmentAcousticEditor me, GuiButtonEvent) {
+	safelyDo (me, 0, U"目标/参照分析失败", [&] { analyseAndCompare (me); });
+}
+
+void exportComparisonButton (SegmentAcousticEditor me, GuiButtonEvent) {
+	safelyDo (me, 0, U"导出比较结果失败", [&] { exportComparison (me); });
 }
 
 void chooseAndApply (SegmentAcousticEditor me, integer side) {
@@ -440,6 +759,19 @@ void structSegmentAcousticEditor :: v1_info () {
 	} else {
 		MelderInfo_writeLine (U"Reference source: not selected");
 	}
+	if (state (this) -> comparison) {
+		MelderInfo_writeLine (U"Comparison rows:");
+		for (const MetricComparison &row : state (this) -> comparison -> rows) {
+			MelderInfo_writeLine (row.metricId.c_str(), U" target=", row.targetValue ? Melder_double (row.targetValue.value()) : U"NA",
+				U" reference=", row.referenceValue ? Melder_double (row.referenceValue.value()) : U"NA",
+				U" difference=", row.difference ? Melder_double (row.difference.value()) : U"NA",
+				U" status=", row.reason.empty() ? U"comparable" : U"not comparable",
+				row.reason.empty() ? U"" : Melder_cat (U" reason=", row.reason.c_str()),
+				row.warning.empty() ? U"" : Melder_cat (U" warning=", row.warning.c_str()));
+		}
+	} else {
+		MelderInfo_writeLine (U"Comparison result: not calculated");
+	}
 }
 
 void structSegmentAcousticEditor :: v_createChildren () {
@@ -481,9 +813,21 @@ void structSegmentAcousticEditor :: v_createChildren () {
 		editorState -> previewStatus [side] = GuiLabel_createShown (our windowForm, left, right, 542, 565, U"", 0);
 		(void) left;
 	}
-	GuiButton_createShown (our windowForm, 450, 710, 570, 598, U"依次试听目标与参照", playSequential, this, GuiButton_ATTRACTIVE);
-	GuiLabel_createShown (our windowForm, 20, -20, 601, 630,
-		U"目标与参照的来源、分析类型、时间范围和试听区间独立保存；分析类型随“应用范围”一并保存。", GuiLabel_CENTRE);
+	GuiButton_createShown (our windowForm, 260, 470, 570, 598, U"依次试听目标与参照", playSequential, this, GuiButton_ATTRACTIVE);
+	GuiButton_createShown (our windowForm, 480, 790, 570, 598, U"分析并比较 VOT 候选", analyseAndCompareButton, this, GuiButton_ATTRACTIVE);
+	GuiButton_createShown (our windowForm, 800, 970, 570, 598, U"导出 TSV…", exportComparisonButton, this, 0);
+	GuiLabel_createShown (our windowForm, 20, -20, 603, 624,
+		U"目标与参照的来源、真实边界和时长独立保留；当前运行 VOT 自动候选分析，边界仍需人工确认。", GuiLabel_CENTRE);
+	editorState -> comparisonSummary = GuiLabel_createShown (our windowForm, 20, -20, 626, 790,
+		U"尚无比较结果。设置目标和参照的来源与范围后，运行“分析并比较 VOT 候选”。", GuiLabel_MULTILINE);
+	GuiLabel_createShown (our windowForm, 20, 575, 792, 813, U"时间曲线叠图（0–100%）", GuiLabel_BOLD);
+	GuiLabel_createShown (our windowForm, 590, -20, 792, 813, U"共同频率网格叠图（Hz）", GuiLabel_BOLD);
+	editorState -> comparisonPlotArea = GuiDrawingArea_createShown (our windowForm,
+		20, 575, 814, 927, exposeComparisonPlot, nullptr, nullptr, nullptr, nullptr, this, 0);
+	editorState -> frequencyPlotArea = GuiDrawingArea_createShown (our windowForm,
+		590, -20, 814, 927, exposeFrequencyPlot, nullptr, nullptr, nullptr, nullptr, this, 0);
+	GuiLabel_createShown (our windowForm, 20, -20, 929, 953,
+		U"未实现的鼻化、鼻辅音与 R 音算法会明确提示，不会套用 VOT 结果。", GuiLabel_CENTRE);
 
 	GuiOptionMenu_addOption (editorState -> sourceMenu [0], editorState -> initialName.c_str());
 	editorState -> choices [0].push_back ({ editorState -> initialObjectId, editorState -> activeSource [0], editorState -> initialName });
@@ -531,7 +875,7 @@ autoSegmentAcousticEditor SegmentAcousticEditor_create (Sound initialTargetSound
 		editorState -> activeSource [0] = copyPraatSource (initialTargetLongSound, initialObjectId, editorState -> initialName.c_str());
 	my selection.target = target;
 	my d_privateState = editorState.release();
-	Editor_init (me.get(), 0, 0, 1160, 640, U"辅音片段目标/参照对比", nullptr);
+	Editor_init (me.get(), 0, 0, 1160, 970, U"辅音片段目标/参照对比", nullptr);
 	SegmentEditorState *liveState = state (me.get());
 	for (integer side = 0; side < 2; side ++) {
 		liveState -> waveformGraphics [side] = Graphics_create_xmdrawingarea (liveState -> waveformArea [side]);
@@ -547,5 +891,17 @@ autoSegmentAcousticEditor SegmentAcousticEditor_create (Sound initialTargetSound
 		Graphics_updateWs (liveState -> waveformGraphics [side].get());
 		Graphics_updateWs (liveState -> spectrogramGraphics [side].get());
 	}
+	liveState -> comparisonPlotGraphics = Graphics_create_xmdrawingarea (liveState -> comparisonPlotArea);
+	Graphics_setWsViewport (liveState -> comparisonPlotGraphics.get(), 0.0, GuiControl_getWidth (liveState -> comparisonPlotArea),
+		0.0, GuiControl_getHeight (liveState -> comparisonPlotArea));
+	Graphics_setWsWindow (liveState -> comparisonPlotGraphics.get(), 0.0, GuiControl_getWidth (liveState -> comparisonPlotArea),
+		0.0, GuiControl_getHeight (liveState -> comparisonPlotArea));
+	Graphics_updateWs (liveState -> comparisonPlotGraphics.get());
+	liveState -> frequencyPlotGraphics = Graphics_create_xmdrawingarea (liveState -> frequencyPlotArea);
+	Graphics_setWsViewport (liveState -> frequencyPlotGraphics.get(), 0.0, GuiControl_getWidth (liveState -> frequencyPlotArea),
+		0.0, GuiControl_getHeight (liveState -> frequencyPlotArea));
+	Graphics_setWsWindow (liveState -> frequencyPlotGraphics.get(), 0.0, GuiControl_getWidth (liveState -> frequencyPlotArea),
+		0.0, GuiControl_getHeight (liveState -> frequencyPlotArea));
+	Graphics_updateWs (liveState -> frequencyPlotGraphics.get());
 	return me;
 }
