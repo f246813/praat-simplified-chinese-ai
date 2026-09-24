@@ -16,6 +16,7 @@ Free-form scripts remain available as a validated fallback.
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -1334,101 +1335,10 @@ def _build_textgrid_insert_boundary(
     return _assemble(lines, context)
 
 
-def _build_vot_explicit(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    """VOT（嗓音起始时间）= 浊音起始时刻 − 爆破/除阻时刻。
-
-    这里不做自动检测：VOT 依赖"爆破"和"浊音起始"这两个点的判断，靠脚本猜很容易
-    给出看起来精确、其实错得离谱的数字。所以要么用用户/标注给出的两个时刻相减，
-    要么由 TextGrid 的边界来定，并把用的两个时刻写进结果，让用户能核对。
-    """
-
-    row = context.resolve_by_class(
-        arguments.get("object"),
-        frozenset({"TextGrid", "Sound"}),
-        "算 VOT 需要一个 TextGrid（按层补边界）或 Sound（直接按两个时刻相减）",
-    )
-    if arguments.get("burst", None) in (None, ""):
-        raise ToolError(
-            "算 VOT 需要 burst 参数：爆破/除阻时刻（秒）。"
-            "前端不做自动检测，请先看波形或标出这个点。"
-        )
-    if arguments.get("voicing", arguments.get("onset", None)) in (None, ""):
-        raise ToolError("算 VOT 需要 voicing 参数：浊音起始时刻（秒）。")
-    burst = _number(arguments, "burst", 0.0, 0.0, 36000.0)
-    voicing = _number(
-        {"voicing": arguments.get("voicing", arguments.get("onset", None))},
-        "voicing",
-        0.0,
-        0.0,
-        36000.0,
-    )
-    if voicing <= burst:
-        raise ToolError(
-            f"浊音起始必须晚于爆破时刻（现在 burst={burst:.3f} 秒、"
-            f"voicing={voicing:.3f} 秒）。"
-        )
-    tier = _tier_number(arguments)
-    lines = [
-        f"selectObject: {row.id}",
-        f"t1 = {burst:.6f}",
-        f"t2 = {voicing:.6f}",
-        "vot = t2 - t1",
-    ]
-    if row.class_name == "TextGrid":
-        lines.extend(
-            [
-                "duration = Get total duration",
-                f"tier = {tier}",
-                "inserted = 0",
-                *_insert_boundary_block(tier, "t1", "inserted", "v1"),
-                *_insert_boundary_block(tier, "t2", "inserted", "v2"),
-                'note$ = ""',
-                "if inserted > 0",
-                '    note$ = "，并在该层补上了边界"',
-                "endif",
-                _write_result(
-                    context,
-                    [
-                        quote("VOT = "),
-                        "fixed$ (vot, 4)",
-                        quote(" 秒（"),
-                        "fixed$ (vot * 1000, 1)",
-                        quote(" 毫秒）：第 "),
-                        "fixed$ (tier, 0)",
-                        quote(" 层 "),
-                        "fixed$ (t1, 3)",
-                        quote(" 秒（爆破）→ "),
-                        "fixed$ (t2, 3)",
-                        quote(" 秒（浊音起始）"),
-                        "note$",
-                    ],
-                ),
-            ]
-        )
-    else:
-        lines.append(
-            _write_result(
-                context,
-                [
-                    quote("VOT = "),
-                    "fixed$ (vot, 4)",
-                    quote(" 秒（"),
-                    "fixed$ (vot * 1000, 1)",
-                    quote(" 毫秒）："),
-                    "fixed$ (t1, 3)",
-                    quote(" 秒（爆破）→ "),
-                    "fixed$ (t2, 3)",
-                    quote(" 秒（浊音起始）；按给出的两个时刻相减，未做自动检测"),
-                ],
-            )
-        )
-    return _assemble(lines, context)
-
-
 def _echoes_editor_selection(
     start: Any, end: Any, selection: tuple[float, float]
 ) -> bool:
-    """模型把编辑器里的圈选原样抄进 from/to 时，数值上应该和选区对得上。"""
+    """Keep provenance when the model repeats a range already selected in Praat."""
 
     if start in (None, "") and end in (None, ""):
         return False
@@ -1444,351 +1354,155 @@ def _echoes_editor_selection(
     return True
 
 
-def _seconds_argument(value: Any, key: str) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as error:
-        raise ToolError(f"参数 {key} 必须是数字，收到：{value!r}") from error
-    return min(max(number, 0.0), 36000.0)
+def _build_vot_explicit(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """Send complete explicit boundaries to the shared C++ VOT action."""
 
-
-def _rise_onset_lines(prefix: str, env_var: str) -> list[str]:
-    """在强度包络里找最陡的一段上升沿，写进 ``<prefix>Onset``/``<prefix>Rise``。
-
-    判定靠"升幅 + 上升沿之前那段低能量"，不用"区间峰值 − x dB"：范围里只要还夹着
-    别的强段（比如后面的元音），后者就会漂，同一个音两次能差好几毫秒。
-    """
-
-    return [
-        f"selectObject: {env_var}",
-        f"{prefix}N = Get number of frames",
-        f"{prefix}Rise = -1000",
-        f"{prefix}Best = -1",
-        f"for i from 1 to {prefix}N",
-        "    ft = Get time from frame number: i",
-        "    back = i - 3",
-        "    if back >= 1 and ft >= tmin and ft <= tmax",
-        "        bt = Get time from frame number: back",
-        "        if bt >= tmin",
-        "            v = Get value in frame: i",
-        "            v0 = Get value in frame: back",
-        "            later = v",
-        "            j = i + 5",
-        f"            if j <= {prefix}N",
-        "                later = Get value in frame: j",
-        "            endif",
-        # 上升沿之后能量要守得住才算一次真瞬态：被硬切出来的爆音"来了就走"，
-        # 用它当爆破会把 VOT 报大几十毫秒。
-        f"            if later >= v - 10 and v - v0 > {prefix}Rise",
-        f"                {prefix}Rise = v - v0",
-        f"                {prefix}Best = i",
-        "            endif",
-        "        endif",
-        "    endif",
-        "endfor",
-        f"{prefix}Onset = tmin",
-        f"if {prefix}Best >= 1",
-        f"    {prefix}Onset = Get time from frame number: {prefix}Best",
-        f"    {prefix}Ref = Get value in frame: {prefix}Best",
-        f"    k = {prefix}Best - 1",
-        "    found = 0",
-        "    while k >= 1 and found = 0",
-        "        vt = Get time from frame number: k",
-        "        v = Get value in frame: k",
-        f"        if vt < tmin or v < {prefix}Ref - 8",
-        "            found = 1",
-        "        else",
-        f"            {prefix}Onset = vt",
-        "            k = k - 1",
-        "        endif",
-        "    endwhile",
-        "endif",
-    ]
-
-
-def _build_vot_auto(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    """在用户圈出的大概范围里自动估计 VOT（爆破 → 浊音起始）。
-
-    爆破和浊音起始分成两步测，结果里分别写清楚，好让人判断是哪一步不稳：
-
-    1. 爆破（释放瞬态）：把声音带通到 2–8 kHz 再算强度包络（1 ms 步长、3.2 ms
-       窗口，比全频段窗口短，免得把爆破点平均到前面去），取最陡的一段上升沿，
-       再退到这段上升沿之前的低能量帧。升幅不到 ``burst_db``（默认 6 dB）就换
-       全频段包络兜底，两个都不够就报"找不到爆破瞬态"。不用"区间峰值 − x dB"
-       当阈值：范围里只要还夹着别的强段，这个阈值就会漂。
-    2. 浊音起始：``To Pitch (ac)``（2 ms 步长、默认浊音阈值，走的就是短时自相关）
-       连续 3 帧（6 ms）都判出基频才算声带开始振动；谐噪比只截起点之后 50 ms
-       那一小段算峰值，当谐波结构的依据写进结果——整段声音做交叉相关太慢
-       （10 秒的声音上要 0.3 秒，用户能感觉出卡）。
-       注意：``To Harmonicity (cc)`` 的 periodsPerWindow 给 0.5 会让 Praat 7.0.02
-       直接在 Sound_to_Pitch.cpp 断言崩溃，只能 ≥ 1；而 4 ms 的窗口（minPitch 250）
-       在 220 Hz 上会判成"全是噪声"，所以窗口就用 1/minPitch。
-    3. VOT = 浊音起始 − 爆破时刻。
-
-    范围整段都在浊音里时报"起点已是浊音"；范围内后面还有第二段浊音（中间隔了
-    ≥20 毫秒的低谐噪比段）时只报第一个候选，并提示范围偏大。
-
-    范围来自用户话里的 from/to，或者他在波形上手动拖出来的选区
-    （``chat_context.tsv`` 的 ``sel_start``/``sel_end``）；模型把圈选抄成
-    from/to 时结果里仍注明"按编辑器圈选"。
-
-    这是估计值，不是人工标注：结果里写明两步各自的依据、范围和时间分辨率。
-    """
-
+    burst = _vot_time(arguments, "burst")
+    voicing = _vot_time(arguments, "voicing", alias="onset")
+    if burst is None:
+        raise ToolError("算 VOT 需要 burst 参数：爆破/除阻时刻（秒）。")
+    if voicing is None:
+        raise ToolError("算 VOT 需要 voicing 参数：浊音起始时刻（秒）。")
     row = context.resolve_by_class(
-        arguments.get("object"), SOUND_CLASSES, "自动检测 VOT 需要一个 Sound 对象"
+        arguments.get("object"),
+        frozenset({"TextGrid", "Sound", "LongSound"}),
+        "算 VOT 需要 TextGrid、Sound 或 LongSound 对象",
     )
-    burst_db = _number(arguments, "burst_db", 6.0, 3.0, 30.0)
-    pitch_floor = _number(arguments, "pitch_floor", 75.0, 40.0, 500.0)
-    start_arg = arguments.get("from", arguments.get("start", None))
-    end_arg = arguments.get("to", arguments.get("end", None))
-    editor_selection = row.selection
-    # 模型常把编辑器里的圈选原样抄进 from/to；数值对得上就还按圈选报，
-    # 否则回话里会丢掉「这段范围是用户自己在波形上圈的」这个出处。
-    if editor_selection is not None and _echoes_editor_selection(
-        start_arg, end_arg, editor_selection
-    ):
-        start_arg = None
-        end_arg = None
-    had_range = start_arg not in (None, "") or end_arg not in (None, "")
-    if had_range:
-        editor_selection = None
+    if row.class_name == "TextGrid":
+        return _build_vot_textgrid_explicit(arguments, context, row, burst, voicing)
+    return _vot_action_script(arguments, context, row, burst, voicing, candidate_mode=False)
+
+
+def _build_vot_textgrid_explicit(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+    row: ObjectRow,
+    burst: float,
+    voicing: float,
+) -> str:
+    """Keep the existing TextGrid boundary insertion workflow for manual labels."""
+
+    tier = _tier_number(arguments)
     lines = [
         f"selectObject: {row.id}",
+        f"t1 = {burst:.6f}",
+        f"t2 = {voicing:.6f}",
+        "vot = t2 - t1",
         "duration = Get total duration",
-        "tmin = 0",
-        "tmax = duration",
+        f"tier = {tier}",
+        "inserted = 0",
+        *_insert_boundary_block(tier, "t1", "inserted", "v1"),
+        *_insert_boundary_block(tier, "t2", "inserted", "v2"),
+        'note$ = ""',
+        "if inserted > 0",
+        '    note$ = "，并在该层补上了边界"',
+        "endif",
+        _write_result(
+            context,
+            [
+                quote("VOT = "),
+                "fixed$ (vot, 4)",
+                quote(" 秒（"),
+                "fixed$ (vot * 1000, 1)",
+                quote(" 毫秒）：第 "),
+                "fixed$ (tier, 0)",
+                quote(" 层 "),
+                "fixed$ (t1, 3)",
+                quote(" 秒（爆破）→ "),
+                "fixed$ (t2, 3)",
+                quote(" 秒（浊音起始）"),
+                "note$",
+            ],
+        ),
     ]
-    if editor_selection is not None:
-        lines.append(f"tmin = {editor_selection[0]:.6f}")
-        lines.append(f"tmax = {editor_selection[1]:.6f}")
-    elif start_arg not in (None, ""):
-        lines.append(f"tmin = {_seconds_argument(start_arg, 'from'):.6f}")
-    if editor_selection is None and end_arg not in (None, ""):
-        lines.append(f"tmax = {_seconds_argument(end_arg, 'to'):.6f}")
-    if editor_selection is not None:
-        note_lines = [
-            f'rangeNote$ = "（按编辑器圈选 {editor_selection[0]:.3f}–'
-            f'{editor_selection[1]:.3f} 秒）"'
-        ]
+    return _assemble(lines, context)
+
+
+def _vot_action_script(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+    row: ObjectRow,
+    burst: float | None,
+    voicing: float | None,
+    *,
+    candidate_mode: bool,
+) -> str:
+    """Build one script action call and copy the core's TSV into the AI result file."""
+
+    burst_db = _number(arguments, "burst_db", 6.0, 3.0, 30.0)
+    pitch_floor = _number(arguments, "pitch_floor", 75.0, 40.0, 500.0)
+    selection = _selection_range(arguments, row)
+    start_arg = arguments.get("from", arguments.get("start", None))
+    end_arg = arguments.get("to", arguments.get("end", None))
+    analysis_path = context.result_path.with_suffix(".vot.tsv")
+    lines = [f"selectObject: {row.id}", "tmin = Get start time", "tmax = Get end time"]
+    if selection is not None:
+        lines.extend(
+            [
+                f"tmin = {selection[0]:.6f}",
+                f"tmax = {selection[1]:.6f}",
+                _range_note(selection),
+            ]
+        )
     else:
-        note_lines = [
-            'rangeNote$ = "（未指定范围，按整个对象搜索）"',
-            "if tmin > 0 or tmax < duration",
-            '    rangeNote$ = ""',
-            "endif",
-        ]
+        lines.append('rangeNote$ = "（按对象时间范围搜索）"')
+        if start_arg not in (None, ""):
+            lines.append(f"tmin = {_seconds_argument(start_arg, 'from'):.6f}")
+        if end_arg not in (None, ""):
+            lines.append(f"tmax = {_seconds_argument(end_arg, 'to'):.6f}")
+        if start_arg not in (None, "") or end_arg not in (None, ""):
+            lines.append(
+                'rangeNote$ = "（使用明确范围 " + fixed$ (tmin, 3) + "–" '
+                '+ fixed$ (tmax, 3) + " 秒）"'
+            )
+    burst_arg = "undefined" if burst is None else f"{burst:.6f}"
+    voicing_arg = "undefined" if voicing is None else f"{voicing:.6f}"
     lines.extend(
         [
-            "if tmin < 0",
-            "    tmin = 0",
-            "endif",
-            "if tmax > duration",
-            "    tmax = duration",
-            "endif",
-            "if tmin > tmax - 0.002",
-            "    tmin = 0",
-            "    tmax = duration",
-            "endif",
-            *note_lines,
-            # ① 爆破（释放瞬态）：带通到 2–8 kHz 再求强度包络的最陡上升沿
-            f"selectObject: {row.id}",
-            f'To Harmonicity (cc): 0.002, {pitch_floor:.6f}, 0.1, 1.0',
-            'hnrId = selected ("Harmonicity")',
-            f"selectObject: {row.id}",
-            "Filter (pass Hann band): 2000, 8000, 100",
-            'hfSound = selected ("Sound")',
-            'To Intensity: 2000, 0.001, "yes"',
-            'hfEnv = selected ("Intensity")',
-            *_rise_onset_lines("hf", "hfEnv"),
-            f"selectObject: {row.id}",
-            'To Intensity: 1000, 0.001, "yes"',
-            'bbEnv = selected ("Intensity")',
-            *_rise_onset_lines("bb", "bbEnv"),
-            "burstTime = -1",
-            "burstRise = 0",
-            'burstBand$ = ""',
-            f"if hfRise >= {burst_db:.1f}",
-            "    burstTime = hfOnset",
-            "    burstRise = hfRise",
-            '    burstBand$ = "高频带 2–8 kHz"',
-            f"elsif bbRise >= {burst_db:.1f}",
-            "    burstTime = bbOnset",
-            "    burstRise = bbRise",
-            '    burstBand$ = "全频段"',
-            "endif",
-            "selectObject: hfEnv",
-            "plusObject: bbEnv",
-            "plusObject: hfSound",
-            "Remove",
-            # ② 浊音起始：自相关基频连续 3 帧（6 ms）成立；谐噪比另取一小段当佐证
-            f"selectObject: {row.id}",
-            f'To Pitch (ac): 0.002, {pitch_floor:.6f}, 15, "no", 0.03, '
-            '0.45, 0.01, 0.35, 0.14, 600',
-            "pn = Get number of frames",
-            "voicingTime = -1",
-            "f0Onset = 0",
-            "firstVoicedTime = -1",
-            "run = 0",
-            "runStart = -1",
-            "runStartF0 = 0",
-            "lastVoiced = -1",
-            "candTime = -1",
-            "secondVoicingTime = -1",
-            "for i from 1 to pn",
-            "    ft = Get time from frame number: i",
-            "    if ft >= tmin and ft <= tmax",
-            '        v = Get value in frame: i, "Hertz"',
-            "        if v <> undefined",
-            "            run = run + 1",
-            "            if run = 1",
-            "                runStart = ft",
-            "                runStartF0 = v",
-            "            endif",
-            "            if firstVoicedTime < 0",
-            "                firstVoicedTime = ft",
-            "            endif",
-            "            if voicingTime < 0 and run >= 3 and runStart >= burstTime",
-            "                voicingTime = runStart",
-            "                f0Onset = runStartF0",
-            "            endif",
-            "            if candTime >= 0",
-            "                if secondVoicingTime < 0",
-            "                    secondVoicingTime = candTime",
-            "                endif",
-            "            elsif lastVoiced >= 0 and voicingTime >= 0 and ft - lastVoiced >= 0.02",
-            "                candTime = ft",
-            "            endif",
-            "            lastVoiced = ft",
-            "        else",
-            "            run = 0",
-            "            candTime = -1",
-            "        endif",
-            "    endif",
-            "endfor",
-            "Remove",
-            "if firstVoicedTime >= 0 and firstVoicedTime <= tmin + 0.01",
+            f"Write VOT analysis to file: tmin, tmax, {burst_arg}, {voicing_arg}, "
+            f"{burst_db:.6f}, {pitch_floor:.6f}, {quote(analysis_path)}",
+            f"votTsv$ = readFile$ ({quote(analysis_path)})",
             _write_result(
                 context,
                 [
-                    quote("自动检测失败：范围起点附近（"),
-                    "fixed$ (firstVoicedTime, 3)",
-                    quote(" 秒）已经是浊音（自相关基频连续成立），"
-                          "说明爆破不在这个范围里。请把 from 提前到闭音段"
-                          "（爆破之前），或直接给出 burst 和 voicing 两个时刻。"),
+                    quote(
+                        "VOT 候选（C++ 自动估计，需人工确认）"
+                        if candidate_mode
+                        else "VOT 测量（使用给定边界）"
+                    ),
                     "rangeNote$",
                 ],
             ),
-            "elsif burstTime < 0",
-            _write_result(
-                context,
-                [
-                    quote("自动检测失败："),
-                    "fixed$ (tmin, 3)",
-                    quote("–"),
-                    "fixed$ (tmax, 3)",
-                    quote(f" 秒里高频带和全频段能量都没有 {burst_db:.0f} dB 以上的陡升，"
-                          "找不到爆破瞬态。请把范围收紧到爆破附近，"
-                          "或直接给出 burst 和 voicing 两个时刻。"),
-                    "rangeNote$",
-                ],
-            ),
-            "elsif voicingTime < 0",
-            _write_result(
-                context,
-                [
-                    quote("自动检测失败：爆破点 "),
-                    "fixed$ (burstTime, 3)",
-                    quote(" 秒之后没有连续 3 帧以上的浊音（自相关基频），"
-                          "范围里可能没有浊音段。"),
-                    "rangeNote$",
-                ],
-            ),
-            "else",
-            # 谐噪比只当佐证，就只算起点之后 50 ms 那一小段：整段声音做交叉相关
-            # 在 10 秒的声音上要 0.3 秒，用户能感觉出卡。
-            "    hnrEnd = voicingTime + 0.05",
-            "    if hnrEnd > duration",
-            "        hnrEnd = duration",
-            "    endif",
-            "    hnrMax = 0",
-            "    if hnrEnd - voicingTime >= 0.03",
-            f"        selectObject: {row.id}",
-            '        Extract part: voicingTime, hnrEnd, "rectangular", 1, "no"',
-            '        ex = selected ("Sound")',
-            f'        To Harmonicity (cc): 0.002, {pitch_floor:.6f}, 0.1, 1.0',
-            "        hn = Get number of frames",
-            "        if hn >= 1",
-            "            for i from 1 to hn",
-            "                hv = Get value in frame: i",
-            "                if hv > hnrMax",
-            "                    hnrMax = hv",
-            "                endif",
-            "            endfor",
-            "        endif",
-            "        Remove",
-            "        selectObject: ex",
-            "        Remove",
-            "    endif",
-            "    vot = voicingTime - burstTime",
-            '    caution$ = ""',
-            "    if vot < 0.005",
-            '        caution$ = "（不到 5 毫秒：可能范围起点已在浊音里，'
-            '也可能是不送气塞音，请核对）"',
-            "    endif",
-            '    secondNote$ = ""',
-            "    if secondVoicingTime >= 0",
-            '        secondNote$ = "；范围偏大：后面还有第 2 段浊音从 " + '
-            'fixed$ (secondVoicingTime, 3) + " 秒开始，本次只报了第一个候选，建议收紧范围"',
-            "    endif",
-            _write_result(
-                context,
-                [
-                    quote("VOT 估计值 = "),
-                    "fixed$ (vot, 4)",
-                    quote(" 秒（"),
-                    "fixed$ (vot * 1000, 1)",
-                    quote(" 毫秒）：爆破 "),
-                    "fixed$ (burstTime, 3)",
-                    quote(" 秒（"),
-                    "burstBand$",
-                    quote(" 能量升 "),
-                    "fixed$ (burstRise, 1)",
-                    quote(" dB）→ 浊音起始 "),
-                    "fixed$ (voicingTime, 3)",
-                    quote(" 秒（自相关基频 "),
-                    "fixed$ (f0Onset, 1)",
-                    quote(" Hz，之后 50 毫秒内谐噪比最高 "),
-                    "fixed$ (hnrMax, 1)",
-                    quote(" dB）；范围 "),
-                    "fixed$ (tmin, 3)",
-                    quote("–"),
-                    "fixed$ (tmax, 3)",
-                    quote(" 秒；爆破与浊音起始分开估计，请对着语图核对"),
-                    "caution$",
-                    "secondNote$",
-                    "rangeNote$",
-                ],
-            ),
-            "endif",
+            f"appendFile: {quote(context.result_path)}, votTsv$",
         ]
     )
     return _assemble(lines, context)
 
 
-def _build_vot(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    """给了爆破/浊音两个时刻就相减，否则在大概范围里自动估计。
+def _seconds_argument(value: Any, key: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ToolError(f"参数 {key} 必须是数字，收到：{value!r}") from error
+    if not math.isfinite(number) or not -36000.0 <= number <= 36000.0:
+        raise ToolError(f"参数 {key} 必须是 -36000 到 36000 之间的有限秒数。")
+    return number
 
-    ``burst`` / ``voicing`` 是可选字段，但模型（尤其走原生 tool calling 之后）会把
-    可选字段"填满"，给两个 ``0``。两条都是 0 的 VOT 本来就没有意义，所以这里把它
-    当成"没给"，继续走自动估计——比拿它报「浊音起始必须晚于爆破时刻」更贴近用户
-    的意图（实测「提取这段语音的 vot」就是这么被卡住的）。
-    """
+
+def _build_vot_auto(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """Request editable C++ candidate estimates in the chosen Sound interval."""
+
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "自动估计 VOT 需要 Sound 或 LongSound 对象"
+    )
+    return _vot_action_script(arguments, context, row, None, None, candidate_mode=True)
+
+
+def _build_vot(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """Pass a complete manual boundary pair, or request C++ candidate estimation."""
 
     burst = _vot_time(arguments, "burst")
     voicing = _vot_time(arguments, "voicing", alias="onset")
-    if burst == 0.0 and voicing == 0.0:
-        burst = voicing = None
     if burst is not None and voicing is not None:
         return _build_vot_explicit(arguments, context)
     if burst is not None or voicing is not None:
@@ -1808,9 +1522,12 @@ def _vot_time(
     if raw in (None, ""):
         return None
     try:
-        return float(raw)
+        number = float(raw)
     except (TypeError, ValueError):
         raise ToolError(f"参数 {key} 必须是数字（秒），收到：{raw!r}") from None
+    if not math.isfinite(number) or not -36000.0 <= number <= 36000.0:
+        raise ToolError(f"参数 {key} 必须是 -36000 到 36000 之间的有限秒数。")
+    return number
 
 
 def _build_select(arguments: Mapping[str, Any], context: ToolContext) -> str:
@@ -3121,8 +2838,8 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="vot",
-        summary="算 VOT（嗓音起始时间）：给了 burst（爆破）和 voicing（浊音起始）就直接相减；只给 from/to 就在这个大概范围里自动估计（结果标注是估计值）。",
-        signature="burst、voicing（秒，给全就相减）、from、to（秒，自动估计的范围）、burst_db（默认 6，爆破最小升幅 dB）、pitch_floor（默认 75）、tier（默认 1）、object（可选）",
+        summary="分析 VOT：给 burst（爆破）和 voicing（浊音起始）时由 C++ 核心测量，支持零和负 VOT；省略两者时返回需人工确认的 C++ 候选及质量状态。",
+        signature="burst、voicing（秒，必须同时给出；允许相等或 voicing 更早）、from、to（分析范围）、burst_db（默认 6）、pitch_floor（默认 75）、tier（TextGrid 层号，默认 1）、object（Sound、LongSound 或 TextGrid）",
         build=_build_vot,
     ),
     Tool(

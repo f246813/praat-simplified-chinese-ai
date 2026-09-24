@@ -201,7 +201,7 @@ CASES: tuple[Case, ...] = (
         {"burst": 0.3, "voicing": 0.42},
         SOUND,
         ONE_SOUND,
-        "VOT = 0.1200 秒（120.0 毫秒）",
+        "vot_ms\t120\tms\tmeasured",
         tool="vot",
     ),
     Case(
@@ -209,7 +209,7 @@ CASES: tuple[Case, ...] = (
         {"from": 0.25, "to": 0.5},
         VOT_SOUND,
         ONE_SOUND,
-        "VOT 估计值 = 0.03",
+        "vot_candidate_ms",
         tool="vot",
     ),
     Case(
@@ -217,7 +217,7 @@ CASES: tuple[Case, ...] = (
         {},
         VOT_SOUND,
         ONE_SOUND,
-        "未指定范围",
+        "vot_candidate_ms",
         tool="vot",
     ),
     Case(
@@ -225,7 +225,7 @@ CASES: tuple[Case, ...] = (
         {"from": 0.4, "to": 0.9},
         VOT_SOUND,
         ONE_SOUND,
-        "已经是浊音",
+        "voicing_time_candidate",
         tool="vot",
     ),
     Case(
@@ -233,7 +233,7 @@ CASES: tuple[Case, ...] = (
         {"from": 0.25, "to": 1.0},
         TWO_PHONEME_SOUND,
         ONE_SOUND,
-        "第 2 段浊音",
+        "second_voicing_time_candidate",
         tool="vot",
     ),
     Case(

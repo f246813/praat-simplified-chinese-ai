@@ -829,17 +829,18 @@ class VotToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.directory.cleanup()
 
-    def test_placeholder_zero_times_fall_back_to_auto(self) -> None:
-        """模型会给可选字段填两个 0（"填满"），这该按「没给」处理，走自动估计。"""
+    def test_zero_times_are_passed_as_explicit_boundaries(self) -> None:
+        """Zero is a valid boundary value and must not select candidate estimation."""
 
         script = tools.render(
             "vot",
             {"burst": 0, "voicing": 0, "object": 1},
             self.sound_context,
         )
-        # 没有按「两个时刻相减」那条路走（那会写 t1/t2），而是进了自动估计。
-        self.assertNotIn("vot = t2 - t1", script)
-        self.assertIn("appendFileLine", script)
+        self.assertIn("Write VOT analysis to file", script)
+        self.assertIn("0.000000, 0.000000", script)
+        self.assertIn("VOT 测量（使用给定边界）", script)
+        self.assertNotIn("undefined, undefined", script)
 
     def test_only_one_time_is_still_an_error(self) -> None:
         with self.assertRaises(tools.ToolError):
@@ -865,15 +866,18 @@ class VotToolTests(unittest.TestCase):
         self.assertIn("秒（爆破）", script)
         self.assertIn("并在该层补上了边界", script)
 
-    def test_sound_path_only_subtracts(self) -> None:
+    def test_sound_path_uses_shared_cpp_analysis_action(self) -> None:
         script = tools.render(
             "vot",
             {"burst": 0.30, "voicing": 0.42},
             self.sound_context,
         )
-        self.assertIn("vot = t2 - t1", script)
+        self.assertIn("Write VOT analysis to file", script)
+        self.assertIn("0.300000, 0.420000", script)
+        self.assertIn("readFile$", script)
+        self.assertIn("appendFile:", script)
         self.assertNotIn("Insert boundary", script)
-        self.assertIn("未做自动检测", script)
+        self.assertNotIn("To Pitch (ac)", script)
 
     def test_missing_or_bad_times_are_rejected(self) -> None:
         # 两个时刻都不给 = 自动估计模式；只给一个才是参数错误。
@@ -882,9 +886,10 @@ class VotToolTests(unittest.TestCase):
         with self.assertRaises(tools.ToolError) as caught:
             tools.render("vot", {"burst": 0.3}, self.grid_context)
         self.assertIn("voicing", str(caught.exception))
-        with self.assertRaises(tools.ToolError) as caught:
-            tools.render("vot", {"burst": 0.4, "voicing": 0.3}, self.grid_context)
-        self.assertIn("必须晚于", str(caught.exception))
+        negative = tools.render(
+            "vot", {"burst": 0.4, "voicing": 0.3}, self.sound_context
+        )
+        self.assertIn("0.400000, 0.300000", negative)
 
     def test_onset_alias_works(self) -> None:
         script = tools.render(
@@ -892,7 +897,7 @@ class VotToolTests(unittest.TestCase):
             {"burst": 0.1, "onset": 0.25},
             self.sound_context,
         )
-        self.assertIn("t2 = 0.250000", script)
+        self.assertIn("0.100000, 0.250000", script)
 
     def test_auto_mode_detects_within_the_given_range(self) -> None:
         script = tools.render(
@@ -902,17 +907,11 @@ class VotToolTests(unittest.TestCase):
         )
         self.assertIn("tmin = 0.250000", script)
         self.assertIn("tmax = 0.500000", script)
-        # 爆破和浊音起始分开测：前者看 2–8 kHz 带通包络的上升沿，后者看谐噪比。
-        self.assertIn("Filter (pass Hann band): 2000, 8000, 100", script)
-        self.assertIn('To Intensity: 2000, 0.001, "yes"', script)
-        self.assertIn('To Harmonicity (cc): 0.002, 75.000000', script)
-        self.assertIn('To Pitch (ac): 0.002, 75.000000', script)
-        self.assertIn("burstTime", script)
-        self.assertIn("burstRise", script)
-        self.assertIn("firstVoicedTime", script)
-        self.assertIn("VOT 估计值", script)
-        self.assertIn("爆破与浊音起始分开估计", script)
-        self.assertIn("请对着语图核对", script)
+        self.assertIn("Write VOT analysis to file", script)
+        self.assertIn("undefined, undefined", script)
+        self.assertIn("6.000000, 75.000000", script)
+        self.assertIn("VOT 候选（C++ 自动估计，需人工确认）", script)
+        self.assertNotIn("Filter (pass Hann band)", script)
 
     def test_editor_selection_note_survives_the_model_echoing_it(self) -> None:
         # 模型把圈选原样抄进 from/to 时，回话里仍要写清楚这段范围是圈出来的。
@@ -925,12 +924,11 @@ class VotToolTests(unittest.TestCase):
         self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
         self.assertNotIn("未指定范围", script)
 
-    def test_auto_mode_warns_when_the_range_holds_two_phonemes(self) -> None:
-        # 圈大了（后面还有第二个音素）时不能静默只报第一个。
+    def test_auto_mode_delegates_wide_range_quality_to_cpp_core(self) -> None:
+        # C++ core emits the second-run quality row when the range spans multiple phones.
         script = tools.render("vot", {"from": 0.25, "to": 1.0}, self.sound_context)
-        self.assertIn("secondVoicingTime", script)
-        self.assertIn("第 2 段浊音", script)
-        self.assertIn("建议收紧范围", script)
+        self.assertIn("Write VOT analysis to file", script)
+        self.assertIn("readFile$", script)
 
     def test_auto_mode_uses_the_range_dragged_in_the_editor(self) -> None:
         context = tools.ToolContext(

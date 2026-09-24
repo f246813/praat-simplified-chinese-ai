@@ -17,6 +17,7 @@
  */
 
 #include "SoundAnalysisArea.h"
+#include "SegmentAcousticAnalysis.h"
 #include "Sound_and_Spectrogram.h"
 #include "Photo.h"
 #include "Sound_and_Spectrum.h"
@@ -27,9 +28,51 @@
 #include "VoiceAnalysis.h"
 #include "EditorM.h"
 #include "praat_script.h"
+#include "SegmentAcousticVOT.h"
 #include "praat_translate.h"
 
+#include <exception>
+
 Thing_implement (SoundAnalysisArea, FunctionArea, 0);
+
+static std::optional<double> optionalVotEditorBoundary (double value) {
+	return isundef (value) ? std::optional<double> {} : std::optional<double> { value };
+}
+
+static void menu_cb_segmentVOT (SoundAnalysisArea me, EDITOR_ARGS) {
+	EDITOR_FORM (U"VOT analysis", U"VOT...")
+		REAL_OR_UNDEFINED (startTime, U"Start time (s); enter a range if no selection is active", U"undefined")
+		REAL_OR_UNDEFINED (endTime, U"End time (s); enter a range if no selection is active", U"undefined")
+		REAL_OR_UNDEFINED (burstTime, U"Burst/release time (s); undefined for a candidate", U"undefined")
+		REAL_OR_UNDEFINED (voicingTime, U"Voicing onset time (s); undefined for a candidate", U"undefined")
+		REAL (burstThresholdDb, U"Minimum burst rise (dB)", U"6.0")
+		REAL (pitchFloorHz, U"Pitch floor (Hz)", U"75.0")
+		OUTFILE (resultFileName, U"Result TSV file", U"vot-analysis.tsv")
+	EDITOR_OK
+		SET_REAL (startTime, my startSelection() < my endSelection() ? my startSelection() : undefined)
+		SET_REAL (endTime, my startSelection() < my endSelection() ? my endSelection() : undefined)
+	EDITOR_DO
+		try {
+			Melder_require (! isundef (startTime) && ! isundef (endTime),
+				U"Select a segment or enter both VOT analysis range boundaries.");
+			VOTCandidateSettings settings;
+			settings.burstThresholdDb = burstThresholdDb;
+			settings.pitchFloorHz = pitchFloorHz;
+			const auto burst = optionalVotEditorBoundary (burstTime);
+			const auto voicing = optionalVotEditorBoundary (voicingTime);
+			if (my sound())
+				praat_Sound_writeVOTAnalysisToFile (my sound(), startTime, endTime,
+					burst, voicing, settings, resultFileName);
+			else if (my longSound())
+				praat_LongSound_writeVOTAnalysisToFile (my longSound(), startTime, endTime,
+					burst, voicing, settings, resultFileName);
+			else
+				Melder_throw (U"The editor does not contain a Sound or LongSound.");
+		} catch (const std::exception &error) {
+			Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
+		}
+	EDITOR_END
+}
 
 #include "enums_getText.h"
 #include "SoundAnalysisArea_enums.h"
@@ -2396,6 +2439,9 @@ void structSoundAnalysisArea :: v_createMenuItems_formant (EditorMenu menu) {
 }
 
 void structSoundAnalysisArea :: v_createMenus () {
+	EditorMenu segmentAnalysisMenu = Editor_addMenu (our functionEditor(), U"辅音分析", 0);
+	FunctionAreaMenu_addCommand (segmentAnalysisMenu, U"VOT...", 0, menu_cb_segmentVOT, this);
+
 	if (our v_hasSpectrogram () && our v_hasPitch () && our v_hasIntensity () && our v_hasPulses ()) {
 		EditorMenu menu = Editor_addMenu (our functionEditor(), U"Analyses", 0);
 		FunctionAreaMenu_addCommand (menu, U"Show analyses...", 0, menu_cb_showAnalyses, this);

@@ -156,7 +156,7 @@ Move the high-band burst-envelope and pitch-onset candidate calculations from `a
 
 Run the `Praat` test case and `.praat` script. Compare the current 30 ms fixture against the previous accepted 30/32/32 ms outputs; any difference greater than 5 ms must be explained by the new quality rule before continuing.
 
-- [ ] **Step 4: Commit the shared estimator**
+- [x] **Step 4: Commit the shared estimator**
 
 ```powershell
 git add fon/SegmentAcousticAnalysis.h fon/SegmentAcousticAnalysis.cpp fon/Praat_tests_enums.h fon/Praat_tests.cpp test/fon/segmentAcousticVOT.praat
@@ -167,7 +167,10 @@ git commit -m "feat: move VOT estimation into C++ core"
 
 **Files:**
 - Modify: `fon/praat_Sound.cpp`
+- Create: `fon/SegmentAcousticVOT.h`
+- Modify: `foned/SoundAnalysisArea.cpp`
 - Modify: `ai/praat_ai/tools.py`
+- Modify: `ai/tests/verify_chat_templates.py`
 - Test: `ai/tests/test_segment_analysis_tools.py`
 - Test: `ai/tests/verify_segment_analysis_templates.py`
 - Test: `test/fon/segmentAcousticVOT.praat`
@@ -177,7 +180,7 @@ git commit -m "feat: move VOT estimation into C++ core"
 - Produces: a native editor action `辅音分析 > VOT...` and Sound/LongSound script action `Write VOT analysis to file...`; both call `analyseVOT` and the shared serializer.
 - AI action passes `optional` boundaries without converting zero to missing and passes the result-file path so no Info window is opened.
 
-- [ ] **Step 1: Add Python tests for zero, negative and omitted arguments**
+- [x] **Step 1: Add Python tests for zero, negative and omitted arguments**
 
 Add adapter tests asserting `burst=0, voicing=0` is rendered as explicit zero, negative VOT boundaries remain unchanged, no-boundary mode selects candidate estimation, and one-sided input raises `ToolError` before script dispatch.
 
@@ -191,7 +194,7 @@ def test_zero_times_are_explicit(self):
     self.assertIn("0.000000", script)
 ```
 
-- [ ] **Step 2: Run the new adapter tests to confirm they fail**
+- [x] **Step 2: Run the new adapter tests to confirm they fail**
 
 ```powershell
 $venv = 'D:\Praat-work\venv-ai\Scripts\python.exe'
@@ -199,18 +202,18 @@ $env:PYTHONPATH = 'ai'
 & $venv -m unittest ai.tests.test_segment_analysis_tools -v
 ```
 
-- [ ] **Step 3: Register Sound/LongSound wrappers and replace duplicated AI formulas**
+- [x] **Step 3: Register Sound/LongSound wrappers and replace duplicated AI formulas**
 
 Register matching actions in `fon/praat_Sound.cpp`; extract LongSound only for the requested interval and preserve absolute times. Catch Praat and standard C++ exceptions at the object-action boundary and return a readable error without leaving a partial result. Change `_build_vot_explicit` and `_build_vot_auto` to invoke `Write VOT analysis to file...` and read the result file. Keep AI prose explicit about candidate estimates versus manually confirmed times.
 
-- [ ] **Step 4: Run adapter and real-Praat template tests**
+- [x] **Step 4: Run adapter and real-Praat template tests**
 
 Run the new unittest file and `ai/tests/verify_segment_analysis_templates.py`. The verifier must create a synthetic Sound in Praat, invoke the C++ VOT action, read its TSV and verify schema, metric ID, explicit zero/negative values, units, status and reason. Run both `test/fon/segmentAcousticCore.praat` and `test/fon/segmentAcousticVOT.praat`; the core script must check the same shared formatter through an object action. Expected: no `writeInfoLine`/Info popup and no Python-side acoustic calculation.
 
-- [ ] **Step 5: Commit the entry-point migration**
+- [x] **Step 5: Commit the entry-point migration**
 
 ```powershell
-git add fon/praat_Sound.cpp ai/praat_ai/tools.py ai/tests/test_segment_analysis_tools.py ai/tests/verify_segment_analysis_templates.py test/fon/segmentAcousticVOT.praat test/fon/segmentAcousticCore.praat
+git add fon/praat_Sound.cpp fon/SegmentAcousticVOT.h foned/SoundAnalysisArea.cpp ai/praat_ai/tools.py ai/tests/test_chat_tools.py ai/tests/verify_chat_templates.py ai/tests/test_segment_analysis_tools.py ai/tests/verify_segment_analysis_templates.py fon/SegmentAcousticAnalysis.cpp fon/Praat_tests.cpp test/fon/segmentAcousticVOT.praat test/fon/segmentAcousticCore.praat
 git commit -m "feat: route VOT tools through C++ analysis"
 ```
 

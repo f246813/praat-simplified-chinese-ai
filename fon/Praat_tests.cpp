@@ -826,6 +826,11 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (segmentVOTFailsWith (input, 0.60, 0.70, VOTBoundaryMode::manual, U"outside the Sound time domain"));
 			Melder_assert (segmentVOTFailsWith (input, std::numeric_limits<double>::quiet_NaN (), 0.32,
 				VOTBoundaryMode::manual, U"finite time values"));
+			SegmentInput invalidRange = input;
+			invalidRange.metadata.startTime = 0.4;
+			invalidRange.metadata.endTime = 0.3;
+			Melder_assert (segmentVOTFailsWith (invalidRange, 0.30, 0.32, VOTBoundaryMode::manual,
+				U"range must be increasing"));
 		} break;
 		case kPraatTests::CHECK_SEGMENT_VOT_ESTIMATOR: {
 			const auto runFixture = [] (SegmentVOTFixture fixture) {

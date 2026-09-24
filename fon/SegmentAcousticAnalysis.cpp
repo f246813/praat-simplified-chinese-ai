@@ -461,6 +461,10 @@ AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burs
 		Melder_throw (U"estimateCandidates mode does not accept explicit boundaries.");
 	if (! std::isfinite (input.samples -> xmin) || ! std::isfinite (input.samples -> xmax) || input.samples -> xmin >= input.samples -> xmax)
 		Melder_throw (U"The Sound has an invalid time domain.");
+	if (! std::isfinite (input.metadata.startTime) || ! std::isfinite (input.metadata.endTime) ||
+			input.metadata.startTime >= input.metadata.endTime || input.metadata.startTime < input.samples -> xmin ||
+			input.metadata.endTime > input.samples -> xmax)
+		Melder_throw (U"The VOT analysis range must be increasing and inside the Sound time domain.");
 	if (mode == VOTBoundaryMode::estimateCandidates)
 		return estimateVOTCandidates (input, candidateSettings);
 
