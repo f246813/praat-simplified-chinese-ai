@@ -303,31 +303,16 @@ foned/FunctionEditor.cpp:2107    PraatAiControl_noteEditorSelection (…)
 5. `verify_*.py` 手动脚本越来越多（19 个），要合并的话记得同步 `ai/README.zh-CN.md`
    里的引用（`verify_chat_live.py` 与 `verify_chat_window_ui.py --ask` 有重叠）。
 
-## 7. 段级目标/参照声学分析（2026-09）
+## 7. VOT 分析（2026-09）
 
-共享 C++ API 位于 `fon/SegmentAcousticAnalysis.h/.cpp`，Sound/LongSound 对象动作、AI 的
-VOT 模板和 `foned/SegmentAcousticEditor` 都调用它。当前可运行的是 VOT 手动边界核心及
-自动候选估计。编辑器可分别选目标和参照来源/范围，运行候选比较、查看指标状态和差值、
-在波形上查看 burst/voicing 候选标记，并把结果导出为 UTF-8 TSV。候选仍是 warning，不能
-当作用户确认过的测量值。
+共享 VOT 分析核心位于 `fon/SegmentAcousticAnalysis.h/.cpp`。Sound 和 LongSound 对象菜单各有
+一个 **VOT** 动作：有人工爆破/浊音边界时在 Info 中显示确认的 VOT；否则显示自动候选，并明确
+标为需要人工复核。LongSound 会保留原始绝对时间。
 
-通用比较核心会保留两侧来源、对象 ID/文件路径、绝对起止时间、真实时长、采样率、声道、
-分析类别、参数快照和可选音类元数据。只有指标定义、单位和兼容参数相同时才计算
-target-reference；带宽超过任一侧 Nyquist 时保留两侧读数并写明原因。采样率不同时保留
-原始测量并提示 warning。时间曲线在绘图副本中映射到 0–100%，频谱曲线插值到两侧都覆盖的
-共同频率网格；TSV 保留实际时间和共同网格。缺失值写为空字段并带 unavailable 状态，数值
-0 保留为 0。
-
-VOT 编辑器现在会把两侧候选边界填入可编辑的 burst/voicing 时间字段。修正后点“确认边界并
-比较”会保留自动候选作为参考，同时把人工确认值写进分析与 TSV；零 VOT 和负 VOT 均有效。
-波形同时标出候选与确认边界。文件写入使用唯一临时名并原子替换，写入失败不会先删掉上一份
-有效结果。单侧 TSV 包含 Praat 版本、来源身份和文件、绝对范围/时长、采样率/声道、类别、
-参数快照、人工边界、音类元数据及每项指标的值/单位/状态/原因；比较 TSV 也保留两侧各自的
-指标原因。不同长度片段的时长和范围始终按原始秒值导出。
-
-仍未实现元音鼻化、鼻辅音和 R 音测量函数。编辑器中选择这些类别后会明确提示算法未实现，
-不会借用 VOT 或通用谱指标代替。时间曲线/频谱连续曲线的真实数据与图形尚未接入；当前只
-有比较核心和占位说明。
+AI 的 `vot` 工具调用同一 C++ 分析核心，并通过隐藏的 `Write VOT analysis to file...` 动作将
+结果写入唯一临时 TSV，再由 Python 读取。该 TSV 仅用于内部桥接，没有用户可见的导出入口。
+目标/参照比较编辑器、比较 API、双段 TSV 和其他段级测量均已移除。合成样本及自动回归只能验证
+工程链路；科学验收仍需在人工标注的真实普通话样本上核对 VOT。
 
 回归命令（从仓库根目录运行，使用项目 Python）：
 
@@ -339,13 +324,10 @@ $env:MSYSTEM = 'CLANG64'
 # 然后从 MSYS2 CLANG64 shell 构建：make PRAAT_COMPILER=clang -j16
 ```
 
-`verify_segment_analysis_templates.py` 会运行 `test/fon/segmentAcousticCore.praat`、
-`segmentAcousticVOT.praat`、`segmentAcousticComparison.praat` 及生成的 AI 模板。真实 GUI
-手工复核步骤：在 Praat 打开 Sound/LongSound 编辑器，从“辅音分析 → 目标/参照比较...”进入；
-分别应用来源与范围，运行“分析并比较 VOT 候选”，核对候选值；编辑 burst/voicing 时间，
-点击“确认边界并比较”，确认波形上的确认标记、两侧状态/差值和绝对范围，再导出 TSV 检查
-来源、参数、人工边界、采样率、真实时长和空值。当前自动测试覆盖了 C++ 契约、导出和原生构建；
-窗口截图接口在本机失败，尚未完成这项视觉核验。
+`verify_segment_analysis_templates.py` 会运行 VOT C++ 回归和生成的 AI 模板，并检查 Sound/LongSound
+动作注册：每类对象各有一个可见 Info 动作和一个仅供 AI 使用的隐藏 TSV 动作。GUI 验收可在对象
+列表选中 Sound 或 LongSound，打开 Objects → VOT，确认 Info 中显示测量值或带人工复核提示的
+候选结果；AI 侧的临时 TSV 由工具自动管理，不需用户导出。
 
-科学验收仍需带人工边界/音类标注的普通话样本：鼻化至少覆盖 `/a i ə/` 环境，另需鼻辅音、
-擦音/塞擦音和近音类 r；合成 VOT 只能证明工程链路，不能替代真实录音复核或算法有效性。
+科学验收仍需带人工边界标注的真实普通话样本，核对爆破与浊音起始边界及候选准确性；合成 VOT
+只能验证工程链路，不能替代真实录音复核或证明测量有效性。

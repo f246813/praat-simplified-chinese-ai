@@ -904,6 +904,21 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 				hnrValues -> z [1] [frame] = std::numeric_limits<double>::quiet_NaN();
 			Melder_assert (! maximumDefinedHnr (hnrValues.get()));
 		} break;
+		case kPraatTests::CHECK_SEGMENT_VOT_INFO_SUMMARY: {
+			AnalysisResult manual {};
+			manual.parameters.values.push_back ({ U"boundaryMode", U"manualConfirmed", U"" });
+			manual.metrics.push_back ({ U"vot_ms", U"ms", 0.0, MetricStatus::measured, U"" });
+			autoMelderString manualSummary;
+			AnalysisResult_toInfoSummary (manual, & manualSummary);
+			Melder_assert (str32str (manualSummary.string, U"VOT: 0 ms (manual measurement)") != nullptr);
+
+			AnalysisResult candidate {};
+			candidate.parameters.values.push_back ({ U"boundaryMode", U"automaticCandidate", U"" });
+			candidate.metrics.push_back ({ U"vot_candidate_ms", U"ms", 20.0, MetricStatus::warning, U"" });
+			autoMelderString candidateSummary;
+			AnalysisResult_toInfoSummary (candidate, & candidateSummary);
+			Melder_assert (str32str (candidateSummary.string, U"requires manual review") != nullptr);
+		} break;
 	}
 	MelderInfo_writeLine (Melder_single (t * 1e9 / n), U" nanoseconds per iteration");
 	MelderInfo_close ();

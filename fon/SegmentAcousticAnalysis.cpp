@@ -477,6 +477,67 @@ void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output) {
 	}
 }
 
+void AnalysisResult_toInfoSummary (const AnalysisResult &result, MelderString *output) {
+	MelderString_empty (output);
+	if (! result.source.source.displayName.empty())
+		MelderString_append (output, U"Source: ", result.source.source.displayName.c_str(), U"\n");
+	if (std::isfinite (result.source.startTime) && std::isfinite (result.source.endTime) &&
+			result.source.startTime < result.source.endTime)
+		MelderString_append (output, U"Range: ", Melder_fixed (result.source.startTime, 3), U"–",
+			Melder_fixed (result.source.endTime, 3), U" s\n");
+
+	const auto findMetric = [&] (conststring32 id) -> const MetricResult * {
+		const auto found = std::find_if (result.metrics.begin(), result.metrics.end(), [&] (const MetricResult &metric) {
+			return metric.id == id;
+		});
+		return found == result.metrics.end() ? nullptr : & *found;
+	};
+	const auto appendMetric = [&] (conststring32 label, const MetricResult &metric, bool requiresReview,
+			conststring32 qualifier) {
+		MelderString_append (output, label, U": ");
+		if (metric.status == MetricStatus::unavailable || ! metric.value) {
+			MelderString_append (output, U"unavailable");
+		} else {
+			const integer decimals = metric.unit == U"s" ? 3 : 1;
+			MelderString_append (output, Melder_fixed (metric.value.value(), decimals));
+			if (! metric.unit.empty())
+				MelderString_append (output, U" ", metric.unit.c_str());
+		}
+		if (requiresReview)
+			MelderString_append (output, U" (requires manual review)");
+		else if (metric.status == MetricStatus::warning)
+			MelderString_append (output, U" (warning)");
+		if (qualifier)
+			MelderString_append (output, U" ", qualifier);
+		if (! metric.reason.empty())
+			MelderString_append (output, U" — ", metric.reason.c_str());
+		MelderString_appendCharacter (output, U'\n');
+	};
+
+	if (const MetricResult *manualVot = findMetric (U"vot_ms")) {
+		appendMetric (U"VOT", * manualVot, false, U"(manual measurement)");
+		if (result.source.burstTime)
+			MelderString_append (output, U"Burst time: ", Melder_fixed (result.source.burstTime.value(), 3), U" s\n");
+		if (result.source.voicingTime)
+			MelderString_append (output, U"Voicing onset: ", Melder_fixed (result.source.voicingTime.value(), 3), U" s\n");
+		return;
+	}
+
+	if (const MetricResult *candidateVot = findMetric (U"vot_candidate_ms"))
+		appendMetric (U"VOT candidate", * candidateVot, true, nullptr);
+	for (const MetricResult &metric : result.metrics) {
+		conststring32 label = nullptr;
+		if (metric.id == U"burst_time_candidate") label = U"Burst candidate";
+		else if (metric.id == U"voicing_time_candidate") label = U"Voicing onset candidate";
+		else if (metric.id == U"burst_rise_db") label = U"Burst energy rise";
+		else if (metric.id == U"voicing_f0_hz") label = U"Voicing onset frequency";
+		else if (metric.id == U"hnr_max_db") label = U"Maximum HNR";
+		else if (metric.id == U"second_voicing_time_candidate") label = U"Second voicing candidate";
+		if (label)
+			appendMetric (label, metric, metric.status == MetricStatus::warning, nullptr);
+	}
+}
+
 void writeSegmentAnalysisTsvAtomically (conststring32 resultFileName, conststring32 serialized) {
 	Melder_require (resultFileName && resultFileName [0] != U'\0', U"A result file path is required.");
 	structMelderFile outputFile {}, temporaryFile {};

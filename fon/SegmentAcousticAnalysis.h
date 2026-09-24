@@ -112,6 +112,7 @@ AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burs
 		const VOTCandidateSettings &candidateSettings = {});
 std::optional<double> maximumDefinedHnr (const constHarmonicity harmonicity);
 void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output);
+void AnalysisResult_toInfoSummary (const AnalysisResult &result, MelderString *output);
 void writeSegmentAnalysisTsvAtomically (conststring32 resultFileName, conststring32 serialized);
 
 #endif
