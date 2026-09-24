@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .alignment import dtw_align, mean_and_stddev
 from .audio import extract_phone_tracks
 from .config import AlignmentConfig
-from .forced_alignment import build_aligner
+from .forced_alignment import CompositeAligner, build_aligner
 from .models import (
     AnalysisRequest,
     AnalysisResult,
@@ -148,9 +150,10 @@ def align_learner_phones(
     language: str,
     transcript: str,
     config: AlignmentConfig | None,
+    aligner: CompositeAligner | None = None,
 ) -> tuple[list[PhoneSpec], str, float, list[str]]:
     alignment_config = config or AlignmentConfig()
-    result = build_aligner(alignment_config).align(
+    result = (aligner or build_aligner(alignment_config)).align(
         learner_path,
         phones,
         language,
@@ -182,6 +185,51 @@ def align_learner_phones(
     )
 
 
+def _has_reference_boundaries(phones: list[PhoneSpec]) -> bool:
+    return all(phone.reference_end > phone.reference_start for phone in phones)
+
+
+def _has_learner_boundaries(phones: list[PhoneSpec]) -> bool:
+    return all(
+        phone.learner_start is not None
+        and phone.learner_end is not None
+        and phone.learner_end > phone.learner_start
+        for phone in phones
+    )
+
+
+def _proportional_seeds(phones: list[PhoneSpec], duration: float) -> list[PhoneSpec]:
+    step = duration / len(phones) if phones else 0.0
+    return [
+        replace(
+            phone,
+            reference_start=index * step,
+            reference_end=(index + 1) * step,
+        )
+        for index, phone in enumerate(phones)
+    ]
+
+
+def _same_audio_samples(reference_sound, learner_sound) -> bool:
+    if (
+        reference_sound.sample_rate != learner_sound.sample_rate
+        or reference_sound.samples.shape != learner_sound.samples.shape
+    ):
+        return False
+    reference_samples = reference_sound.samples.reshape(-1)
+    learner_samples = learner_sound.samples.reshape(-1)
+    chunk_size = 1_000_000
+    return all(
+        bool(
+            (
+                reference_samples[offset : offset + chunk_size]
+                == learner_samples[offset : offset + chunk_size]
+            ).all()
+        )
+        for offset in range(0, reference_samples.size, chunk_size)
+    )
+
+
 def analyze_pronunciation(
     request: AnalysisRequest,
     alignment_config: AlignmentConfig | None = None,
@@ -193,19 +241,93 @@ def analyze_pronunciation(
 
     reference_sound = read_wav(reference_path)
     learner_sound = read_wav(learner_path)
-    learner_phones, alignment_source, alignment_confidence, warnings = (
-        align_learner_phones(
-            learner_path,
-            request.phonemes,
+    needs_reference_alignment = (
+        not _has_reference_boundaries(request.phonemes)
+        or any(
+            phone.alignment_source == "ui_equal_estimate"
+            for phone in request.phonemes
+        )
+    )
+    has_learner_boundaries = _has_learner_boundaries(request.phonemes)
+    same_audio = reference_path == learner_path or _same_audio_samples(
+        reference_sound, learner_sound
+    )
+    aligner: CompositeAligner | None = None
+    warnings: list[str] = []
+    if needs_reference_alignment and same_audio and has_learner_boundaries:
+        reference_phones = [
+            replace(
+                phone,
+                reference_start=phone.learner_start,
+                reference_end=phone.learner_end,
+                alignment_source="provided_learner_same_audio",
+            )
+            for phone in request.phonemes
+        ]
+    elif needs_reference_alignment:
+        aligner = build_aligner(alignment_config or AlignmentConfig())
+        seeds = (
+            request.phonemes
+            if _has_reference_boundaries(request.phonemes)
+            else _proportional_seeds(request.phonemes, reference_sound.duration)
+        )
+        aligned_reference, _, _, reference_warnings = align_learner_phones(
+            reference_path,
+            seeds,
             request.language,
             request.transcript,
             alignment_config,
+            aligner,
         )
-    )
+        reference_phones = [
+            replace(
+                phone,
+                reference_start=phone.learner_start,
+                reference_end=phone.learner_end,
+                learner_start=None,
+                learner_end=None,
+            )
+            for phone in aligned_reference
+        ]
+        warnings.extend(f"Reference alignment: {warning}" for warning in reference_warnings)
+    else:
+        reference_phones = request.phonemes
+
+    if same_audio:
+        learner_phones = [
+            replace(
+                phone,
+                learner_start=phone.reference_start,
+                learner_end=phone.reference_end,
+            )
+            for phone in reference_phones
+        ]
+        alignment_source = "same_audio"
+        alignment_confidence = min(
+            (phone.alignment_confidence for phone in learner_phones), default=1.0
+        )
+    elif has_learner_boundaries:
+        learner_phones = request.phonemes
+        alignment_source = "provided"
+        alignment_confidence = min(
+            (phone.alignment_confidence for phone in learner_phones), default=1.0
+        )
+    else:
+        learner_phones, alignment_source, alignment_confidence, learner_warnings = (
+            align_learner_phones(
+                learner_path,
+                reference_phones,
+                request.language,
+                request.transcript,
+                alignment_config,
+                aligner,
+            )
+        )
+        warnings.extend(learner_warnings)
 
     reference_tracks = extract_phone_tracks(
         reference_path,
-        request.phonemes,
+        reference_phones,
         learner=False,
     )
     learner_tracks = extract_phone_tracks(

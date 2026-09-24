@@ -38,6 +38,11 @@ def shared_root() -> tk.Tk:
     return _SHARED_ROOT
 
 
+def canvas_image_pixel(canvas: tk.Canvas, item: int, x: int, y: int) -> tuple[int, ...]:
+    image_name = canvas.itemcget(item, "image")
+    return tuple(canvas.tk.call(image_name, "get", x, y))
+
+
 class WidgetTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.root = shared_root()
@@ -128,6 +133,18 @@ class RoundedButtonTests(WidgetTestCase):
         button.configure(text="已复制")
         self.assertEqual(button.cget("text"), "已复制")
 
+    def test_outlined_hover_and_pressed_states_use_distinct_colors(self) -> None:
+        button, _calls = self.make(kind="outlined")
+        normal = button._palette(self.theme)
+        button._hover = True
+        hover = button._palette(self.theme)
+        button._pressed = True
+        pressed = button._palette(self.theme)
+
+        self.assertEqual(normal, ("#FFFFFF", "#3B71CA", "#3B71CA"))
+        self.assertEqual(hover, ("#E8F0FE", "#3567B5", "#3567B5"))
+        self.assertEqual(pressed, ("#FBFBFB", "#3B71CA", "#3B71CA"))
+
     def test_press_and_release_inside_the_button_clicks(self) -> None:
         button, calls = self.make()
         button.configure(width=80, height=32)
@@ -170,6 +187,97 @@ class CardTests(WidgetTestCase):
 
 
 class FieldCardTests(WidgetTestCase):
+    def test_wrapped_entry_does_not_draw_a_second_border(self) -> None:
+        style = ttk.Style(self.root)
+        previous_theme = style.theme_use()
+        try:
+            style.theme_use("clam")
+            for dark, expected_surface in (
+                (False, "#FFFFFF"),
+                (True, "#1E1E1E"),
+            ):
+                self.theme.set_dark(dark)
+                ui_widgets.configure_ttk(style, self.theme)
+                shell = ui_widgets.FieldCard(self.root, self.theme)
+                entry = ttk.Entry(shell)
+                shell.attach(entry)
+                self.assertEqual(entry.cget("style"), "Field.TEntry")
+                for option in (
+                    "background",
+                    "bordercolor",
+                    "lightcolor",
+                    "darkcolor",
+                ):
+                    self.assertEqual(
+                        style.lookup("Field.TEntry", option), expected_surface
+                    )
+                    self.assertEqual(
+                        style.lookup(
+                            "Field.TEntry", option, state=("focus",)
+                        ),
+                        expected_surface,
+                    )
+                shell.destroy()
+        finally:
+            style.theme_use(previous_theme)
+
+    def test_wrapped_entry_focus_is_shown_on_the_rounded_shell(self) -> None:
+        style = ttk.Style(self.root)
+        previous_theme = style.theme_use()
+        previous_geometry = self.root.geometry()
+        style.theme_use("clam")
+        ui_widgets.configure_ttk(style, self.theme)
+        shell = ui_widgets.FieldCard(self.root, self.theme, width=180, height=40)
+        shell.pack()
+        entry = ttk.Entry(shell)
+        shell.attach(entry)
+        self.root.geometry("240x80+0+0")
+        try:
+            self.root.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+        self.root.deiconify()
+        try:
+            self.root.update()
+            item = shell.canvas.find_withtag("field")[0]
+            normal_edge = canvas_image_pixel(
+                shell.canvas, item, shell.winfo_width() // 2, 0
+            )
+            self.assertLess(
+                sum(abs(value - expected) for value, expected in zip(normal_edge, (224, 224, 224))),
+                60,
+            )
+            entry.event_generate("<FocusIn>")
+            self.root.update()
+
+            item = shell.canvas.find_withtag("field")[0]
+            focused_edge = canvas_image_pixel(
+                shell.canvas, item, shell.winfo_width() // 2, 0
+            )
+            self.assertLess(
+                sum(abs(value - expected) for value, expected in zip(focused_edge, (59, 113, 202))),
+                60,
+            )
+            entry.event_generate("<FocusOut>")
+            self.root.update()
+            item = shell.canvas.find_withtag("field")[0]
+            blurred_edge = canvas_image_pixel(
+                shell.canvas, item, shell.winfo_width() // 2, 0
+            )
+            self.assertLess(
+                sum(abs(value - expected) for value, expected in zip(blurred_edge, (224, 224, 224))),
+                60,
+            )
+        finally:
+            shell.destroy()
+            self.root.withdraw()
+            style.theme_use(previous_theme)
+            self.root.geometry(previous_geometry)
+            try:
+                self.root.attributes("-alpha", 1.0)
+            except tk.TclError:
+                pass
+
     def test_it_wraps_a_real_ttk_entry(self) -> None:
         """``key_entry.cget("show")`` 这些是回归脚本读的，不能被换成自绘控件。"""
 

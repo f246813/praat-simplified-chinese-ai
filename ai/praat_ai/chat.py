@@ -1957,9 +1957,7 @@ class ChatWindow:
                 f"已切到 API 模式：{self.config.api.label or '云端 API'} / "
                 f"{self.config.api.model}（对话走云端，不再需要本机模型服务）。"
             )
-            if self.config.api.stop_local_service:
-                self.messages.put(("stop-local-service", ""))
-            else:
+            if not self.config.api.stop_local_service:
                 self.append_hint(
                     "按设置保留本机模型服务（切回本地时不用重新加载；想腾显存就在"
                     " Praat 菜单点「前端 → 停止前端」）。"
@@ -1968,43 +1966,25 @@ class ChatWindow:
             self.append_hint(
                 "已关闭 API 模式：前端回到本地模型预设，正在把本机模型服务起起来…"
             )
-            self.messages.put(("start-local-service", ""))
+        self.messages.put(("reconcile-service", ""))
 
-    def start_local_service_worker(self) -> None:
-        """回本地模型时把 llama-server 起起来。
-
-        以前这里只改配置：端口空着也没人管，下一条消息就是
-        ``[WinError 10061] 由于目标计算机积极拒绝``。
-        """
+    def reconcile_service_worker(self) -> None:
+        """Use the same saved-configuration transition as the standalone dialog."""
 
         from . import control
 
         try:
-            result = control.ensure_local_service(
-                control.load_config(), progress=self._progress_sink()
-            )
+            result = control.reconcile_api_transition(progress=self._progress_sink())
         except (QwenServerError, qwen.QwenError, OSError, ValueError) as error:
-            self.messages.put(("failure", f"启动本机模型服务失败：{error}"))
-        else:
-            model = str(result.get("frontend_model", ""))
-            self.messages.put(
-                ("hint", f"本机模型服务已就绪：{model or '（模型名读取中）'}")
-            )
-        finally:
-            self.messages.put(("progress-done", ""))
-
-    def stop_local_service_worker(self) -> None:
-        """API 模式下把还在跑的本机 llama-server 停掉（主要目的是腾显存）。"""
-
-        from . import control
-
-        try:
-            result = control.stop_frontend(progress=self._progress_sink())
-        except (OSError, ValueError) as error:
-            self.messages.put(("hint", f"停止本机模型服务失败：{error}"))
+            self.messages.put(("failure", f"切换 API／本机服务失败：{error}"))
         else:
             if result.get("api_enabled"):
-                self.messages.put(("hint", "本机模型服务已停（API 模式下不再需要它）。"))
+                self.messages.put(("hint", "API 设置已应用，本机服务已按选项处理。"))
+            else:
+                model = str(result.get("frontend_model", ""))
+                self.messages.put(
+                    ("hint", f"本机模型服务已就绪：{model or '（模型名读取中）'}")
+                )
         finally:
             self.messages.put(("progress-done", ""))
 
@@ -2304,13 +2284,9 @@ class ChatWindow:
                     self.show_progress(text)
                 elif role == "progress-done":
                     self.hide_progress()
-                elif role == "stop-local-service":
+                elif role == "reconcile-service":
                     threading.Thread(
-                        target=self.stop_local_service_worker, daemon=True
-                    ).start()
-                elif role == "start-local-service":
-                    threading.Thread(
-                        target=self.start_local_service_worker, daemon=True
+                        target=self.reconcile_service_worker, daemon=True
                     ).start()
                 elif role in {"result", "failure"}:
                     self.append_lines(role, text)

@@ -27,7 +27,11 @@
 5. 将 `ai/run_ai_tutor.py` 作为 Python 脚本打开或在 Praat Python 编辑器中运行。
 6. 选中标准 Sound 和学习者 Sound。
 7. 填写目标语言音位、范本对象、学习者对象和阈值。
-8. 运行后查看自动导回的 `ai_errors.TextGrid`、`ai_overlay.png` 和 `ai_report.json`。
+8. 运行后在 Praat 对象列表查看自动导回的 `ai_errors` TextGrid 和 `ai_overlay` Photo；Info 窗口会列出三份报告文件的完整路径。
+
+每次纠音会在用户主目录的 `Praat AI Reports` 下建立独立文件夹，保存 `ai_report.json`、`ai_errors.TextGrid` 和（安装 Pillow 后）`ai_overlay.png`。JSON 包含完整评分与说明，用文本编辑器打开；TextGrid 和 PNG 也可从这些路径再次打开。可用环境变量 `PRAAT_AI_REPORT_DIR` 指定报告根目录，但不能指向 Praat 临时回导目录或其子目录，否则会报错。
+
+Praat 会从临时回导目录读入 TextGrid 和 PNG，然后清空该目录。PNG 在对象列表中是 **Photo**，可选中后用 `Paint image...` 绘制到 Picture 窗口，也可直接用系统图片查看器打开报告路径。JSON 不会成为 Praat 对象。报告路径以 Info 窗口打印的完整路径为准。
 
 ## Qwen 服务
 

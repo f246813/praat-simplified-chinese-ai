@@ -63,19 +63,29 @@ def write_textgrid(result: AnalysisResult, path: str | Path) -> None:
             ]
         )
 
+    points_by_time: dict[float, list[PronunciationError]] = defaultdict(list)
+    for error in result.errors:
+        center = round((error.start + error.end) / 2.0, 6)
+        points_by_time[center].append(error)
+
     lines.extend(
         [
             "    item [2]:",
-            '        class = "PointTier"',
+            '        class = "TextTier"',
             '        name = "AI_ErrorFeatures"',
             "        xmin = 0",
             f"        xmax = {result.duration:.6f}",
-            f"        points: size = {len(result.errors)}",
+            f"        points: size = {len(points_by_time)}",
         ]
     )
-    for index, error in enumerate(result.errors, start=1):
-        mark = f"/{error.ipa}/ {error.feature} {error.direction}"
-        center = (error.start + error.end) / 2.0
+    for index, (center, point_errors) in enumerate(
+        sorted(points_by_time.items()), start=1
+    ):
+        marks = dict.fromkeys(
+            f"/{error.ipa}/ {error.feature} {error.direction}"
+            for error in point_errors
+        )
+        mark = "；".join(marks)
         lines.extend(
             [
                 f"        points [{index}]:",

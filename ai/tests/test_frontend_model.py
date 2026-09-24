@@ -138,6 +138,7 @@ class CollectStatusTests(unittest.TestCase):
         self.runtime = directory / "runtime"
         self.runtime.mkdir()
         self.config_path = directory / "ai_config.json"
+        self.pid_file = self.runtime / "qwen.pid"
         self.patches = [
             patch.object(control, "runtime_dir", return_value=self.runtime),
             patch.object(control, "status_path", return_value=self.runtime / "status.json"),
@@ -182,6 +183,23 @@ class CollectStatusTests(unittest.TestCase):
         self.assertEqual(status["frontend_model_source"], "config")
         self.assertFalse(status["frontend_running"])
         self.assertFalse(status["frontend_vision"])
+
+    def test_stale_pid_record_does_not_mark_an_unrelated_process_running(self) -> None:
+        write_config(self.config_path, base_url="http://127.0.0.1:9/v1", model_path=BIG_MODEL)
+        self.pid_file.write_text(
+            json.dumps({
+                "pid": 4242,
+                "executable": str(self.config_path.parent / "llama-server.exe"),
+                "started": "win:old-process",
+            }),
+            encoding="utf-8",
+        )
+        with patch.object(control, "process_identity", return_value={
+            "executable": str(self.config_path.parent / "other.exe"),
+            "started": "win:other-process",
+        }):
+            status = control.collect_status(self.config_path)
+        self.assertFalse(status["frontend_running"])
 
 
 class FakeManager:

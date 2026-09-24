@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +47,12 @@ def request_from_dict(payload: dict[str, Any]) -> AnalysisRequest:
                 if item.get("learner_end") is not None
                 else None
             ),
+            alignment_confidence=(
+                float(item["alignment_confidence"])
+                if item.get("alignment_confidence") is not None
+                else 1.0
+            ),
+            alignment_source=str(item.get("alignment_source") or ""),
         )
         for item in payload.get("phonemes", [])
     ]
@@ -148,10 +157,21 @@ def run_tutor(
         report(0.68, "生成偏差评分")
         output_dir = bridge.output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
-        prefix = request.output_prefix
-        json_path = output_dir / f"{prefix}_report.json"
-        textgrid_path = output_dir / f"{prefix}_errors.TextGrid"
-        overlay_path = output_dir / f"{prefix}_overlay.png"
+        prefix = re.sub(r"[^\w.-]+", "_", request.output_prefix).strip("._") or "ai"
+        reports_root = Path(
+            os.getenv("PRAAT_AI_REPORT_DIR") or Path.home() / "Praat AI Reports"
+        ).expanduser().resolve()
+        if reports_root.is_relative_to(output_dir):
+            raise ValueError(
+                "PRAAT_AI_REPORT_DIR cannot be inside temporary Praat output "
+                f"directory: {output_dir}"
+            )
+        reports_root.mkdir(parents=True, exist_ok=True)
+        report_dir = Path(tempfile.mkdtemp(prefix=f"{prefix}_", dir=reports_root))
+
+        json_path = report_dir / f"{prefix}_report.json"
+        textgrid_path = report_dir / f"{prefix}_errors.TextGrid"
+        overlay_path = report_dir / f"{prefix}_overlay.png"
 
         if request.qwen_explain:
             client = QwenClient(config.qwen)
@@ -169,8 +189,11 @@ def run_tutor(
 
         report(0.86, "生成 TextGrid、JSON 和叠加图")
         write_textgrid(result, textgrid_path)
+        shutil.copyfile(textgrid_path, output_dir / textgrid_path.name)
         write_json(result, json_path)
         rendered = write_overlay_png(result, overlay_path)
+        if rendered:
+            shutil.copyfile(overlay_path, output_dir / overlay_path.name)
 
         if request.qwen_vision and rendered:
             client = QwenClient(config.qwen)
@@ -238,10 +261,10 @@ def run_from_praat(
         f"对齐：{outputs.result.alignment_source or 'unknown'}，"
         f"置信度 {outputs.result.alignment_confidence:.2f}"
     )
-    print(f"报告：{outputs.json_path}")
-    print(f"标注：{outputs.textgrid_path}")
+    print(f"报告（JSON 文件）：{outputs.json_path}")
+    print(f"标注（TextGrid 文件）：{outputs.textgrid_path}")
     if outputs.overlay_path:
-        print(f"叠加图：{outputs.overlay_path}")
+        print(f"叠加图（PNG 文件）：{outputs.overlay_path}")
     if outputs.result.explanation:
         print("")
         print(outputs.result.explanation)

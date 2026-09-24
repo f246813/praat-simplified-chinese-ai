@@ -1,6 +1,7 @@
-"""兜底行为：pid 文件丢失时按端口停止服务；对话窗口已存在时置前而不是静默返回。"""
+"""进程身份保护和窗口复用行为。"""
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,79 +10,7 @@ from unittest.mock import patch
 import start_ai_chat
 from praat_ai import control
 from praat_ai.config import AppConfig
-from praat_ai.process import process_alive
-
-
-NETSTAT_SAMPLE = """
-活动连接
-
-  协议  本地地址          外部地址        状态           PID
-  TCP    127.0.0.1:8000         0.0.0.0:0              LISTENING       15068
-  TCP    127.0.0.1:8000         127.0.0.1:52100        ESTABLISHED     15068
-  TCP    127.0.0.1:5000         0.0.0.0:0              LISTENING       777
-  TCP    [::]:8000              [::]:0                 LISTENING       15068
-  TCP    127.0.0.1:18000        0.0.0.0:0              LISTENING       888
-"""
-
-
-class NetstatParsingTests(unittest.TestCase):
-    def test_finds_listening_pid_for_port(self) -> None:
-        self.assertEqual(control._parse_netstat_listening(NETSTAT_SAMPLE, 8000), [15068])
-
-    def test_ignores_other_ports_and_non_listening_rows(self) -> None:
-        self.assertEqual(control._parse_netstat_listening(NETSTAT_SAMPLE, 5000), [777])
-        self.assertEqual(control._parse_netstat_listening(NETSTAT_SAMPLE, 4321), [])
-        self.assertEqual(control._parse_netstat_listening("", 8000), [])
-        self.assertEqual(control._parse_netstat_listening(NETSTAT_SAMPLE, 500), [])
-
-
-class StopByPortTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self._temp = tempfile.TemporaryDirectory()
-        self.pid_file = Path(self._temp.name) / "qwen.pid"   # 故意不存在，模拟 pid 丢失
-        self.config = AppConfig()
-        self.config.server.llama_server = (
-            r"D:\llama.cpp\llama-server.exe"
-        )
-        self.config.server.port = 8000
-        self.patch_pid = patch.object(control, "pid_path", return_value=self.pid_file)
-        self.patch_pid.start()
-
-    def tearDown(self) -> None:
-        self.patch_pid.stop()
-        self._temp.cleanup()
-
-    def test_kills_llama_server_found_by_port(self) -> None:
-        with (
-            patch.object(control, "_listening_pids", return_value=[15068]),
-            patch.object(control, "_process_name", return_value="llama-server.exe"),
-            patch.object(control, "_kill_process") as kill,
-        ):
-            self.assertTrue(control._stop_running_service(self.config))
-        kill.assert_called_once_with(15068)
-
-    def test_does_not_kill_another_program_on_the_port(self) -> None:
-        with (
-            patch.object(control, "_listening_pids", return_value=[4242]),
-            patch.object(control, "_process_name", return_value="chrome.exe"),
-            patch.object(control, "_kill_process") as kill,
-        ):
-            self.assertFalse(control._stop_running_service(self.config))
-        kill.assert_not_called()
-
-    def test_does_not_kill_when_process_name_is_unknown(self) -> None:
-        with (
-            patch.object(control, "_listening_pids", return_value=[4242]),
-            patch.object(control, "_process_name", return_value=""),
-            patch.object(control, "_kill_process") as kill,
-        ):
-            self.assertFalse(control._stop_running_service(self.config))
-        kill.assert_not_called()
-
-    def test_without_config_there_is_no_fallback(self) -> None:
-        with patch.object(control, "_listening_pids", return_value=[15068]) as listing:
-            self.assertFalse(control._stop_running_service())
-        listing.assert_not_called()
+from praat_ai.process import process_alive, process_identity
 
 
 class ProcessAliveTests(unittest.TestCase):
@@ -94,6 +23,12 @@ class ProcessAliveTests(unittest.TestCase):
         self.assertFalse(process_alive(999999))
         self.assertFalse(process_alive(0))
         self.assertFalse(process_alive(None))
+
+    def test_current_process_has_verifiable_identity(self) -> None:
+        identity = process_identity(os.getpid())
+        self.assertIsNotNone(identity)
+        self.assertTrue(identity["executable"])
+        self.assertTrue(identity["started"])
 
 
 class StopVerificationTests(unittest.TestCase):
@@ -113,37 +48,123 @@ class StopVerificationTests(unittest.TestCase):
         self.patch_pid.stop()
         self._temp.cleanup()
 
-    def test_pid_file_is_removed_when_the_process_is_gone(self) -> None:
+    def _record(self, *, executable: str, started: str = "100") -> None:
+        self.pid_file.write_text(
+            json.dumps({"pid": 4242, "executable": executable, "started": started}),
+            encoding="utf-8",
+        )
+
+    def test_record_writer_saves_executable_and_creation_token(self) -> None:
+        identity = {"executable": self.config.server.llama_server, "started": "100"}
+        with patch.object(control, "process_identity", return_value=identity):
+            control._write_pid_record(4242)
+        self.assertEqual(json.loads(self.pid_file.read_text(encoding="utf-8")), {
+            "pid": 4242, **identity
+        })
+
+    def test_pid_record_replace_failure_keeps_the_previous_record(self) -> None:
+        previous = '{"pid": 1111, "executable": "old", "started": "99"}'
+        self.pid_file.write_text(previous, encoding="utf-8")
+        identity = {"executable": self.config.server.llama_server, "started": "100"}
         with (
-            patch.object(control, "_kill_process"),
-            patch.object(control, "_wait_for_process_exit", return_value=True),
-            patch.object(control, "_stop_service_by_port", return_value=False),
+            patch.object(control, "process_identity", return_value=identity),
+            patch.object(control.os, "replace", side_effect=OSError("disk full")),
         ):
-            self.assertTrue(control._stop_running_service(self.config))
+            with self.assertRaisesRegex(OSError, "disk full"):
+                control._write_pid_record(4242)
+        self.assertEqual(self.pid_file.read_text(encoding="utf-8"), previous)
+        self.assertEqual(list(self.pid_file.parent.glob("qwen.pid.*.tmp")), [])
+
+    def test_legacy_pid_file_is_removed_without_terminating_its_current_owner(self) -> None:
+        self.pid_file.write_text("4242", encoding="utf-8")
+        with patch.object(control, "_kill_process") as kill:
+            self.assertFalse(control._stop_running_service())
+        kill.assert_not_called()
+        self.assertFalse(self.pid_file.exists())
+
+    def test_malformed_identity_record_fails_closed(self) -> None:
+        self.pid_file.write_text('{"pid": null}', encoding="utf-8")
+        with patch.object(control, "_kill_process") as kill:
+            self.assertFalse(control._stop_running_service())
+        kill.assert_not_called()
+        self.assertFalse(self.pid_file.exists())
+
+    def test_reused_pid_with_another_executable_is_not_killed(self) -> None:
+        self._record(executable=self.config.server.llama_server)
+        with (
+            patch.object(control, "process_identity", create=True, return_value={
+                "executable": r"D:\other\llama-server.exe", "started": "100"
+            }),
+            patch.object(control, "_kill_process") as kill,
+        ):
+            self.assertFalse(control._stop_running_service())
+        kill.assert_not_called()
+
+    def test_reused_pid_with_same_path_but_new_start_is_not_killed(self) -> None:
+        self._record(executable=self.config.server.llama_server)
+        with (
+            patch.object(control, "process_identity", create=True, return_value={
+                "executable": self.config.server.llama_server, "started": "101"
+            }),
+            patch.object(control, "_kill_process") as kill,
+        ):
+            self.assertFalse(control._stop_running_service())
+        kill.assert_not_called()
+
+    def test_verified_pid_can_stop_without_a_config_argument(self) -> None:
+        self._record(executable=self.config.server.llama_server)
+        with (
+            patch.object(control, "process_identity", create=True, return_value={
+                "executable": self.config.server.llama_server, "started": "100"
+            }),
+            patch.object(control, "_kill_process") as kill,
+            patch.object(control, "_wait_for_process_exit", return_value=True),
+        ):
+            self.assertTrue(control._stop_running_service())
+        kill.assert_called_once_with(4242, {
+            "pid": 4242,
+            "executable": self.config.server.llama_server,
+            "started": "100",
+        })
+
+    def test_pid_file_is_removed_when_the_process_is_gone(self) -> None:
+        self._record(executable=self.config.server.llama_server)
+        with (
+            patch.object(control, "process_identity", return_value={
+                "executable": self.config.server.llama_server, "started": "100"
+            }),
+            patch.object(control, "_kill_process", return_value=True),
+            patch.object(control, "_wait_for_process_exit", return_value=True),
+        ):
+            self.assertTrue(control._stop_running_service())
         self.assertFalse(self.pid_file.is_file())
 
     def test_pid_file_is_kept_when_the_process_survives(self) -> None:
+        self._record(executable=self.config.server.llama_server)
         with (
-            patch.object(control, "_kill_process"),
+            patch.object(control, "process_identity", return_value={
+                "executable": self.config.server.llama_server, "started": "100"
+            }),
+            patch.object(control, "_kill_process", return_value=True),
             patch.object(control, "_wait_for_process_exit", return_value=False),
-            patch.object(control, "_stop_service_by_port", return_value=False),
         ):
-            self.assertFalse(control._stop_running_service(self.config))
+            self.assertFalse(control._stop_running_service())
         self.assertTrue(self.pid_file.is_file())
 
-    def test_port_fallback_runs_when_the_kill_did_not_take_effect(self) -> None:
+    def test_failed_kill_keeps_record_without_port_fallback(self) -> None:
+        self._record(executable=self.config.server.llama_server)
         with (
-            patch.object(control, "_kill_process"),
-            patch.object(control, "_wait_for_process_exit", return_value=False),
-            patch.object(control, "_stop_service_by_port", return_value=True) as by_port,
+            patch.object(control, "process_identity", return_value={
+                "executable": self.config.server.llama_server, "started": "100"
+            }),
+            patch.object(control, "_kill_process", return_value=False),
         ):
-            self.assertTrue(control._stop_running_service(self.config))
-        by_port.assert_called_once()
-        self.assertFalse(self.pid_file.is_file())
+            self.assertFalse(control._stop_running_service())
+        self.assertTrue(self.pid_file.is_file())
 
 
-class StopFrontendFallbackTests(unittest.TestCase):
-    def test_stop_frontend_passes_config_to_the_fallback(self) -> None:
+class StopFrontendOwnershipTests(unittest.TestCase):
+    def test_stop_frontend_does_not_kill_a_service_without_identity_record(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             runtime = directory / "runtime"
@@ -159,12 +180,10 @@ class StopFrontendFallbackTests(unittest.TestCase):
                 patch.object(control, "pid_path", return_value=runtime / "qwen.pid"),
                 patch.object(control, "detect_gpu", return_value=None),
                 patch.object(control, "endpoint_available", return_value=False),
-                patch.object(control, "_listening_pids", return_value=[999]),
-                patch.object(control, "_process_name", return_value="llama-server.exe"),
                 patch.object(control, "_kill_process") as kill,
             ):
                 control.stop_frontend(config_path)
-        kill.assert_called_once_with(999)
+        kill.assert_not_called()
 
 
 class ChatWindowReuseTests(unittest.TestCase):

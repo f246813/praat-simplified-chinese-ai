@@ -543,8 +543,11 @@ class ApiSettingsDialog:
         if self.on_saved is not None:
             try:
                 self.on_saved(values)
-            except Exception:   # noqa: BLE001 - 回调只是刷新界面，失败不该影响保存
-                pass
+            except Exception as error:   # noqa: BLE001 - keep the saved config, report failed application
+                self._messagebox.showerror(
+                    "API 配置", f"配置已保存，但切换服务失败：{error}", parent=self.window
+                )
+                return
         self.close()
 
     def close(self) -> None:
@@ -561,7 +564,13 @@ def run_standalone(config_path: str | Path | None = None) -> int:
 
     from . import parent_watch
 
-    dialog = ApiSettingsDialog(None, config_path=config_path)
+    saved = False
+
+    def mark_saved(_values: dict[str, Any]) -> None:
+        nonlocal saved
+        saved = True
+
+    dialog = ApiSettingsDialog(None, config_path=config_path, on_saved=mark_saved)
     # Praat 关了就跟着退，别把这个小窗留在桌面上（同对话窗口）。
     if parent_watch.should_watch():
         parent_watch.ParentWatcher(dialog.window, grace_sec=2.0).start()
@@ -570,5 +579,17 @@ def run_standalone(config_path: str | Path | None = None) -> int:
         dialog.window.destroy()
     except Exception:   # noqa: BLE001
         pass
+    if saved:
+        # The menu launches this dialog in a detached process. Apply the same
+        # service transition as the chat dialog before that process exits.
+        from . import control
+
+        try:
+            control.reconcile_api_transition(config_path)
+        except (OSError, ValueError, control.QwenServerError) as error:
+            from tkinter import messagebox
+
+            messagebox.showerror("API 配置", f"配置已保存，但切换本机服务失败：{error}")
+            return 1
     del tk
     return 0

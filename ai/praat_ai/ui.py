@@ -31,6 +31,7 @@ def _equal_segments(phonemes: list[str], duration: float) -> list[PhoneSpec]:
             ipa=phoneme,
             reference_start=index * step,
             reference_end=(index + 1) * step,
+            alignment_source="ui_equal_estimate",
         )
         for index, phoneme in enumerate(phonemes)
     ]

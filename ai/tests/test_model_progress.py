@@ -11,8 +11,9 @@ Praat 那一路（菜单里点「启动前端 / 加载模型」）靠 `PRAAT_PRO
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from praat_ai import control
 from praat_ai.config import load_config
@@ -109,6 +110,42 @@ class ProgressReportingTests(unittest.TestCase):
         self.assertAlmostEqual(max(fractions), 1.0, places=3)
         self.assertTrue(any("模型" in message for _, message in seen))
         self.assertEqual(fractions, sorted(fractions))
+
+    def test_pid_record_write_failure_stops_the_new_server(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), LOCAL_ONLY)
+            manager = SimpleNamespace(
+                process=SimpleNamespace(pid=4242),
+                ensure_started=Mock(return_value=True),
+                stop=Mock(),
+            )
+            with (
+                patch.object(control, "QwenServerManager", return_value=manager),
+                patch.object(control, "detect_gpu", return_value=None),
+                patch.object(control, "select_runtime_profile", return_value=fake_profile()),
+                patch.object(control, "_write_pid_record", side_effect=OSError("disk full")),
+            ):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    control._launch_server(load_config(path), path)
+            manager.stop.assert_called_once()
+
+    def test_unverifiable_pid_identity_stops_the_new_server(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), LOCAL_ONLY)
+            manager = SimpleNamespace(
+                process=SimpleNamespace(pid=4242),
+                ensure_started=Mock(return_value=True),
+                stop=Mock(),
+            )
+            with (
+                patch.object(control, "QwenServerManager", return_value=manager),
+                patch.object(control, "detect_gpu", return_value=None),
+                patch.object(control, "select_runtime_profile", return_value=fake_profile()),
+                patch.object(control, "process_identity", return_value=None),
+            ):
+                with self.assertRaises(control.QwenServerError):
+                    control._launch_server(load_config(path), path)
+            manager.stop.assert_called_once()
 
     def test_stop_reports_progress(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -263,8 +300,8 @@ class ApiModeControlTests(unittest.TestCase):
         """默认 `api.stop_local_service=True`：进 API 之后「停止前端」要真的收掉本机服务。"""
 
         with patch.object(control, "_stop_running_service", return_value=True) as stopper, patch.object(
-            control, "running_model_info", return_value={}
-        ):
+            control, "endpoint_available", return_value=False
+        ), patch.object(control, "running_model_info", return_value={}):
             control.stop_frontend(self.path)
         stopper.assert_called_once()
 

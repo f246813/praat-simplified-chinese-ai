@@ -115,6 +115,8 @@ Qwen 不参与分数计算。
 - `ai_overlay.png`：参考与学习者的语图或特征曲线对比，错误区间用矩形框标出。
 - `ai_report.json`：完整数值、阈值和错误说明。
 
+三份文件保存在用户主目录的 `Praat AI Reports` 下独立的本次运行目录中（`PRAAT_AI_REPORT_DIR` 可覆盖根目录），脚本会打印完整路径。TextGrid 与 PNG 另复制到 Praat 的临时回导目录，分别作为 TextGrid 与 Photo 对象载入；PNG 可从 Photo 的 `Paint image...` 绘制到 Picture 窗口，JSON 作为磁盘报告用文本编辑器打开。临时回导目录会被清空，不能作为报告保存位置。
+
 ### `praat_ai.qwen`
 
 封装本地 OpenAI 兼容服务：

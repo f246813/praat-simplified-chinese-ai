@@ -10,7 +10,13 @@ Tk 的 ttk 没有圆角（边框、阴影、主题引擎都动不了），所以
 
 from __future__ import annotations
 
+from math import ceil, floor
 import tkinter as tk
+
+from PIL import Image, ImageDraw, ImageTk
+
+
+_ROUNDED_SUPERSAMPLE = 4
 
 
 # --------------------------------------------------------------------------- #
@@ -18,61 +24,60 @@ import tkinter as tk
 # --------------------------------------------------------------------------- #
 
 
-def _rounded_shapes(
+def _tk_rgb(canvas: tk.Canvas, color: str) -> tuple[int, int, int, int]:
+    red, green, blue = canvas.winfo_rgb(color)
+    return red // 257, green // 257, blue // 257, 255
+
+
+def _draw_rounded_image(
     canvas: tk.Canvas,
     x1: float,
     y1: float,
     x2: float,
     y2: float,
     radius: int,
-    fill: str,
+    fill: str | None,
+    *,
+    outline: str | None = None,
+    width: int = 1,
     tags: tuple[str, ...] = (),
 ) -> list[int]:
-    """用 4 个扇形 + 2 个矩形画出圆角矩形（比平滑多边形的角更干净）。"""
+    """绘制坐标范围 ``[x1, x2) × [y1, y2)``，四边使用相同边界规则。"""
 
-    left, top, right, bottom = int(x1), int(y1), int(x2), int(y2)
-    if right - left <= 0 or bottom - top <= 0:
+    left, top = floor(x1), floor(y1)
+    right, bottom = ceil(x2), ceil(y2)
+    image_width, image_height = right - left, bottom - top
+    if image_width <= 0 or image_height <= 0 or (fill is None and not outline):
         return []
-    radius = max(0, min(int(radius), (right - left) // 2, (bottom - top) // 2))
-    # Tk rectangles exclude their right/bottom coordinates, but arcs paint through
-    # those coordinates. Include the final pixel so straight edges meet the arcs.
-    if radius == 0:
-        return [
-            canvas.create_rectangle(left, top, right + 1, bottom + 1, fill=fill, outline="", tags=tags)
-        ]
-    ids = [
-        canvas.create_rectangle(
-            left + radius, top, right - radius + 1, bottom + 1,
-            fill=fill, outline="", tags=tags
-        ),
-        canvas.create_rectangle(
-            left, top + radius, right + 1, bottom - radius + 1,
-            fill=fill, outline="", tags=tags
-        ),
-    ]
-    diameter = 2 * radius
-    corners = (
-        (left, top, left + diameter, top + diameter, 90),
-        (right - diameter, top, right, top + diameter, 0),
-        (left, bottom - diameter, left + diameter, bottom, 180),
-        (right - diameter, bottom - diameter, right, bottom, 270),
+
+    scale = _ROUNDED_SUPERSAMPLE
+    pixel_width, pixel_height = image_width * scale, image_height * scale
+    radius_px = min(int(radius), image_width // 2, image_height // 2) * scale
+    raster = Image.new("RGBA", (pixel_width, pixel_height), (0, 0, 0, 0))
+    ImageDraw.Draw(raster).rounded_rectangle(
+        (0, 0, pixel_width - 1, pixel_height - 1),
+        radius=max(0, radius_px),
+        fill=_tk_rgb(canvas, fill) if fill is not None else None,
+        outline=_tk_rgb(canvas, outline) if outline else None,
+        width=max(1, int(width)) * scale if outline else 1,
     )
-    for cx1, cy1, cx2, cy2, start in corners:
-        ids.append(
-            canvas.create_arc(
-                cx1,
-                cy1,
-                cx2,
-                cy2,
-                start=start,
-                extent=90,
-                style="pieslice",
-                fill=fill,
-                outline="",
-                tags=tags,
-            )
-        )
-    return ids
+    raster = raster.resize(
+        (image_width, image_height), Image.Resampling.LANCZOS
+    )
+    photo = ImageTk.PhotoImage(raster, master=canvas)
+    item = canvas.create_image(left, top, image=photo, anchor="nw", tags=tags)
+
+    # Tk keeps only the image name. Retain Python references for live Canvas items,
+    # and discard stale ones after a widget's next redraw.
+    photos = getattr(canvas, "_praat_rounded_photos", None)
+    if photos is None:
+        photos = {}
+        canvas._praat_rounded_photos = photos
+    for stale in tuple(photos):
+        if not canvas.type(stale):
+            del photos[stale]
+    photos[item] = photo
+    return [item]
 
 
 def rounded_rect(
@@ -82,29 +87,26 @@ def rounded_rect(
     x2: float,
     y2: float,
     radius: int,
-    fill: str,
+    fill: str | None,
     *,
     outline: str | None = None,
     width: int = 1,
     tags: tuple[str, ...] = (),
 ) -> list[int]:
-    """圆角矩形；给了 ``outline`` 就先画外圈再画内圈（Tk 的弧线没有描边）。"""
+    """用 Pillow 高分辨率光栅统一绘制圆角填充和描边，文字仍由 Tk 绘制。"""
 
-    if not outline or width <= 0:
-        return _rounded_shapes(canvas, x1, y1, x2, y2, radius, fill, tags)
-    ids = _rounded_shapes(canvas, x1, y1, x2, y2, radius, outline, tags)
-    inset = max(1, int(width))
-    ids += _rounded_shapes(
+    return _draw_rounded_image(
         canvas,
-        x1 + inset,
-        y1 + inset,
-        x2 - inset,
-        y2 - inset,
-        radius - inset,
+        x1,
+        y1,
+        x2,
+        y2,
+        radius,
         fill,
-        tags,
+        outline=outline if width > 0 else None,
+        width=width,
+        tags=tags,
     )
-    return ids
 
 
 # --------------------------------------------------------------------------- #
@@ -160,6 +162,25 @@ def configure_ttk(style, theme) -> None:
         fieldbackground=[("disabled", theme.color("chipBg"))],
         foreground=[("disabled", muted)],
         bordercolor=[("focus", primary)],
+    )
+    # FieldCard draws the rounded outline itself, so its ttk.Entry child must
+    # not add clam's rectangular border on top of it.
+    style.configure(
+        "Field.TEntry",
+        # ttk's native Entry window keeps these corner pixels outside its field
+        # element; set the window background too so they match the shell.
+        background=surface,
+        fieldbackground=surface,
+        bordercolor=surface,
+        lightcolor=surface,
+        darkcolor=surface,
+        padding=theme.pad(4),
+    )
+    style.map(
+        "Field.TEntry",
+        bordercolor=[("focus", surface)],
+        lightcolor=[("focus", surface)],
+        darkcolor=[("focus", surface)],
     )
     style.configure(
         "TCombobox",
@@ -436,19 +457,24 @@ class RoundedButton(_Themed, tk.Canvas):
         if self._kind == "filled":
             if disabled:
                 return theme.color("chipBg"), theme.color("textMuted"), None
-            base = theme.color("primaryHover") if self._hover else theme.color("primary")
             if self._pressed:
-                base = theme.color("primaryHover")
+                return theme.color("primarySoft"), theme.color("primary"), None
+            base = theme.color("primaryHover") if self._hover else theme.color("primary")
             return base, theme.color("onPrimary"), None
         if self._kind == "outlined":
             if disabled:
                 return theme.color("surface"), theme.color("textMuted"), theme.color("border")
-            line = theme.color("primaryHover") if (self._hover or self._pressed) else theme.color("primary")
-            return theme.color("surface"), line, line
+            if self._pressed:
+                return theme.color("surfaceAlt"), theme.color("primary"), theme.color("primary")
+            if self._hover:
+                return theme.color("primarySoft"), theme.color("primaryHover"), theme.color("primaryHover")
+            return theme.color("surface"), theme.color("primary"), theme.color("primary")
         # text：无底，hover 时给一层浅底
         if disabled:
             return theme.color(self._background), theme.color("textMuted"), None
-        fill = theme.color("primarySoft") if (self._hover or self._pressed) else theme.color(self._background)
+        if self._pressed:
+            return theme.color("surfaceAlt"), theme.color("primary"), None
+        fill = theme.color("primarySoft") if self._hover else theme.color(self._background)
         return fill, theme.color("primary"), None
 
     def _redraw(self) -> None:
@@ -462,7 +488,23 @@ class RoundedButton(_Themed, tk.Canvas):
             return
         fill, foreground, outline = self._palette(theme)
         radius = theme.radius(self._radius)
-        inset = theme.pad(1) if outline else 0
+        line_width = max(1, theme.pad(1))
+        inset = line_width if outline else 0
+        if self._focused and self._state == "normal" and outline:
+            # Outlined buttons already reserve an outer pixel. Draw the focus ring
+            # there first so the normal border is painted on top and stays intact.
+            rounded_rect(
+                self,
+                0,
+                0,
+                width,
+                height,
+                radius,
+                None,
+                outline=theme.color("primarySoft"),
+                width=line_width,
+                tags=("btn",),
+            )
         rounded_rect(
             self,
             inset,
@@ -472,30 +514,20 @@ class RoundedButton(_Themed, tk.Canvas):
             radius,
             fill,
             outline=outline,
-            width=max(1, theme.pad(1)),
+            width=line_width,
             tags=("btn",),
         )
-        if self._focused and self._state == "normal":
-            ring = max(1, theme.pad(1))
-            _rounded_shapes(
-                self,
-                ring,
-                ring,
-                width - ring,
-                height - ring,
-                max(0, radius - ring),
-                theme.color("primarySoft"),
-                tags=("btn",),
-            )
-            # 焦点环画完会把底盖住：再画一次内圈 + 文字压在上面
+        if self._focused and self._state == "normal" and not outline:
             rounded_rect(
                 self,
-                ring + theme.pad(1),
-                ring + theme.pad(1),
-                width - ring - theme.pad(1),
-                height - ring - theme.pad(1),
-                max(0, radius - ring * 2),
-                fill,
+                0,
+                0,
+                width,
+                height,
+                radius,
+                None,
+                outline=theme.color("primarySoft"),
+                width=line_width,
                 tags=("btn",),
             )
         self.create_text(
@@ -966,6 +998,7 @@ class FieldCard(_Themed, tk.Frame):
         self._background = background
         self._radius = radius
         self._padding = padding
+        self._focused = False
         self.canvas = tk.Canvas(self, bd=0, highlightthickness=0)
         self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
         self.field = None
@@ -976,7 +1009,12 @@ class FieldCard(_Themed, tk.Frame):
         """把输入框放进壳里（必须先把它创建在这个 FieldCard 下面）。"""
 
         theme = self._theme
+        is_new_child = widget is not self.field
         self.field = widget
+        if is_new_child and widget.winfo_class() == "TEntry":
+            widget.configure(style="Field.TEntry")
+            widget.bind("<FocusIn>", self._on_field_focus, add="+")
+            widget.bind("<FocusOut>", self._on_field_blur, add="+")
         widget.pack(
             fill="both",
             expand=True,
@@ -985,6 +1023,14 @@ class FieldCard(_Themed, tk.Frame):
         )
         widget.lift()
         return widget
+
+    def _on_field_focus(self, _event=None) -> None:
+        self._focused = True
+        self._redraw()
+
+    def _on_field_blur(self, _event=None) -> None:
+        self._focused = False
+        self._redraw()
 
     def apply_theme(self, theme=None) -> None:
         theme = theme or self._theme
@@ -1014,7 +1060,7 @@ class FieldCard(_Themed, tk.Frame):
             height,
             theme.radius(self._radius),
             theme.color("surface"),
-            outline=theme.color("border"),
+            outline=theme.color("primary" if self._focused else "border"),
             width=max(1, theme.pad(1)),
             tags=("field",),
         )

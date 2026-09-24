@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import signal
-import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -20,7 +19,12 @@ from .config import (
     default_config_path,
     load_config,
 )
-from .process import process_alive as _process_alive
+from .process import (
+    identities_match,
+    process_alive as _process_alive,
+    process_identity,
+    terminate_process_if_identity_matches,
+)
 from .presets import (
     PresetError,
     active_preset,
@@ -55,14 +59,58 @@ def pid_path() -> Path:
     return runtime_dir() / "qwen.pid"
 
 
-def _read_pid() -> int | None:
-    path = pid_path()
-    if not path.is_file():
-        return None
+def _read_pid_record() -> dict[str, Any] | None:
+    """Legacy integer PID files cannot prove ownership and are not killable."""
+
     try:
-        return int(path.read_text(encoding="utf-8").strip())
-    except ValueError:
+        raw = json.loads(pid_path().read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return None
+        process_id = raw.get("pid")
+        executable = raw.get("executable")
+        started = raw.get("started")
+    except (OSError, ValueError, TypeError, KeyError):
         return None
+    if (
+        not isinstance(process_id, int)
+        or isinstance(process_id, bool)
+        or process_id <= 0
+        or not isinstance(executable, str)
+        or not isinstance(started, str)
+    ):
+        return None
+    if not executable or not started:
+        return None
+    return {"pid": process_id, "executable": executable, "started": started}
+
+
+def _write_pid_record(process_id: int) -> None:
+    identity = process_identity(process_id)
+    if not identity:
+        raise QwenServerError("无法核实本机模型服务的进程身份，已取消启动。")
+    target = pid_path()
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f"{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            json.dump({"pid": process_id, **identity}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _wait_for_process_exit(process_id: int, timeout: float = 20.0) -> bool:
@@ -140,9 +188,12 @@ def collect_status(config_path: str | Path | None = None) -> dict[str, Any]:
         }
         return _write_status(status)
 
-    process_id = _read_pid()
+    pid_record = _read_pid_record()
     reachable = endpoint_available(config.qwen.base_url)
-    running = reachable or _process_alive(process_id)
+    recorded_process_running = bool(
+        pid_record and _pid_is_owned_service(pid_record)
+    )
+    running = reachable or recorded_process_running
     # 状态必须反映服务真正加载的模型，而不是配置里希望加载的模型。
     live_info = running_model_info(config.qwen.base_url) if reachable else {}
     live_model = str(live_info.get("id", ""))
@@ -189,116 +240,32 @@ def collect_status(config_path: str | Path | None = None) -> dict[str, Any]:
     return _write_status(status)
 
 
-def _kill_process(process_id: int | None) -> None:
-    if not process_id:
-        return
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(process_id), "/T", "/F"],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        try:
-            os.kill(process_id, signal.SIGTERM)
-        except OSError:
-            pass
+def _kill_process(process_id: int, identity: dict[str, str]) -> bool:
+    return terminate_process_if_identity_matches(process_id, identity)
 
 
-def _parse_netstat_listening(text: str, port: int) -> list[int]:
-    """Pick the PIDs that LISTEN on `port` from `netstat -ano` output."""
+def _pid_is_owned_service(record: dict[str, Any]) -> bool:
+    """A recorded process must still have the same executable and start time."""
 
-    suffix = f":{port}"
-    process_ids: list[int] = []
-    for line in (text or "").splitlines():
-        parts = line.split()
-        if len(parts) < 4:
-            continue
-        if parts[0].upper() != "TCP" or "LISTENING" not in line.upper():
-            continue
-        if not parts[1].endswith(suffix):
-            continue
-        try:
-            process_id = int(parts[-1])
-        except ValueError:
-            continue
-        if process_id and process_id not in process_ids:
-            process_ids.append(process_id)
-    return process_ids
+    return identities_match(record, process_identity(record["pid"]))
 
 
-def _listening_pids(port: int) -> list[int]:
-    if os.name != "nt":
-        return []
-    try:
-        completed = subprocess.run(
-            ["netstat", "-ano", "-p", "tcp"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    return _parse_netstat_listening(completed.stdout, port)
-
-
-def _process_name(process_id: int) -> str:
-    """Image name of a PID (empty when it cannot be read)."""
-
-    if os.name != "nt":
-        return ""
-    try:
-        completed = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {process_id}", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    for line in (completed.stdout or "").splitlines():
-        first = line.split('","')[0].strip().strip('"').strip()
-        if first and not first.upper().startswith("INFO"):
-            return first
-    return ""
-
-
-def _stop_service_by_port(config: AppConfig) -> bool:
-    """Fallback stop: find the configured llama-server by its listening port.
-
-    只在 `runtime/qwen.pid` 丢失或失效时使用，而且必须同时满足「监听本项目的
-    host/port」和「进程名等于配置里的 llama-server」两个条件才结束进程，
-    避免误杀占用同一端口的其它程序。
-    """
-
-    expected = Path(config.server.llama_server).name.casefold()
-    if not expected:
-        return False
-    stopped = False
-    for process_id in _listening_pids(config.server.port):
-        if _process_name(process_id).casefold() != expected:
-            continue
-        _kill_process(process_id)
-        stopped = True
-    if stopped:
-        _remove_pid_file()
-    return stopped
-
-
-def _stop_running_service(config: AppConfig | None = None) -> bool:
+def _stop_running_service() -> bool:
     """Stop the llama-server started by this frontend; True if one was stopped."""
 
-    stopped = False
-    process_id = _read_pid()
-    if process_id:
-        _kill_process(process_id)
-        # 只有确认进程真的退出才算停止成功，否则先保留 pid 文件。
-        stopped = _wait_for_process_exit(process_id)
-    # pid 文件丢失、过期或没杀掉时的兜底：按端口找出本项目的 llama-server
-    if config is not None and _stop_service_by_port(config):
-        stopped = True
+    record = _read_pid_record()
+    if record is None:
+        # Missing or legacy PID records cannot distinguish this service from
+        # another copy of llama-server on the same port.
+        _remove_pid_file()
+        return False
+    process_id = record["pid"]
+    if not _pid_is_owned_service(record):
+        _remove_pid_file()
+        return False
+    if not _kill_process(process_id, record):
+        return False
+    stopped = _wait_for_process_exit(process_id)
     if stopped:
         _remove_pid_file()
     return stopped
@@ -317,6 +284,8 @@ def _wait_for_endpoint_gone(base_url: str, timeout: float = 20.0) -> None:
         if not endpoint_available(base_url):
             return
         time.sleep(0.2)
+    if endpoint_available(base_url):
+        raise QwenServerError(f"本机模型服务仍在监听 {base_url}，未能确认停止。")
 
 
 def _launch_server(
@@ -349,7 +318,11 @@ def _launch_server(
     )
     manager.ensure_started()
     if manager.process and manager.process.pid:
-        pid_path().write_text(str(manager.process.pid), encoding="utf-8")
+        try:
+            _write_pid_record(manager.process.pid)
+        except (OSError, QwenServerError):
+            manager.stop()
+            raise
     _progress(1.0, "模型服务已就绪。", progress)
     return collect_status(config_path)
 
@@ -363,7 +336,7 @@ def _restart_service(
     """Stop a service that loaded the wrong model and start it with the new config."""
 
     _progress(0.05, "停止旧的模型服务…", progress)
-    if not _stop_running_service(config):
+    if not _stop_running_service():
         raise QwenServerError(
             f"{config.qwen.base_url} 上运行的服务不是本前端启动的，无法自动重启；"
             "请先手动停止该服务，再从菜单启动前端。"
@@ -430,10 +403,16 @@ def stop_frontend(
         # 进度，不然菜单里点「停止前端」看着像没反应。
         if config.api.stop_local_service:
             _progress(0.10, "API 模式：按设置停掉本机模型服务（省显存）…", progress)
-            stopped = _stop_running_service(config)
-            _progress(0.60, "等待端口释放…", progress)
-            # 等的是**本机**端口：API 模式下 config.qwen.base_url 是云端地址。
-            _wait_for_endpoint_gone(local_base_url(config))
+            stopped = _stop_running_service()
+            base_url = local_base_url(config)
+            if stopped:
+                _progress(0.60, "等待端口释放…", progress)
+                # API 模式下 config.qwen.base_url 是云端地址。
+                _wait_for_endpoint_gone(base_url)
+            elif endpoint_available(base_url):
+                raise QwenServerError(
+                    f"{base_url} 上的服务无法确认归属，未停止；请手动检查该端口。"
+                )
             _progress(
                 1.00,
                 "本机模型服务已停。" if stopped else "本机模型服务本来就没在跑。",
@@ -448,11 +427,32 @@ def stop_frontend(
             _progress(1.00, "API 模式仍在运行；本机模型服务按设置保留。", progress)
         return collect_status(config_path)
     _progress(0.1, "正在停止模型服务…", progress)
-    _stop_running_service(config)
-    _progress(0.6, "等待端口释放…", progress)
-    _wait_for_endpoint_gone(config.qwen.base_url)
+    stopped = _stop_running_service()
+    if stopped:
+        _progress(0.6, "等待端口释放…", progress)
+        _wait_for_endpoint_gone(config.qwen.base_url)
+    elif endpoint_available(config.qwen.base_url):
+        raise QwenServerError(
+            f"{config.qwen.base_url} 上的服务无法确认归属，未停止；请手动检查该端口。"
+        )
     _progress(1.0, "已停止。", progress)
     return collect_status(config_path)
+
+
+def reconcile_api_transition(
+    config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
+) -> dict[str, Any]:
+    """Apply the saved API/local selection from either settings window."""
+
+    from .service_lock import service_transition_lock
+
+    with service_transition_lock(runtime_dir() / "service_transition.lock"):
+        config = load_config(config_path)
+        if api_is_active(config):
+            return stop_frontend(config_path, progress=progress)
+        return ensure_local_service(config, config_path, progress=progress)
 
 
 def update_config(
