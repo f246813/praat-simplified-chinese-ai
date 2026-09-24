@@ -91,6 +91,7 @@ bool Melder_tryToAppendFile (MelderFile file);
 integer MelderFile_length (MelderFile file);
 void MelderFile_delete (MelderFile file);
 void MelderFile_moveAndOrRename (MelderFile from, MelderFile to);
+void MelderFile_replaceAtomically (MelderFile from, MelderFile to);
 
 /* The following two should be combined with each other and with Windows extension setting: */
 FILE * Melder_fopen (MelderFile file, const char *type);

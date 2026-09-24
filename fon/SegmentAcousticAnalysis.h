@@ -2,6 +2,7 @@
 #define _SegmentAcousticAnalysis_h_
 
 #include "Sound.h"
+#include "Harmonicity.h"
 #include "MelderString.h"
 
 #include <optional>
@@ -157,6 +158,8 @@ struct MetricComparison {
 	std::optional<double> difference;
 	MetricStatus targetStatus { MetricStatus::unavailable };
 	MetricStatus referenceStatus { MetricStatus::unavailable };
+	std::u32string targetReason;
+	std::u32string referenceReason;
 	std::u32string reason;
 	std::u32string warning;
 };
@@ -199,7 +202,11 @@ double votMilliseconds (double burstTime, double voicingTime);
 AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burstTime,
 		std::optional<double> voicingTime, VOTBoundaryMode mode,
 		const VOTCandidateSettings &candidateSettings = {});
+AnalysisResult confirmVOTBoundaries (const SegmentInput &input, const AnalysisResult *candidates,
+		double burstTime, double voicingTime);
+std::optional<double> maximumDefinedHnr (const constHarmonicity harmonicity);
 void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output);
 void ComparisonResult_toTsv (const ComparisonResult &result, MelderString *output);
+void writeSegmentAnalysisTsvAtomically (conststring32 resultFileName, conststring32 serialized);
 
 #endif

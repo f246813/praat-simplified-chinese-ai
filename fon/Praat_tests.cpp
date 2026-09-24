@@ -32,6 +32,8 @@
 #include "NUM2.h"
 #include "Sound.h"
 #include "SegmentAcousticAnalysis.h"
+#include "Harmonicity.h"
+#include "Sound_extensions.h"
 
 #include "enums_getText.h"
 #include "Praat_tests_enums.h"
@@ -766,18 +768,28 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			AnalysisResult target {};
 			target.schemaVersion = 1;
 			target.kind = AnalysisKind::VOT;
+			target.source.source.objectId = 42;
 			target.source.source.displayName = U"synthetic";
-			target.source.startTime = 0.0;
-			target.source.endTime = 1.0;
+			target.source.source.filePath = U"D:/recordings/synthetic.wav";
+			target.source.source.sampleRate = 16000.0;
+			target.source.source.channels = 1;
+			target.source.startTime = 0.25;
+			target.source.endTime = 0.75;
+			target.source.burstTime = 0.0;
+			target.source.voicingTime = 0.0;
+			target.source.annotation.language = U"zh";
+			target.parameters.values.push_back ({ U"boundaryMode", U"manualConfirmed", U"" });
+			target.parameters.values.push_back ({ U"burstThresholdDb", U"6", U"dB" });
 			target.metrics.push_back ({ U"duration", U"ms", 0.0, MetricStatus::measured, U"" });
 			target.metrics.push_back ({ U"A1-P0", U"dB", {}, MetricStatus::unavailable, U"no P0 peak" });
 			Melder_assert (target.metrics [0].value.has_value() && target.metrics [0].value.value() == 0.0);
 			Melder_assert (! target.metrics [1].value.has_value());
 			autoMelderString tsv;
 			AnalysisResult_toTsv (target, & tsv);
-			Melder_assert (str32str (tsv.string, U"schema_version\tanalysis_kind\tmetric_id\tvalue\tunit\tstatus\treason") != nullptr);
-			Melder_assert (str32str (tsv.string, U"1\tVOT\tduration\t0\tms\tmeasured") != nullptr);
-			Melder_assert (str32str (tsv.string, U"1\tVOT\tA1-P0\t\tdB\tunavailable\tno P0 peak") != nullptr);
+			Melder_assert (str32str (tsv.string, U"schema_version\tpraat_version\tsource\tsource_object_id\tsource_file\tsource_start_s\tsource_end_s\tsource_duration_s\tsource_sample_rate_hz\tsource_channels\tsource_kind\tanalysis_kind\tparameters\tlanguage\tipa\tspeaker_id\tneighboring_vowel\tburst_time_s\tvoicing_time_s\tmetric_id\tvalue\tunit\tstatus\treason") != nullptr);
+			Melder_assert (str32str (tsv.string, U"synthetic\t42\tD:/recordings/synthetic.wav\t0.25\t0.75\t0.5\t16000\t1\tSound\tVOT\tboundaryMode=manualConfirmed; burstThresholdDb=6 dB\tzh") != nullptr);
+			Melder_assert (str32str (tsv.string, U"\t0\t0\tduration\t0\tms\tmeasured") != nullptr);
+			Melder_assert (str32str (tsv.string, U"\t0\t0\tA1-P0\t\tdB\tunavailable\tno P0 peak") != nullptr);
 
 			AnalysisResult reference = target;
 			target.parameters.compatibilityKeys.push_back (U"windowLength");
@@ -792,7 +804,7 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (incompatible.rows [0].referenceValue.value() == 0.0);
 
 			AnalysisResult compatibleReference = reference;
-			compatibleReference.parameters.values [0].value = U"25";
+			compatibleReference.parameters.values [2].value = U"25";
 			compatibleReference.metrics [0].value = 10.0;
 			const ComparisonResult compatible = compareCompatibleMetrics (target, compatibleReference);
 			Melder_assert (compatible.rows [0].difference.value() == -10.0);
@@ -840,6 +852,8 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 				input.samples = samples.get ();
 				input.metadata.startTime = 0.25;
 				input.metadata.endTime = 0.55;
+				input.metadata.source.sampleRate = 1.0 / samples -> dx;
+				input.metadata.source.channels = samples -> ny;
 				return analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates);
 			};
 			const AnalysisResult positive = runFixture (SegmentVOTFixture::positive);
@@ -878,6 +892,53 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			const AnalysisResult transient = runFixture (SegmentVOTFixture::transientOnly);
 			const MetricResult *transientVot = findSegmentVOTMetric (transient, U"vot_candidate_ms");
 			Melder_assert (transientVot && ! transientVot -> value && transientVot -> status == MetricStatus::unavailable);
+
+			autoSound boundedSource = createSegmentVOTFixture (SegmentVOTFixture::positive);
+			SegmentInput boundedInput;
+			boundedInput.samples = boundedSource.get ();
+			boundedInput.metadata.startTime = 0.25;
+			boundedInput.metadata.endTime = 0.55;
+			boundedInput.metadata.source.sampleRate = 1.0 / boundedSource -> dx;
+			const AnalysisResult fullSourceRange = analyseVOT (boundedInput, {}, {}, VOTBoundaryMode::estimateCandidates);
+			autoSound extractedSource = Sound_extractPart (boundedSource.get(), 0.25, 0.55,
+				kSound_windowShape::RECTANGULAR, 1.0, true);
+			SegmentInput extractedInput = boundedInput;
+			extractedInput.samples = extractedSource.get();
+			const AnalysisResult extractedRange = analyseVOT (extractedInput, {}, {}, VOTBoundaryMode::estimateCandidates);
+			const MetricResult *fullBurst = findSegmentVOTMetric (fullSourceRange, U"burst_time_candidate");
+			const MetricResult *partBurst = findSegmentVOTMetric (extractedRange, U"burst_time_candidate");
+			const MetricResult *fullVoice = findSegmentVOTMetric (fullSourceRange, U"voicing_time_candidate");
+			const MetricResult *partVoice = findSegmentVOTMetric (extractedRange, U"voicing_time_candidate");
+			Melder_assert (fullBurst && partBurst && fullBurst -> value && partBurst -> value);
+			Melder_assert (segmentVOTWithin (fullBurst -> value.value(), partBurst -> value.value(), 0.002));
+			Melder_assert (fullVoice && partVoice && fullVoice -> value && partVoice -> value);
+			Melder_assert (segmentVOTWithin (fullVoice -> value.value(), partVoice -> value.value(), 0.002));
+			boundedInput.metadata.endTime = 0.35;
+			const AnalysisResult shortRange = analyseVOT (boundedInput, {}, {}, VOTBoundaryMode::estimateCandidates);
+			const MetricResult *shortHnr = findSegmentVOTMetric (shortRange, U"hnr_max_db");
+			Melder_assert (shortHnr && ! shortHnr -> value && shortHnr -> status == MetricStatus::unavailable);
+			autoHarmonicity hnrValues = Harmonicity_create (0.0, 0.03, 3, 0.01, 0.005);
+			hnrValues -> z [1] [1] = -12.0;
+			hnrValues -> z [1] [2] = -4.0;
+			hnrValues -> z [1] [3] = std::numeric_limits<double>::quiet_NaN();
+			const std::optional<double> negativeHnrMaximum = maximumDefinedHnr (hnrValues.get());
+			Melder_assert (negativeHnrMaximum && negativeHnrMaximum.value() == -4.0);
+			for (integer frame = 1; frame <= hnrValues -> nx; frame ++)
+				hnrValues -> z [1] [frame] = std::numeric_limits<double>::quiet_NaN();
+			Melder_assert (! maximumDefinedHnr (hnrValues.get()));
+
+			autoSound confirmationSource = createSegmentVOTFixture (SegmentVOTFixture::positive);
+			SegmentInput confirmationInput;
+			confirmationInput.samples = confirmationSource.get();
+			confirmationInput.metadata.startTime = 0.25;
+			confirmationInput.metadata.endTime = 0.55;
+			const AnalysisResult confirmationCandidates = analyseVOT (confirmationInput, {}, {}, VOTBoundaryMode::estimateCandidates);
+			const AnalysisResult confirmed = confirmVOTBoundaries (confirmationInput, & confirmationCandidates, 0.0, 0.0);
+			Melder_assert (confirmed.source.burstTime && confirmed.source.burstTime.value() == 0.0);
+			Melder_assert (confirmed.source.voicingTime && confirmed.source.voicingTime.value() == 0.0);
+			Melder_assert (findSegmentVOTMetric (confirmed, U"burst_time_candidate") -> reason ==
+				findSegmentVOTMetric (confirmationCandidates, U"burst_time_candidate") -> reason);
+			Melder_assert (findSegmentVOTMetric (confirmed, U"vot_ms") -> value.value() == 0.0);
 		} break;
 		case kPraatTests::CHECK_SEGMENT_COMPARISON_DESCRIPTOR: {
 			TargetReferenceSegment pair {};
@@ -931,7 +992,7 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			target.parameters.compatibilityKeys.push_back (U"maximumFrequency");
 			target.parameters.values.push_back ({ U"windowLength", U"0.025", U"s" });
 			target.parameters.compatibilityKeys.push_back (U"windowLength");
-			target.metrics.push_back ({ U"energy_ratio", U"ratio", 0.4, MetricStatus::measured, U"" });
+			target.metrics.push_back ({ U"energy_ratio", U"ratio", 0.4, MetricStatus::warning, U"target used fallback burst band" });
 			target.metrics.push_back ({ U"missing_metric", U"dB", {}, MetricStatus::unavailable, U"no peak" });
 			target.frequencyCurves.push_back ({ U"energy_ratio", U"ratio", { 500.0, 1000.0, 1500.0 }, { 0.5, 1.0, 1.5 } });
 
@@ -941,11 +1002,14 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			reference.source.startTime = 8.0;
 			reference.source.endTime = 8.25;
 			reference.metrics [0].value = 0.2;
+			reference.metrics [0].reason = U"reference accepted high burst band";
 			reference.frequencyCurves [0] = { U"energy_ratio", U"ratio", { 600.0, 1000.0, 1400.0 }, { 1.2, 2.0, 2.8 } };
 			const ComparisonResult commonBand = compareCompatibleMetrics (target, reference);
 			Melder_assert (commonBand.rows.size() == 2);
 			Melder_assert (std::abs (commonBand.rows [0].difference.value() - 0.2) < 1.0e-12);
 			Melder_assert (! commonBand.rows [0].warning.empty());
+			Melder_assert (commonBand.rows [0].targetReason == U"target used fallback burst band");
+			Melder_assert (commonBand.rows [0].referenceReason == U"reference accepted high burst band");
 			Melder_assert (commonBand.rows [1].reason.find (U"no peak") != std::u32string::npos);
 			Melder_assert (commonBand.frequencyOverlays.size() == 1);
 			Melder_assert (commonBand.frequencyOverlays [0].frequencyHz.size() == 3);
@@ -966,6 +1030,28 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (! insufficientBandwidth.rows [0].difference);
 			Melder_assert (insufficientBandwidth.rows [0].reason.find (U"Nyquist") != std::u32string::npos);
 			Melder_assert (insufficientBandwidth.frequencyOverlays.size() == 1 && ! insufficientBandwidth.frequencyOverlays [0].reason.empty());
+
+			AnalysisResult highRateVOT = [&] {
+				autoSound sample = createSegmentVOTFixture (SegmentVOTFixture::positive);
+				SegmentInput input;
+				input.samples = sample.get();
+				input.metadata.startTime = 0.25;
+				input.metadata.endTime = 0.55;
+				input.metadata.source.sampleRate = 44100.0;
+				return analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates);
+			}();
+			AnalysisResult lowRateVOT = highRateVOT;
+			lowRateVOT.source.source.sampleRate = 8000.0;
+			const ComparisonResult mismatchedVOTBand = compareCompatibleMetrics (lowRateVOT, highRateVOT);
+			bool burstDifferenceBlocked = false, voicingDifferenceRetained = false;
+			for (const MetricComparison &row : mismatchedVOTBand.rows) {
+				if (row.metricId == U"burst_time_candidate" || row.metricId == U"burst_rise_db" ||
+						row.metricId == U"vot_candidate_s" || row.metricId == U"vot_candidate_ms")
+					burstDifferenceBlocked = ! row.difference && row.targetValue && row.referenceValue && ! row.reason.empty();
+				if (row.metricId == U"voicing_time_candidate")
+					voicingDifferenceRetained = row.difference.has_value();
+			}
+			Melder_assert (burstDifferenceBlocked && voicingDifferenceRetained);
 
 			TimeSeries curve { U"energy_ratio", U"ratio", { 1.25, 1.75, 2.25 }, { 0.2, 0.4, 0.3 } };
 			const NormalizedTimeSeries normalized = normalizeTimeSeriesForOverlay (curve, target.source);
@@ -1000,6 +1086,7 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (headerEnd != std::u32string::npos && firstRowEnd != std::u32string::npos);
 			Melder_assert (tabCount (serializedText, 0, headerEnd) == tabCount (serializedText, headerEnd + 1, firstRowEnd));
 			Melder_assert (str32str (serialized.string, U"schema_version\tpraat_version\tmetric_id\ttarget_source") != nullptr);
+			Melder_assert (str32str (serialized.string, U"target_status\treference_status\ttarget_reason\treference_reason\treason\twarning") != nullptr);
 			Melder_assert (str32str (serialized.string, U"target_start_s\ttarget_end_s\ttarget_duration_s") != nullptr);
 			Melder_assert (str32str (serialized.string, U"frequency_grid_hz\ttarget_frequency_values\treference_frequency_values") != nullptr);
 			Melder_assert (str32str (serialized.string, U"target audio") != nullptr && str32str (serialized.string, U"reference audio") != nullptr);
@@ -1008,7 +1095,7 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (str32str (serialized.string, U"\t8.25\t0.25\t22050\t1\tSound") != nullptr);
 			Melder_assert (str32str (serialized.string, U"maximumFrequency=5000 Hz") != nullptr);
 			Melder_assert (str32str (serialized.string, U"600; 1000; 1400") != nullptr);
-			Melder_assert (str32str (serialized.string, U"\tratio\t0.4\t0.2\t0.2\tmeasured\tmeasured") != nullptr);
+			Melder_assert (str32str (serialized.string, U"\tratio\t0.4\t0.2\t0.2\twarning\twarning\ttarget used fallback burst band\treference accepted high burst band") != nullptr);
 			Melder_assert (str32str (serialized.string, U"\tdB\t\t\t\tunavailable\tunavailable") != nullptr);
 		} break;
 	}

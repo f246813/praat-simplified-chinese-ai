@@ -54,7 +54,8 @@ static std::optional<double> optionalVotBoundary (double value) {
 void praat_Sound_writeVOTAnalysisToFile (Sound sound, double startTime, double endTime,
 		std::optional<double> burstTime, std::optional<double> voicingTime,
 		const VOTCandidateSettings &settings, conststring32 resultFileName,
-		SourceKind sourceKind, conststring32 sourceName)
+		SourceKind sourceKind, conststring32 sourceName,
+		std::optional<integer> objectId, std::optional<std::u32string> filePath)
 {
 	Melder_require (resultFileName && resultFileName [0] != U'\0', U"A VOT result file path is required.");
 	Melder_require (burstTime.has_value() == voicingTime.has_value(),
@@ -66,6 +67,8 @@ void praat_Sound_writeVOTAnalysisToFile (Sound sound, double startTime, double e
 	input.metadata.source.kind = sourceKind;
 	if (sourceName)
 		input.metadata.source.displayName = sourceName;
+	input.metadata.source.objectId = objectId;
+	input.metadata.source.filePath = std::move (filePath);
 	input.metadata.source.channels = sound -> ny;
 	input.metadata.source.sampleRate = 1.0 / sound -> dx;
 	const VOTBoundaryMode mode = burstTime && voicingTime ? VOTBoundaryMode::manual :
@@ -74,29 +77,12 @@ void praat_Sound_writeVOTAnalysisToFile (Sound sound, double startTime, double e
 
 	autoMelderString serialized;
 	AnalysisResult_toTsv (result, & serialized);
-	structMelderFile outputFile { }, temporaryFile { };
-	Melder_pathToFile (resultFileName, & outputFile);
-	autoMelderString temporaryPath;
-	MelderString_append (& temporaryPath, resultFileName, U".tmp");
-	Melder_pathToFile (temporaryPath.string, & temporaryFile);
-	MelderFile_delete (& temporaryFile);
-	try {
-		MelderFile_writeText_e (& temporaryFile, serialized.string, kMelder_textOutputEncoding::UTF8);
-		if (MelderFile_exists (& outputFile))
-			MelderFile_delete (& outputFile);
-		MelderFile_moveAndOrRename (& temporaryFile, & outputFile);
-	} catch (MelderError) {
-		MelderFile_delete (& temporaryFile);
-		throw;
-	} catch (const std::exception &) {
-		MelderFile_delete (& temporaryFile);
-		throw;
-	}
+	writeSegmentAnalysisTsvAtomically (resultFileName, serialized.string);
 }
 
 void praat_LongSound_writeVOTAnalysisToFile (LongSound longSound, double startTime, double endTime,
 		std::optional<double> burstTime, std::optional<double> voicingTime,
-		const VOTCandidateSettings &settings, conststring32 resultFileName)
+		const VOTCandidateSettings &settings, conststring32 resultFileName, std::optional<integer> objectId)
 {
 	Melder_require (std::isfinite (startTime) && std::isfinite (endTime) && startTime < endTime &&
 		startTime >= longSound -> xmin && endTime <= longSound -> xmax,
@@ -114,7 +100,16 @@ void praat_LongSound_writeVOTAnalysisToFile (LongSound longSound, double startTi
 	}
 	autoSound segment = LongSound_extractPart (longSound, extractionStart, extractionEnd, true);
 	praat_Sound_writeVOTAnalysisToFile (segment.get(), startTime, endTime, burstTime, voicingTime,
-		settings, resultFileName, SourceKind::longSound, longSound -> name.get());
+		settings, resultFileName, SourceKind::longSound, longSound -> name.get(), objectId,
+		MelderFile_isNull (& longSound -> file) ? std::optional<std::u32string> {} :
+			std::optional<std::u32string> { MelderFile_peekPath (& longSound -> file) });
+}
+
+static std::optional<std::u32string> selectedObjectFilePath (integer objectPosition) {
+	Melder_assert (objectPosition >= 1 && objectPosition <= theCurrentPraatObjects -> n);
+	MelderFile file = & theCurrentPraatObjects -> list [objectPosition]. file;
+	return MelderFile_isNull (file) ? std::optional<std::u32string> {} :
+		std::optional<std::u32string> { MelderFile_peekPath (file) };
 }
 
 /***** SHARED SEGMENT ANALYSIS *****/
@@ -129,7 +124,7 @@ FORM (WRITE_ONE__Sound_VOT, U"VOT analysis", U"VOT...") {
 	OUTFILE (resultFileName, U"Result TSV file", U"vot-analysis.tsv")
 	OK
 DO
-	FIND_ONE (Sound)
+	FIND_ONE_WITH_IOBJECT (Sound)
 	try {
 		const double actualStartTime = isundef (startTime) ? my xmin : startTime;
 		const double actualEndTime = isundef (endTime) ? my xmax : endTime;
@@ -137,7 +132,8 @@ DO
 		settings.burstThresholdDb = burstThresholdDb;
 		settings.pitchFloorHz = pitchFloorHz;
 		praat_Sound_writeVOTAnalysisToFile (me, actualStartTime, actualEndTime,
-			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, resultFileName);
+			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, resultFileName,
+			SourceKind::sound, FULL_NAME, ID, selectedObjectFilePath (IOBJECT));
 	} catch (const std::exception &error) {
 		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
 	}
@@ -154,7 +150,7 @@ FORM (WRITE_ONE__LongSound_VOT, U"VOT analysis", U"VOT...") {
 	OUTFILE (resultFileName, U"Result TSV file", U"vot-analysis.tsv")
 	OK
 DO
-	FIND_ONE (LongSound)
+	FIND_ONE_WITH_IOBJECT (LongSound)
 	try {
 		const double actualStartTime = isundef (startTime) ? my xmin : startTime;
 		const double actualEndTime = isundef (endTime) ? my xmax : endTime;
@@ -162,7 +158,7 @@ DO
 		settings.burstThresholdDb = burstThresholdDb;
 		settings.pitchFloorHz = pitchFloorHz;
 		praat_LongSound_writeVOTAnalysisToFile (me, actualStartTime, actualEndTime,
-			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, resultFileName);
+			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, resultFileName, ID);
 	} catch (const std::exception &error) {
 		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
 	}

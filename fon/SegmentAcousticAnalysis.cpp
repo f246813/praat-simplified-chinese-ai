@@ -6,10 +6,19 @@
 #include "Sound_to_Pitch.h"
 #include "melder_app.h"
 #include "melder_atof.h"
+#include "melder_files.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <limits>
 #include <string_view>
+
+#if defined (_WIN32)
+	#include <process.h>
+#else
+	#include <unistd.h>
+#endif
 
 void TargetReferenceSegment_setTarget (TargetReferenceSegment *pair, const SegmentAnalysisSelection &target) {
 	Melder_assert (pair);
@@ -101,6 +110,35 @@ std::u32string nyquistCompatibilityReason (const SegmentMetadata &target, const 
 	return {};
 }
 
+std::u32string burstBandCompatibilityReason (const SegmentMetadata &target, const SegmentMetadata &reference,
+		const ParameterSnapshot &targetParameters, const ParameterSnapshot &referenceParameters)
+{
+	const ParameterValue *targetPath = findParameter (targetParameters, U"burstDetectionPath");
+	const ParameterValue *referencePath = findParameter (referenceParameters, U"burstDetectionPath");
+	if (! targetPath || ! referencePath)
+		return {};
+	if (targetPath -> value != referencePath -> value)
+		return U"incompatible VOT burst detection paths (" + targetPath -> value + U" vs " + referencePath -> value + U")";
+	if (targetPath -> value != U"high-band")
+		return {};
+	const ParameterValue *targetMaximumParameter = findParameter (targetParameters, U"burstBandMaximumHz");
+	const ParameterValue *referenceMaximumParameter = findParameter (referenceParameters, U"burstBandMaximumHz");
+	if (! targetMaximumParameter || ! referenceMaximumParameter)
+		return U"incompatible VOT burst band settings";
+	const double requiredMaximum = std::max (Melder_atof (targetMaximumParameter -> value.c_str()),
+		Melder_atof (referenceMaximumParameter -> value.c_str()));
+	if (target.source.sampleRate > 0.0 && target.source.sampleRate * 0.5 < requiredMaximum)
+		return U"target Nyquist does not cover the VOT burst detection band";
+	if (reference.source.sampleRate > 0.0 && reference.source.sampleRate * 0.5 < requiredMaximum)
+		return U"reference Nyquist does not cover the VOT burst detection band";
+	return {};
+}
+
+bool burstDependentMetric (const std::u32string &metricId) {
+	return metricId == U"burst_time_candidate" || metricId == U"burst_rise_db" ||
+		metricId == U"vot_candidate_s" || metricId == U"vot_candidate_ms";
+}
+
 std::u32string sampleRateWarning (const SegmentMetadata &target, const SegmentMetadata &reference) {
 	if (target.source.sampleRate <= 0.0 || reference.source.sampleRate <= 0.0 ||
 			std::abs (target.source.sampleRate - reference.source.sampleRate) < 1.0e-9)
@@ -112,7 +150,7 @@ std::u32string sampleRateWarning (const SegmentMetadata &target, const SegmentMe
 void addComparisonRow (	ComparisonResult &comparison,
 		const AnalysisResult &target, const AnalysisResult &reference,
 		const MetricResult *targetMetric, const MetricResult *referenceMetric,
-		const std::u32string &parameterReason, const std::u32string &bandwidthReason,
+		const std::u32string &parameterReason, const std::u32string &bandwidthReason, const std::u32string &burstReason,
 		const std::u32string &rateWarning
 ) {
 	const MetricResult *identityMetric = targetMetric ? targetMetric : referenceMetric;
@@ -122,10 +160,12 @@ void addComparisonRow (	ComparisonResult &comparison,
 	if (targetMetric) {
 		row.targetValue = targetMetric -> value;
 		row.targetStatus = targetMetric -> status;
+		row.targetReason = targetMetric -> reason;
 	}
 	if (referenceMetric) {
 		row.referenceValue = referenceMetric -> value;
 		row.referenceStatus = referenceMetric -> status;
+		row.referenceReason = referenceMetric -> reason;
 	}
 	row.warning = rateWarning;
 
@@ -139,6 +179,8 @@ void addComparisonRow (	ComparisonResult &comparison,
 		row.reason = parameterReason;
 	} else if (! bandwidthReason.empty()) {
 		row.reason = bandwidthReason;
+	} else if (burstDependentMetric (row.metricId) && ! burstReason.empty()) {
+		row.reason = burstReason;
 	} else if (! targetMetric -> value || ! referenceMetric -> value) {
 		if (! targetMetric -> value) {
 			row.reason = U"target unavailable";
@@ -413,9 +455,11 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 			input.metadata.endTime > input.samples -> xmax)
 		Melder_throw (U"Candidate estimation requires a valid segment inside the Sound time domain.");
 
-	Sound sound = const_cast<Sound> (input.samples);
 	const double minimumTime = input.metadata.startTime;
 	const double maximumTime = input.metadata.endTime;
+	autoSound extractedSegment = Sound_extractPart (const_cast<Sound> (input.samples), minimumTime, maximumTime,
+		kSound_windowShape::RECTANGULAR, 1.0, true);
+	Sound sound = extractedSegment.get();
 	const BurstDetection burst = detectBurst (sound, minimumTime, maximumTime, settings);
 	autoPitch pitch = Sound_to_Pitch_rawAc (sound,
 		settings.pitchTimeStepSeconds, settings.pitchFloorHz, settings.pitchCeilingHz,
@@ -474,6 +518,8 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	result.kind = AnalysisKind::VOT;
 	result.source = input.metadata;
 	addTextParameter (result, U"boundaryMode", U"estimateCandidates");
+	addTextParameter (result, U"burstDetectionPath",
+		0.5 / sound -> dx >= settings.burstBandMaximumHz ? U"high-band" : U"full-band-fallback", U"", false);
 	addParameter (result, U"burstBandMinimumHz", settings.burstBandMinimumHz, U"Hz");
 	addParameter (result, U"burstBandMaximumHz", settings.burstBandMaximumHz, U"Hz");
 	addParameter (result, U"burstBandSmoothingHz", settings.burstBandSmoothingHz, U"Hz");
@@ -530,17 +576,14 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 
 	std::optional<double> hnrMaximum;
 	if (voicingTime && ! rangeStartsVoiced) {
-		const double hnrEnd = std::min (voicingTime.value() + settings.hnrSliceSeconds, input.samples -> xmax);
+		const double hnrEnd = std::min (voicingTime.value() + settings.hnrSliceSeconds, sound -> xmax);
 		if (hnrEnd - voicingTime.value() >= settings.hnrMinimumSliceSeconds) {
 			try {
-				autoSound hnrSlice = Sound_extractPart (input.samples, voicingTime.value(), hnrEnd,
+				autoSound hnrSlice = Sound_extractPart (sound, voicingTime.value(), hnrEnd,
 					kSound_windowShape::RECTANGULAR, 1.0, false);
 				autoHarmonicity hnr = Sound_to_Harmonicity_cc (hnrSlice.get(), settings.pitchTimeStepSeconds,
 					settings.pitchFloorHz, 0.1, 1.0);
-				double maximumHnr = 0.0;
-				for (integer frame = 1; frame <= hnr -> nx; frame ++)
-					maximumHnr = std::max (maximumHnr, hnr -> z [1] [frame]);
-				hnrMaximum = maximumHnr;
+				hnrMaximum = maximumDefinedHnr (hnr.get());
 			} catch (MelderError) {
 				Melder_clearError ();
 			}
@@ -575,6 +618,20 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 
 } // namespace
 
+std::optional<double> maximumDefinedHnr (constHarmonicity harmonicity) {
+	if (! harmonicity)
+		return {};
+	std::optional<double> maximum;
+	for (integer frame = 1; frame <= harmonicity -> nx; frame ++) {
+		const double value = harmonicity -> z [1] [frame];
+		if (isundef (value) || ! std::isfinite (value) || value < -150.0)
+			continue;
+		if (! maximum || value > maximum.value())
+			maximum = value;
+	}
+	return maximum;
+}
+
 ComparisonResult compareCompatibleMetrics (const AnalysisResult &target, const AnalysisResult &reference) {
 	ComparisonResult result;
 	result.target = target.source;
@@ -587,14 +644,16 @@ ComparisonResult compareCompatibleMetrics (const AnalysisResult &target, const A
 	const std::u32string parameterReason = parameterCompatibilityReason (target.parameters, reference.parameters);
 	const std::u32string bandwidthReason = nyquistCompatibilityReason (target.source, reference.source,
 		target.parameters, reference.parameters);
+	const std::u32string burstReason = burstBandCompatibilityReason (target.source, reference.source,
+		target.parameters, reference.parameters);
 	const std::u32string rateWarning = sampleRateWarning (target.source, reference.source);
 	for (const MetricResult &targetMetric : target.metrics) {
 		addComparisonRow (result, target, reference, & targetMetric, findMetric (reference, targetMetric.id),
-			parameterReason, bandwidthReason, rateWarning);
+			parameterReason, bandwidthReason, burstReason, rateWarning);
 	}
 	for (const MetricResult &referenceMetric : reference.metrics) {
 		if (! findMetric (target, referenceMetric.id))
-			addComparisonRow (result, target, reference, nullptr, & referenceMetric, parameterReason, bandwidthReason, rateWarning);
+			addComparisonRow (result, target, reference, nullptr, & referenceMetric, parameterReason, bandwidthReason, burstReason, rateWarning);
 	}
 	for (const FrequencySeries &targetCurve : target.frequencyCurves) {
 		const auto referenceCurve = std::find_if (reference.frequencyCurves.begin(), reference.frequencyCurves.end(),
@@ -739,11 +798,50 @@ AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burs
 	return result;
 }
 
+AnalysisResult confirmVOTBoundaries (const SegmentInput &input, const AnalysisResult *candidates,
+		double burstTime, double voicingTime)
+{
+	if (candidates)
+		Melder_require (candidates -> kind == AnalysisKind::VOT,
+			U"Only VOT candidates can be confirmed as VOT boundaries.");
+	AnalysisResult result = analyseVOT (input, burstTime, voicingTime, VOTBoundaryMode::manual);
+	for (ParameterValue &parameter : result.parameters.values) {
+		if (parameter.name == U"boundaryMode")
+			parameter.value = U"manualConfirmed";
+	}
+	if (candidates) {
+		for (const ParameterValue &parameter : candidates -> parameters.values) {
+			if (parameter.name == U"boundaryMode")
+				continue;
+			result.parameters.values.push_back ({ U"candidate." + parameter.name, parameter.value, parameter.unit });
+		}
+		for (const MetricResult &metric : candidates -> metrics) {
+			if (metric.id == U"burst_time_candidate" || metric.id == U"burst_rise_db" ||
+				metric.id == U"voicing_time_candidate" || metric.id == U"voicing_f0_hz")
+				result.metrics.push_back (metric);
+		}
+	}
+	result.metrics.push_back ({ U"burst_time_confirmed", U"s", burstTime, MetricStatus::measured,
+		U"Manually confirmed boundary; see burst_time_s in source metadata." });
+	result.metrics.push_back ({ U"voicing_time_confirmed", U"s", voicingTime, MetricStatus::measured,
+		U"Manually confirmed boundary; see voicing_time_s in source metadata." });
+	return result;
+}
+
 void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output) {
 	MelderString_empty (output);
-	MelderString_append (output, U"schema_version\tanalysis_kind\tmetric_id\tvalue\tunit\tstatus\treason\n");
+	MelderString_append (output,
+		U"schema_version\tpraat_version\tsource\tsource_object_id\tsource_file\tsource_start_s\tsource_end_s\tsource_duration_s\tsource_sample_rate_hz\tsource_channels\tsource_kind\tanalysis_kind\tparameters\tlanguage\tipa\tspeaker_id\tneighboring_vowel\tburst_time_s\tvoicing_time_s\tmetric_id\tvalue\tunit\tstatus\treason\n");
 	for (const MetricResult &metric : result.metrics) {
-		MelderString_append (output, result.schemaVersion, U"\t", analysisKindName (result.kind), U"\t");
+		MelderString_append (output, result.schemaVersion, U"\t");
+		appendTsvField (output, Melder_appVersionSTR());
+		MelderString_appendCharacter (output, U'\t');
+		appendTsvSourceMetadata (output, result.source, result.parameters, result.kind);
+		MelderString_appendCharacter (output, U'\t');
+		appendTsvOptionalNumber (output, result.source.burstTime);
+		MelderString_appendCharacter (output, U'\t');
+		appendTsvOptionalNumber (output, result.source.voicingTime);
+		MelderString_appendCharacter (output, U'\t');
 		appendTsvField (output, metric.id);
 		MelderString_appendCharacter (output, U'\t');
 		if (metric.status != MetricStatus::unavailable && metric.value)
@@ -761,7 +859,7 @@ void ComparisonResult_toTsv (const ComparisonResult &result, MelderString *outpu
 	MelderString_append (output,
 		U"schema_version\tpraat_version\tmetric_id\ttarget_source\ttarget_object_id\ttarget_file\ttarget_start_s\ttarget_end_s\ttarget_duration_s\ttarget_sample_rate_hz\ttarget_channels\ttarget_source_kind\ttarget_analysis_kind\ttarget_parameters\ttarget_language\ttarget_ipa\ttarget_speaker_id\ttarget_neighboring_vowel"
 		U"\treference_source\treference_object_id\treference_file\treference_start_s\treference_end_s\treference_duration_s\treference_sample_rate_hz\treference_channels\treference_source_kind\treference_analysis_kind\treference_parameters\treference_language\treference_ipa\treference_speaker_id\treference_neighboring_vowel"
-		U"\tunit\ttarget_value\treference_value\tdifference\ttarget_status\treference_status\treason\twarning\tfrequency_grid_hz\ttarget_frequency_values\treference_frequency_values\tfrequency_warning\tfrequency_reason\n");
+		U"\tunit\ttarget_value\treference_value\tdifference\ttarget_status\treference_status\ttarget_reason\treference_reason\treason\twarning\tfrequency_grid_hz\ttarget_frequency_values\treference_frequency_values\tfrequency_warning\tfrequency_reason\n");
 	for (const MetricComparison &row : result.rows) {
 		MelderString_append (output, result.schemaVersion, U"\t");
 		appendTsvField (output, Melder_appVersionSTR());
@@ -782,6 +880,10 @@ void ComparisonResult_toTsv (const ComparisonResult &result, MelderString *outpu
 		MelderString_appendCharacter (output, U'\t');
 		appendTsvOptionalNumber (output, row.difference);
 		MelderString_append (output, U"\t", metricStatusName (row.targetStatus), U"\t", metricStatusName (row.referenceStatus), U"\t");
+		appendTsvField (output, row.targetReason);
+		MelderString_appendCharacter (output, U'\t');
+		appendTsvField (output, row.referenceReason);
+		MelderString_appendCharacter (output, U'\t');
 		appendTsvField (output, row.reason);
 		MelderString_appendCharacter (output, U'\t');
 		appendTsvField (output, row.warning);
@@ -801,5 +903,41 @@ void ComparisonResult_toTsv (const ComparisonResult &result, MelderString *outpu
 			MelderString_append (output, U"\t\t\t");
 		}
 		MelderString_appendCharacter (output, U'\n');
+	}
+}
+
+void writeSegmentAnalysisTsvAtomically (conststring32 resultFileName, conststring32 serialized) {
+	Melder_require (resultFileName && resultFileName [0] != U'\0', U"A result file path is required.");
+	structMelderFile outputFile {}, temporaryFile {};
+	Melder_pathToFile (resultFileName, & outputFile);
+	static std::atomic<std::uint64_t> sequence { 0 };
+	const integer processId =
+	#if defined (_WIN32)
+		(integer) _getpid();
+	#else
+		(integer) getpid();
+	#endif
+	bool foundUnusedTemporaryPath = false;
+	autoMelderString temporaryPath;
+	for (int attempt = 0; attempt < 100; attempt ++) {
+		MelderString_empty (& temporaryPath);
+		MelderString_append (& temporaryPath, resultFileName, U".tmp.", processId, U".",
+			(integer) sequence.fetch_add (1, std::memory_order_relaxed));
+		Melder_pathToFile (temporaryPath.string, & temporaryFile);
+		if (! MelderFile_exists (& temporaryFile)) {
+			foundUnusedTemporaryPath = true;
+			break;
+		}
+	}
+	Melder_require (foundUnusedTemporaryPath, U"Could not allocate a unique temporary result file.");
+	try {
+		MelderFile_writeText_e (& temporaryFile, serialized, kMelder_textOutputEncoding::UTF8);
+		MelderFile_replaceAtomically (& temporaryFile, & outputFile);
+	} catch (MelderError) {
+		MelderFile_delete (& temporaryFile);
+		throw;
+	} catch (const std::exception &) {
+		MelderFile_delete (& temporaryFile);
+		throw;
 	}
 }

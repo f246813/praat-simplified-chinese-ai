@@ -37,6 +37,8 @@ struct SegmentEditorState {
 	GuiOptionMenu analysisMenu [2] { nullptr, nullptr };
 	GuiText startField [2] { nullptr, nullptr };
 	GuiText endField [2] { nullptr, nullptr };
+	GuiText boundaryBurstField [2] { nullptr, nullptr };
+	GuiText boundaryVoicingField [2] { nullptr, nullptr };
 	GuiLabel sourceStatus [2] { nullptr, nullptr };
 	GuiLabel previewStatus [2] { nullptr, nullptr };
 	GuiLabel comparisonSummary { nullptr };
@@ -49,6 +51,7 @@ struct SegmentEditorState {
 	autoGraphics comparisonPlotGraphics;
 	autoGraphics frequencyPlotGraphics;
 	std::optional<AnalysisResult> analyses [2];
+	std::optional<AnalysisResult> candidateAnalyses [2];
 	std::optional<ComparisonResult> comparison;
 	std::vector<FrequencyOverlay> frequencyOverlays;
 	std::vector <SegmentSourceChoice> choices [2];
@@ -72,10 +75,15 @@ SegmentAnalysisSelection &selectionFor (SegmentAcousticEditor me, integer side) 
 void invalidateComparison (SegmentAcousticEditor me, integer side) {
 	SegmentEditorState *editorState = state (me);
 	editorState -> analyses [side].reset();
+	editorState -> candidateAnalyses [side].reset();
+	if (editorState -> boundaryBurstField [side])
+		GuiText_setString (editorState -> boundaryBurstField [side], U"");
+	if (editorState -> boundaryVoicingField [side])
+		GuiText_setString (editorState -> boundaryVoicingField [side], U"");
 	editorState -> comparison.reset();
 	editorState -> frequencyOverlays.clear();
 	if (editorState -> comparisonSummary)
-		GuiLabel_setText (editorState -> comparisonSummary, U"来源或范围已更改。重新运行“分析并比较 VOT 候选”后显示结果。");
+		GuiLabel_setText (editorState -> comparisonSummary, U"来源或范围已更改。请重新估计 VOT 候选，或输入两侧边界后确认比较。");
 	if (editorState -> comparisonPlotGraphics)
 		Graphics_updateWs (editorState -> comparisonPlotGraphics.get());
 	if (editorState -> frequencyPlotGraphics)
@@ -277,6 +285,16 @@ bool readRange (SegmentAcousticEditor me, integer side, double *start, double *e
 	return true;
 }
 
+bool readVotBoundaries (SegmentAcousticEditor me, integer side, double *burst, double *voicing) {
+	autostring32 burstText = GuiText_getString (state (me) -> boundaryBurstField [side]);
+	autostring32 voicingText = GuiText_getString (state (me) -> boundaryVoicingField [side]);
+	if (! burstText || ! voicingText || burstText [0] == U'\0' || voicingText [0] == U'\0')
+		return false;
+	*burst = Melder_atof (burstText.get());
+	*voicing = Melder_atof (voicingText.get());
+	return std::isfinite (*burst) && std::isfinite (*voicing);
+}
+
 void applyRange (SegmentAcousticEditor me, integer side) {
 	SegmentEditorState *editorState = state (me);
 	const std::shared_ptr<SegmentSourceData> source = editorState -> activeSource [side];
@@ -338,16 +356,19 @@ void renderPreview (SegmentAcousticEditor me, integer side, bool spectrogram) {
 		if (editorState -> analyses [side]) {
 			const AnalysisResult &analysis = editorState -> analyses [side].value();
 			for (const MetricResult &metric : analysis.metrics) {
-				if (! metric.value || (metric.id != U"burst_time_candidate" && metric.id != U"voicing_time_candidate"))
+				const bool candidateBoundary = metric.id == U"burst_time_candidate" || metric.id == U"voicing_time_candidate";
+				const bool confirmedBoundary = metric.id == U"burst_time_confirmed" || metric.id == U"voicing_time_confirmed";
+				if (! metric.value || (! candidateBoundary && ! confirmedBoundary))
 					continue;
 				const double time = metric.value.value();
 				if (time < start || time > end)
 					continue;
-				const bool isBurst = metric.id == U"burst_time_candidate";
-				Graphics_setColour (graphics, isBurst ? Melder_RED : Melder_BLUE);
+				const bool isBurst = metric.id == U"burst_time_candidate" || metric.id == U"burst_time_confirmed";
+				Graphics_setColour (graphics, confirmedBoundary ? Melder_GREEN : isBurst ? Melder_RED : Melder_BLUE);
 				Graphics_line (graphics, time, -1.0, time, 1.0);
 				Graphics_text (graphics, time, isBurst ? 0.85 : 0.70,
-					isBurst ? U"burst candidate" : U"voicing candidate");
+					confirmedBoundary ? (isBurst ? U"burst confirmed" : U"voicing confirmed") :
+						(isBurst ? U"burst candidate" : U"voicing candidate"));
 			}
 			Graphics_setColour (graphics, Melder_BLACK);
 		}
@@ -403,6 +424,15 @@ const MetricResult *findResultMetric (const AnalysisResult &analysis, const std:
 		if (metric.id == id)
 			return & metric;
 	return nullptr;
+}
+
+conststring32 editorMetricStatusName (MetricStatus status) {
+	switch (status) {
+		case MetricStatus::measured: return U"已测量";
+		case MetricStatus::warning: return U"需复核";
+		case MetricStatus::unavailable: return U"不可用";
+	}
+	return U"不可用";
 }
 
 void renderComparisonPlot (SegmentAcousticEditor me) {
@@ -573,34 +603,16 @@ void exposeFrequencyPlot (SegmentAcousticEditor me, GuiDrawingArea_ExposeEvent) 
 	}
 }
 
-void analyseAndCompare (SegmentAcousticEditor me) {
+void publishVotComparison (SegmentAcousticEditor me, AnalysisResult completedAnalyses [2], conststring32 title) {
 	SegmentEditorState *editorState = state (me);
-	Melder_require (my selection.reference, U"请先设置并应用有效的参照来源和范围。");
-	AnalysisResult completedAnalyses [2];
-	for (integer side = 0; side < 2; side ++) {
-		const SegmentAnalysisSelection &selected = selectionFor (me, side);
-		Melder_require (selected.analysisKind == AnalysisKind::VOT,
-			U"当前只有 VOT 分析核心可运行；其他分析类别尚未实现。");
-		const std::shared_ptr<SegmentSourceData> source = editorState -> activeSource [side];
-		Melder_require (source, side == 0 ? U"请先设置有效的目标来源和范围。" : U"请先设置有效的参照来源和范围。");
-		Melder_require (selected.metadata.startTime < selected.metadata.endTime &&
-			selected.metadata.startTime >= source -> xmin && selected.metadata.endTime <= source -> xmax,
-			U"请先在目标和参照两侧分别输入并应用有效时间范围。");
-		autoSound samples = extractPreview (*source, selected.metadata.startTime, selected.metadata.endTime);
-		SegmentInput input;
-		input.samples = samples.get();
-		input.metadata = selected.metadata;
-		input.metadata.source = source -> identity;
-		completedAnalyses [side] = analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates);
-	}
 	ComparisonResult completedComparison = compareCompatibleMetrics (completedAnalyses [0], completedAnalyses [1]);
 	std::vector<FrequencyOverlay> completedFrequencyOverlays = completedComparison.frequencyOverlays;
-	editorState -> analyses [0] = std::move (completedAnalyses [0]);
-	editorState -> analyses [1] = std::move (completedAnalyses [1]);
+	editorState -> analyses [0] = completedAnalyses [0];
+	editorState -> analyses [1] = completedAnalyses [1];
 	editorState -> comparison = std::move (completedComparison);
 	editorState -> frequencyOverlays = std::move (completedFrequencyOverlays);
 	autoMelderString summary;
-	MelderString_append (& summary, U"VOT 自动候选对照（候选边界仍需人工确认）\n",
+	MelderString_append (& summary, title, U"\n",
 		U"目标：", editorState -> comparison -> target.source.displayName.c_str(), U" [",
 		Melder_single (editorState -> comparison -> target.startTime), U"–", Melder_single (editorState -> comparison -> target.endTime), U" s]；",
 		Melder_single (editorState -> comparison -> target.endTime - editorState -> comparison -> target.startTime), U" s\n",
@@ -609,26 +621,28 @@ void analyseAndCompare (SegmentAcousticEditor me) {
 		Melder_single (editorState -> comparison -> reference.endTime - editorState -> comparison -> reference.startTime), U" s\n");
 	if (! editorState -> comparison -> rows.empty() && ! editorState -> comparison -> rows.front().warning.empty())
 		MelderString_append (& summary, U"采样率提示：", editorState -> comparison -> rows.front().warning.c_str(), U"\n");
-	MelderString_append (& summary, U"指标\t目标\t参照\t目标−参照\t状态\t原因\n");
+	MelderString_append (& summary, U"指标/单位\t目标值/状态/原因\t参照值/状态/原因\t目标−参照\t可比性/提示\n");
 	for (const MetricComparison &row : editorState -> comparison -> rows) {
-		MelderString_append (& summary, row.metricId.c_str(), U"\t");
+		MelderString_append (& summary, row.metricId.c_str(), U" [", row.unit.c_str(), U"]\t");
 		if (row.targetValue && row.targetStatus != MetricStatus::unavailable)
 			MelderString_append (& summary, Melder_double (row.targetValue.value()));
 		else
 			MelderString_append (& summary, U"NA");
-		MelderString_append (& summary, U"\t");
+		MelderString_append (& summary, U" / ", editorMetricStatusName (row.targetStatus), U" / ", row.targetReason.c_str(), U"\t");
 		if (row.referenceValue && row.referenceStatus != MetricStatus::unavailable)
 			MelderString_append (& summary, Melder_double (row.referenceValue.value()));
 		else
 			MelderString_append (& summary, U"NA");
-		MelderString_append (& summary, U"\t");
+		MelderString_append (& summary, U" / ", editorMetricStatusName (row.referenceStatus), U" / ", row.referenceReason.c_str(), U"\t");
 		if (row.difference)
 			MelderString_append (& summary, Melder_double (row.difference.value()));
 		else
 			MelderString_append (& summary, U"不可比较");
-		MelderString_append (& summary, U"\t", row.reason.empty() ? U"可比较" : U"不可比较", U"\t");
+		MelderString_append (& summary, U"\t", row.reason.empty() ? U"可比较" : row.reason.c_str());
+		if (! row.warning.empty())
+			MelderString_append (& summary, U"；", row.warning.c_str());
 		if (! row.reason.empty())
-			MelderString_append (& summary, row.reason.c_str());
+			MelderString_append (& summary, U"；目标原因：", row.targetReason.c_str(), U"；参照原因：", row.referenceReason.c_str());
 		MelderString_appendCharacter (& summary, U'\n');
 	}
 	GuiLabel_setText (editorState -> comparisonSummary, summary.string);
@@ -636,6 +650,65 @@ void analyseAndCompare (SegmentAcousticEditor me) {
 		Graphics_updateWs (editorState -> waveformGraphics [side].get());
 	Graphics_updateWs (editorState -> comparisonPlotGraphics.get());
 	Graphics_updateWs (editorState -> frequencyPlotGraphics.get());
+}
+
+AnalysisResult estimateVotSide (SegmentAcousticEditor me, integer side) {
+	SegmentEditorState *editorState = state (me);
+	const SegmentAnalysisSelection &selected = selectionFor (me, side);
+	Melder_require (selected.analysisKind == AnalysisKind::VOT,
+		U"当前只有 VOT 分析核心可运行；其他分析类别尚未实现。");
+	const std::shared_ptr<SegmentSourceData> source = editorState -> activeSource [side];
+	Melder_require (source, side == 0 ? U"请先设置有效的目标来源和范围。" : U"请先设置有效的参照来源和范围。");
+	Melder_require (selected.metadata.startTime < selected.metadata.endTime &&
+		selected.metadata.startTime >= source -> xmin && selected.metadata.endTime <= source -> xmax,
+		U"请先在目标和参照两侧分别输入并应用有效时间范围。");
+	autoSound samples = extractPreview (*source, selected.metadata.startTime, selected.metadata.endTime);
+	SegmentInput input;
+	input.samples = samples.get();
+	input.metadata = selected.metadata;
+	input.metadata.source = source -> identity;
+	return analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates);
+}
+
+void estimateAndCompare (SegmentAcousticEditor me) {
+	Melder_require (my selection.reference, U"请先设置并应用有效的参照来源和范围。");
+	AnalysisResult completedAnalyses [2];
+	for (integer side = 0; side < 2; side ++) {
+		completedAnalyses [side] = estimateVotSide (me, side);
+		state (me) -> candidateAnalyses [side] = completedAnalyses [side];
+		const MetricResult *burst = findResultMetric (completedAnalyses [side], U"burst_time_candidate");
+		const MetricResult *voicing = findResultMetric (completedAnalyses [side], U"voicing_time_candidate");
+		GuiText_setString (state (me) -> boundaryBurstField [side], burst && burst -> value ? Melder_single (burst -> value.value()) : U"");
+		GuiText_setString (state (me) -> boundaryVoicingField [side], voicing && voicing -> value ? Melder_single (voicing -> value.value()) : U"");
+	}
+	publishVotComparison (me, completedAnalyses, U"VOT 自动候选对照；可编辑两侧边界后点“确认边界并比较”。");
+}
+
+void confirmAndCompareBoundaries (SegmentAcousticEditor me) {
+	Melder_require (my selection.reference, U"请先设置并应用有效的参照来源和范围。");
+	AnalysisResult completedAnalyses [2];
+	for (integer side = 0; side < 2; side ++) {
+		SegmentEditorState *editorState = state (me);
+		const SegmentAnalysisSelection &selected = selectionFor (me, side);
+		const std::shared_ptr<SegmentSourceData> source = editorState -> activeSource [side];
+		Melder_require (selected.analysisKind == AnalysisKind::VOT && source,
+			U"请为目标和参照两侧选择有效来源并选择 VOT 分析。");
+		Melder_require (selected.metadata.startTime < selected.metadata.endTime &&
+			selected.metadata.startTime >= source -> xmin && selected.metadata.endTime <= source -> xmax,
+			U"请先在目标和参照两侧分别应用有效时间范围。");
+		double burst = 0.0, voicing = 0.0;
+		Melder_require (readVotBoundaries (me, side, & burst, & voicing),
+			U"请输入有限的 burst 和 voicing 边界；0 和负时间都是有效输入。");
+		autoSound samples = extractPreview (*source, selected.metadata.startTime, selected.metadata.endTime);
+		SegmentInput input;
+		input.samples = samples.get();
+		input.metadata = selected.metadata;
+		input.metadata.source = source -> identity;
+		const AnalysisResult *candidates = editorState -> candidateAnalyses [side] ?
+			& editorState -> candidateAnalyses [side].value() : nullptr;
+		completedAnalyses [side] = confirmVOTBoundaries (input, candidates, burst, voicing);
+	}
+	publishVotComparison (me, completedAnalyses, U"VOT 人工确认结果；候选估计、最终边界、两侧状态和原因均予保留。");
 }
 
 void exportComparison (SegmentAcousticEditor me) {
@@ -646,29 +719,16 @@ void exportComparison (SegmentAcousticEditor me) {
 		return;
 	autoMelderString serialized;
 	ComparisonResult_toTsv (editorState -> comparison.value(), & serialized);
-	structMelderFile outputFile {}, temporaryFile {};
-	Melder_pathToFile (path.get(), & outputFile);
-	autoMelderString temporaryPath;
-	MelderString_append (& temporaryPath, path.get(), U".tmp");
-	Melder_pathToFile (temporaryPath.string, & temporaryFile);
-	MelderFile_delete (& temporaryFile);
-	try {
-		MelderFile_writeText_e (& temporaryFile, serialized.string, kMelder_textOutputEncoding::UTF8);
-		if (MelderFile_exists (& outputFile))
-			MelderFile_delete (& outputFile);
-		MelderFile_moveAndOrRename (& temporaryFile, & outputFile);
-	} catch (MelderError) {
-		MelderFile_delete (& temporaryFile);
-		throw;
-	} catch (const std::exception &) {
-		MelderFile_delete (& temporaryFile);
-		throw;
-	}
+	writeSegmentAnalysisTsvAtomically (path.get(), serialized.string);
 	GuiLabel_setText (editorState -> sourceStatus [0], Melder_cat (U"目标/参照比较 TSV 已保存：", path.get()));
 }
 
-void analyseAndCompareButton (SegmentAcousticEditor me, GuiButtonEvent) {
-	safelyDo (me, 0, U"目标/参照分析失败", [&] { analyseAndCompare (me); });
+void estimateAndCompareButton (SegmentAcousticEditor me, GuiButtonEvent) {
+	safelyDo (me, 0, U"目标/参照候选分析失败", [&] { estimateAndCompare (me); });
+}
+
+void confirmAndCompareButton (SegmentAcousticEditor me, GuiButtonEvent) {
+	safelyDo (me, 0, U"目标/参照边界确认失败", [&] { confirmAndCompareBoundaries (me); });
 }
 
 void exportComparisonButton (SegmentAcousticEditor me, GuiButtonEvent) {
@@ -802,24 +862,29 @@ void structSegmentAcousticEditor :: v_createChildren () {
 		editorState -> endField [side] = GuiText_createShown (our windowForm, left + 440, left + 505, 68, 94, 0);
 		GuiButton_createShown (our windowForm, left + 76, left + 165, 98, 125, U"应用范围", side == 0 ? applyTargetRange : applyReferenceRange, this, 0);
 		GuiButton_createShown (our windowForm, left + 174, left + 260, 98, 125, U"试听本侧", side == 0 ? playTarget : playReference, this, 0);
-		GuiLabel_createShown (our windowForm, left, right, 129, 153, U"波形预览", GuiLabel_BOLD);
+		GuiLabel_createShown (our windowForm, left, left + 70, 129, 153, U"释放边界", GuiLabel_RIGHT);
+		editorState -> boundaryBurstField [side] = GuiText_createShown (our windowForm, left + 76, left + 156, 129, 153, 0);
+		GuiLabel_createShown (our windowForm, left + 160, left + 230, 129, 153, U"浊音边界", GuiLabel_RIGHT);
+		editorState -> boundaryVoicingField [side] = GuiText_createShown (our windowForm, left + 236, left + 316, 129, 153, 0);
+		GuiLabel_createShown (our windowForm, left, right, 155, 177, U"波形预览（红/蓝为候选，绿为确认边界）", GuiLabel_BOLD);
 		editorState -> waveformArea [side] = GuiDrawingArea_createShown (our windowForm,
-			left, right, 154, 332, exposeWaveform, nullptr, nullptr, nullptr, nullptr, this, 0);
-		GuiLabel_createShown (our windowForm, left, right, 334, 358, U"频谱预览", GuiLabel_BOLD);
+			left, right, 178, 323, exposeWaveform, nullptr, nullptr, nullptr, nullptr, this, 0);
+		GuiLabel_createShown (our windowForm, left, right, 325, 349, U"频谱预览", GuiLabel_BOLD);
 		editorState -> spectrogramArea [side] = GuiDrawingArea_createShown (our windowForm,
-			left, right, 359, 506, exposeSpectrogram, nullptr, nullptr, nullptr, nullptr, this, 0);
-		editorState -> sourceStatus [side] = GuiLabel_createShown (our windowForm, left, right, 510, 540,
+			left, right, 350, 493, exposeSpectrogram, nullptr, nullptr, nullptr, nullptr, this, 0);
+		editorState -> sourceStatus [side] = GuiLabel_createShown (our windowForm, left, right, 496, 525,
 			side == 0 ? U"尚未设置目标来源和片段范围。" : U"尚未设置参照来源和片段范围；目标侧状态保持不变。", GuiLabel_MULTILINE);
-		editorState -> previewStatus [side] = GuiLabel_createShown (our windowForm, left, right, 542, 565, U"", 0);
+		editorState -> previewStatus [side] = GuiLabel_createShown (our windowForm, left, right, 527, 552, U"", 0);
 		(void) left;
 	}
-	GuiButton_createShown (our windowForm, 260, 470, 570, 598, U"依次试听目标与参照", playSequential, this, GuiButton_ATTRACTIVE);
-	GuiButton_createShown (our windowForm, 480, 790, 570, 598, U"分析并比较 VOT 候选", analyseAndCompareButton, this, GuiButton_ATTRACTIVE);
-	GuiButton_createShown (our windowForm, 800, 970, 570, 598, U"导出 TSV…", exportComparisonButton, this, 0);
+	GuiButton_createShown (our windowForm, 210, 410, 570, 598, U"依次试听目标与参照", playSequential, this, GuiButton_ATTRACTIVE);
+	GuiButton_createShown (our windowForm, 420, 670, 570, 598, U"自动估计候选", estimateAndCompareButton, this, 0);
+	GuiButton_createShown (our windowForm, 680, 930, 570, 598, U"确认边界并比较", confirmAndCompareButton, this, GuiButton_ATTRACTIVE);
+	GuiButton_createShown (our windowForm, 940, -20, 570, 598, U"导出 TSV…", exportComparisonButton, this, 0);
 	GuiLabel_createShown (our windowForm, 20, -20, 603, 624,
-		U"目标与参照的来源、真实边界和时长独立保留；当前运行 VOT 自动候选分析，边界仍需人工确认。", GuiLabel_CENTRE);
+		U"目标与参照来源和范围独立；先估计候选，再编辑两侧释放/浊音边界并确认。零和负时间有效。", GuiLabel_CENTRE);
 	editorState -> comparisonSummary = GuiLabel_createShown (our windowForm, 20, -20, 626, 790,
-		U"尚无比较结果。设置目标和参照的来源与范围后，运行“分析并比较 VOT 候选”。", GuiLabel_MULTILINE);
+		U"尚无比较结果。设置目标和参照的来源与范围后，自动估计候选，或直接输入两侧边界并确认。", GuiLabel_MULTILINE);
 	GuiLabel_createShown (our windowForm, 20, 575, 792, 813, U"时间曲线叠图（0–100%）", GuiLabel_BOLD);
 	GuiLabel_createShown (our windowForm, 590, -20, 792, 813, U"共同频率网格叠图（Hz）", GuiLabel_BOLD);
 	editorState -> comparisonPlotArea = GuiDrawingArea_createShown (our windowForm,
