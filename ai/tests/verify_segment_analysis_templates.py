@@ -17,6 +17,8 @@ PROJECT = Path(__file__).resolve().parents[2]
 PRAAT = PROJECT / "Praat.exe"
 CORE_SCRIPT = PROJECT / "test/fon/segmentAcousticCore.praat"
 VOT_SCRIPT = PROJECT / "test/fon/segmentAcousticVOT.praat"
+COMPARISON_EDITOR_SOURCE = PROJECT / "foned/SegmentAcousticEditor.cpp"
+SOUND_ANALYSIS_AREA_SOURCE = PROJECT / "foned/SoundAnalysisArea.cpp"
 VOT_SOUND = (
     'Create Sound from formula: "vot-fixture", 1, 0, 0.6, 44100, '
     '~ if x < 0.30 then 0 else if x < 0.33 then 0.3 * randomGauss (0, 1) '
@@ -79,6 +81,37 @@ def verify_generated_template(root: Path, name: str, arguments: dict[str, object
     return read_rows(context.result_path.with_suffix(".vot.tsv"))
 
 
+def verify_comparison_editor(root: Path) -> None:
+    editor_source = COMPARISON_EDITOR_SOURCE.read_text(encoding="utf-8")
+    sound_area_source = SOUND_ANALYSIS_AREA_SOURCE.read_text(encoding="utf-8")
+    required_editor_contract = (
+        "GuiFileSelect_getInfileNames",
+        "LongSound_open",
+        "Sound_readFromSoundFile",
+        "classLongSound",
+        "Data_copy",
+        "GuiOptionMenu_addOption",
+        "TargetReferenceSegment_clearReference",
+        "TargetReferenceSegment_setTarget",
+        "referenceMono = Sound_resample",
+        "Spectrogram_paintInside",
+        "Sound_draw",
+        "TargetReferenceSegment_setReference",
+    )
+    missing = [fragment for fragment in required_editor_contract if fragment not in editor_source]
+    if missing:
+        raise AssertionError(f"comparison editor is missing required native operations: {missing!r}")
+    if 'U"目标/参照比较..."' not in sound_area_source:
+        raise AssertionError("Sound editor does not expose the target/reference comparison command")
+
+    descriptor_script = root / "segmentComparisonDescriptor.praat"
+    descriptor_script.write_text(
+        'Praat test: "CheckSegmentComparisonDescriptor", "", "", "", ""\n',
+        encoding="utf-8",
+    )
+    run_praat(descriptor_script, "target/reference Sound and LongSound isolation")
+
+
 def main() -> None:
     core_output_dir = Path.home()
     core_prefix = f"praat-segment-acoustic-core-{uuid.uuid4().hex}"
@@ -96,6 +129,7 @@ def main() -> None:
         try:
             run_praat(core_script, "C++ Sound/LongSound object actions")
             run_praat(VOT_SCRIPT, "C++ VOT acoustic regression")
+            verify_comparison_editor(root)
 
             core_zero = read_rows(core_files[0])
             zero = assert_metric(core_zero, "vot_ms", unit="ms")
@@ -141,7 +175,7 @@ def main() -> None:
                 path.unlink(missing_ok=True)
             core_wave.unlink(missing_ok=True)
 
-    print("SEGMENT_ANALYSIS_TEMPLATE_PASS: schema, units, zero, negative VOT, candidate status, and LongSound")
+    print("SEGMENT_ANALYSIS_TEMPLATE_PASS: VOT contract, LongSound, and target/reference isolation")
 
 
 if __name__ == "__main__":

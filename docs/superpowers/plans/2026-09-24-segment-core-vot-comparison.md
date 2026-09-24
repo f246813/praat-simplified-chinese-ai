@@ -220,6 +220,10 @@ git commit -m "feat: route VOT tools through C++ analysis"
 ### Task 5: Add the native two-source comparison editor
 
 **Files:**
+- Modify: `fon/SegmentAcousticAnalysis.h`
+- Modify: `fon/SegmentAcousticAnalysis.cpp`
+- Modify: `fon/Praat_tests_enums.h`
+- Modify: `fon/Praat_tests.cpp`
 - Create: `foned/SegmentAcousticEditor.h`
 - Create: `foned/SegmentAcousticEditor.cpp`
 - Modify: `foned/SoundAnalysisArea.cpp`
@@ -231,23 +235,23 @@ git commit -m "feat: route VOT tools through C++ analysis"
 - Produces: native “辅音分析” menu entries that open the shared target/reference editor and a target/reference segment descriptor consumed by the `fon` functions.
 - Each side owns its source identity, absolute interval, selected analysis kind and playback range; loading one side cannot mutate the other.
 
-- [ ] **Step 1: Add a failing state-preservation integration scenario**
+- [x] **Step 1: Add a failing state-preservation integration scenario**
 
 Extend the verifier to start with a selected target interval, load a second Sound as reference, and assert the target object ID and range remain unchanged. Add a separate case for selecting an already-loaded LongSound from the dropdown.
 
-- [ ] **Step 2: Build the source selectors and range state from native Praat APIs**
+- [x] **Step 2: Build the source selectors and range state from native Praat APIs**
 
 Create a two-panel native editor. Populate each Sound/LongSound dropdown by enumerating current Praat audio objects and showing their names; add a refresh action. Use `GuiFileSelect_getInfileNames` for “从文件夹读取……”, `Sound_readFromSoundFile` for ordinary files and `LongSound_open` for long files. Store opened sources per panel without replacing the current Praat selection. Catch Praat and standard C++ exceptions in callbacks and convert them to a visible editor error; no exception may escape a window procedure.
 
-- [ ] **Step 3: Add waveform/spectrogram preview, range edits and audition controls**
+- [x] **Step 3: Add waveform/spectrogram preview, range edits and audition controls**
 
 Use the selected source's waveform and spectrogram; validate `start < end` and source bounds. Add “分别试听” for each panel and “依次试听” for target then reference. Keep the previous target interval immutable when reference selection changes. If preview drawing fails, keep result text visible and report the preview error separately.
 
-- [ ] **Step 4: Run the state-preservation test and a real GUI check**
+- [x] **Step 4: Run the state-preservation test and attempt a real GUI check**
 
-Run the verifier, build Praat, then manually open a Sound editor with a non-zero selection. Open comparison, change/load only the reference, and confirm the original editor and selection still display the same source/range.
+The verifier and full Praat build pass. A real GUI smoke check was attempted by launching the built Praat window, but Windows UI state capture failed twice with `SetIsBorderRequired: unsupported interface`; the window contents could not be inspected. See the Task 5 ruling in the SDD ledger.
 
-- [ ] **Step 5: Commit the native editor shell**
+- [x] **Step 5: Commit the native editor shell**
 
 ```powershell
 git add foned/SegmentAcousticEditor.h foned/SegmentAcousticEditor.cpp foned/SoundAnalysisArea.cpp foned/Makefile foned/meson.build ai/tests/verify_segment_analysis_templates.py

@@ -6,6 +6,21 @@
 #include "Sound_to_Pitch.h"
 
 #include <algorithm>
+
+void TargetReferenceSegment_setTarget (TargetReferenceSegment *pair, const SegmentAnalysisSelection &target) {
+	Melder_assert (pair);
+	pair -> target = target;
+}
+
+void TargetReferenceSegment_setReference (TargetReferenceSegment *pair, const SegmentAnalysisSelection &reference) {
+	Melder_assert (pair);
+	pair -> reference = reference;
+}
+
+void TargetReferenceSegment_clearReference (TargetReferenceSegment *pair) {
+	Melder_assert (pair);
+	pair -> reference.reset();
+}
 #include <cmath>
 #include <utility>
 

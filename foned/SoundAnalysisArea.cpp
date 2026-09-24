@@ -29,7 +29,9 @@
 #include "EditorM.h"
 #include "praat_script.h"
 #include "SegmentAcousticVOT.h"
+#include "SegmentAcousticEditor.h"
 #include "praat_translate.h"
+#include "praat.h"
 
 #include <exception>
 
@@ -72,6 +74,29 @@ static void menu_cb_segmentVOT (SoundAnalysisArea me, EDITOR_ARGS) {
 			Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
 		}
 	EDITOR_END
+}
+
+static void menu_cb_segmentComparison (SoundAnalysisArea me, EDITOR_ARGS) {
+	std::optional<integer> objectId;
+	conststring32 sourceName = my sound() ? my sound() -> name.get() : my longSound() ? my longSound() -> name.get() : U"audio source";
+	if (theCurrentPraatObjects) {
+		Daata sourceObject = my sound() ? (Daata) my sound() : (Daata) my longSound();
+		for (integer iobject = 1; iobject <= theCurrentPraatObjects -> n; iobject ++)
+			if (theCurrentPraatObjects -> list [iobject].object == sourceObject) {
+				objectId = theCurrentPraatObjects -> list [iobject].id;
+				break;
+			}
+	}
+	const bool hasSelection = my startSelection() < my endSelection();
+	try {
+		autoSegmentAcousticEditor editor = SegmentAcousticEditor_create (my sound(), my longSound(), objectId, sourceName,
+			hasSelection ? my startSelection() : undefined, hasSelection ? my endSelection() : undefined);
+		editor.releaseToUser();
+	} catch (MelderError) {
+		Melder_flushError (U"无法打开目标/参照比较编辑器。");
+	} catch (const std::exception &error) {
+		Melder_flushError (U"无法打开目标/参照比较编辑器：", Melder_peek8to32_u (error.what()));
+	}
 }
 
 #include "enums_getText.h"
@@ -2441,6 +2466,7 @@ void structSoundAnalysisArea :: v_createMenuItems_formant (EditorMenu menu) {
 void structSoundAnalysisArea :: v_createMenus () {
 	EditorMenu segmentAnalysisMenu = Editor_addMenu (our functionEditor(), U"辅音分析", 0);
 	FunctionAreaMenu_addCommand (segmentAnalysisMenu, U"VOT...", 0, menu_cb_segmentVOT, this);
+	FunctionAreaMenu_addCommand (segmentAnalysisMenu, U"目标/参照比较...", 0, menu_cb_segmentComparison, this);
 
 	if (our v_hasSpectrogram () && our v_hasPitch () && our v_hasIntensity () && our v_hasPulses ()) {
 		EditorMenu menu = Editor_addMenu (our functionEditor(), U"Analyses", 0);

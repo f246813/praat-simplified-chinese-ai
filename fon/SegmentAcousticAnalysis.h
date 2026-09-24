@@ -69,6 +69,24 @@ enum class AnalysisKind {
 	VOT
 };
 
+// A side of the comparison editor is independent: changing its source or range
+// must not implicitly change the other side.
+struct SegmentAnalysisSelection {
+	SegmentMetadata metadata;
+	AnalysisKind analysisKind { AnalysisKind::VOT };
+	double playbackStartTime { 0.0 };
+	double playbackEndTime { 0.0 };
+};
+
+struct TargetReferenceSegment {
+	SegmentAnalysisSelection target;
+	std::optional<SegmentAnalysisSelection> reference;
+};
+
+void TargetReferenceSegment_setTarget (TargetReferenceSegment *pair, const SegmentAnalysisSelection &target);
+void TargetReferenceSegment_setReference (TargetReferenceSegment *pair, const SegmentAnalysisSelection &reference);
+void TargetReferenceSegment_clearReference (TargetReferenceSegment *pair);
+
 enum class MetricStatus {
 	measured,
 	warning,
