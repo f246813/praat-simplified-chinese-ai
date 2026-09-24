@@ -18,6 +18,7 @@ Thumbs.db
 *.kate-swp
 *.orig
 .cache/
+.worktrees/
 .idea/
 compile_commands.json
 
