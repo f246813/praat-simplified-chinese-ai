@@ -38,6 +38,8 @@
 #include "enums_getValue.h"
 #include "Praat_tests_enums.h"
 #include <string>
+#include <cmath>
+#include <limits>
 
 #include "Gui.h"
 
@@ -53,6 +55,23 @@ static void testData (Daata data) {
 static autoDaata newAutoData () {
 	autoDaata data (Thing_new (Daata));
 	return data;
+}
+
+static bool segmentVOTFailsWith (const SegmentInput &input, std::optional<double> burstTime,
+		std::optional<double> voicingTime, VOTBoundaryMode mode, conststring32 expectedError)
+{
+	try {
+		(void) analyseVOT (input, burstTime, voicingTime, mode);
+	} catch (MelderError) {
+		const bool matched = Melder_hasError (expectedError);
+		Melder_clearError ();
+		return matched;
+	}
+	return false;
+}
+
+static bool segmentVOTNear (double value, double expected) {
+	return std::abs (value - expected) < 1e-9;
 }
 static integer length (conststring32 s) {
 	const integer result = Melder_length (s);
@@ -736,6 +755,33 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (compatible.rows [1].targetStatus == MetricStatus::unavailable);
 			Melder_assert (! compatible.rows [1].difference.has_value());
 			Melder_assert (str32str (compatible.rows [1].reason.c_str(), U"no P0 peak") != nullptr);
+		} break;
+		case kPraatTests::CHECK_SEGMENT_VOT_BOUNDARIES: {
+			autoSound samples = Sound_create (1, -0.5, 0.5, 1000, 0.001, -0.4995);
+			SegmentInput input;
+			input.samples = samples.get ();
+			input.metadata.startTime = -0.5;
+			input.metadata.endTime = 0.5;
+			Melder_assert (segmentVOTNear (votMilliseconds (0.30, 0.32), 20.0));
+			Melder_assert (votMilliseconds (0.30, 0.30) == 0.0);
+			Melder_assert (segmentVOTNear (votMilliseconds (0.30, 0.28), -20.0));
+
+			const AnalysisResult positive = analyseVOT (input, 0.30, 0.32, VOTBoundaryMode::manual);
+			Melder_assert (segmentVOTNear (positive.metrics [0].value.value (), 0.02));
+			Melder_assert (segmentVOTNear (positive.metrics [1].value.value (), 20.0));
+			Melder_assert (positive.source.burstTime.value () == 0.30);
+			Melder_assert (positive.source.voicingTime.value () == 0.32);
+
+			const AnalysisResult zero = analyseVOT (input, 0.0, 0.0, VOTBoundaryMode::manual);
+			Melder_assert (zero.metrics [1].value.has_value () && zero.metrics [1].value.value () == 0.0);
+			const AnalysisResult prevoiced = analyseVOT (input, -0.30, -0.32, VOTBoundaryMode::manual);
+			Melder_assert (segmentVOTNear (prevoiced.metrics [1].value.value (), -20.0));
+
+			Melder_assert (segmentVOTFailsWith (input, {}, {}, VOTBoundaryMode::manual, U"requires both burstTime and voicingTime"));
+			Melder_assert (segmentVOTFailsWith (input, 0.30, {}, VOTBoundaryMode::manual, U"both be supplied"));
+			Melder_assert (segmentVOTFailsWith (input, 0.60, 0.70, VOTBoundaryMode::manual, U"outside the Sound time domain"));
+			Melder_assert (segmentVOTFailsWith (input, std::numeric_limits<double>::quiet_NaN (), 0.32,
+				VOTBoundaryMode::manual, U"finite time values"));
 		} break;
 	}
 	MelderInfo_writeLine (Melder_single (t * 1e9 / n), U" nanoseconds per iteration");

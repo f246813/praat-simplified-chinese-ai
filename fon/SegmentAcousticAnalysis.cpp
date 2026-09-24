@@ -1,6 +1,7 @@
 #include "SegmentAcousticAnalysis.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -134,6 +135,47 @@ ComparisonResult compareCompatibleMetrics (const AnalysisResult &target, const A
 		if (! findMetric (target, referenceMetric.id))
 			addComparisonRow (result, target, reference, nullptr, & referenceMetric, parameterReason);
 	}
+	return result;
+}
+
+double votMilliseconds (double burstTime, double voicingTime) {
+	return (voicingTime - burstTime) * 1000.0;
+}
+
+AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burstTime,
+		std::optional<double> voicingTime, VOTBoundaryMode mode)
+{
+	if (! input.samples)
+		Melder_throw (U"VOT analysis requires a Sound segment.");
+	if (burstTime.has_value() != voicingTime.has_value())
+		Melder_throw (U"VOT boundaries must either both be supplied or both be omitted.");
+	if (mode == VOTBoundaryMode::manual && ! burstTime.has_value())
+		Melder_throw (U"Manual VOT analysis requires both burstTime and voicingTime.");
+	if (mode == VOTBoundaryMode::estimateCandidates && burstTime.has_value())
+		Melder_throw (U"estimateCandidates mode does not accept explicit boundaries.");
+	if (mode == VOTBoundaryMode::estimateCandidates)
+		Melder_throw (U"VOT candidate estimation is not available yet.");
+
+	if (! std::isfinite (burstTime.value()) || ! std::isfinite (voicingTime.value()))
+		Melder_throw (U"VOT boundary times must be finite time values.");
+	if (! std::isfinite (input.samples -> xmin) || ! std::isfinite (input.samples -> xmax) || input.samples -> xmin >= input.samples -> xmax)
+		Melder_throw (U"The Sound has an invalid time domain.");
+	if (burstTime.value() < input.samples -> xmin || burstTime.value() > input.samples -> xmax)
+		Melder_throw (U"burstTime falls outside the Sound time domain.");
+	if (voicingTime.value() < input.samples -> xmin || voicingTime.value() > input.samples -> xmax)
+		Melder_throw (U"voicingTime falls outside the Sound time domain.");
+
+	const double votInSeconds = voicingTime.value() - burstTime.value();
+	const double votInMilliseconds = votMilliseconds (burstTime.value(), voicingTime.value());
+	AnalysisResult result;
+	result.kind = AnalysisKind::VOT;
+	result.source = input.metadata;
+	result.source.burstTime = burstTime;
+	result.source.voicingTime = voicingTime;
+	result.parameters.values.push_back ({ U"boundaryMode", U"manual", U"" });
+	result.parameters.compatibilityKeys.push_back (U"boundaryMode");
+	result.metrics.push_back ({ U"vot_s", U"s", votInSeconds, MetricStatus::measured, U"" });
+	result.metrics.push_back ({ U"vot_ms", U"ms", votInMilliseconds, MetricStatus::measured, U"" });
 	return result;
 }
 

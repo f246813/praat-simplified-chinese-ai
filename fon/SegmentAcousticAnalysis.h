@@ -33,11 +33,13 @@ struct SegmentMetadata {
 	SourceIdentity source;
 	double startTime { 0.0 };
 	double endTime { 0.0 };
+	std::optional<double> burstTime;
+	std::optional<double> voicingTime;
 	UserMetadata annotation;
 };
 
 struct SegmentInput {
-	const Sound *samples { nullptr };   // Borrowed; never retained in AnalysisResult.
+	constSound samples { nullptr };   // Borrowed; never retained in AnalysisResult.
 	SegmentMetadata metadata;
 };
 
@@ -71,6 +73,11 @@ enum class MetricStatus {
 	measured,
 	warning,
 	unavailable
+};
+
+enum class VOTBoundaryMode {
+	manual,
+	estimateCandidates
 };
 
 struct MetricResult {
@@ -108,6 +115,9 @@ struct ComparisonResult {
 };
 
 ComparisonResult compareCompatibleMetrics (const AnalysisResult &target, const AnalysisResult &reference);
+double votMilliseconds (double burstTime, double voicingTime);
+AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burstTime,
+		std::optional<double> voicingTime, VOTBoundaryMode mode);
 void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output);
 
 #endif

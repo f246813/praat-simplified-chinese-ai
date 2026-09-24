@@ -102,7 +102,7 @@ git commit -m "feat: add shared segment analysis contract"
 - Produces: `AnalysisResult analyseVOT(const SegmentInput &, optional<double> burstTime, optional<double> voicingTime, VOTBoundaryMode)`.
 - `manual` requires both explicit boundaries; `estimateCandidates` requires both absent; one-sided input is a field error.
 
-- [ ] **Step 1: Write failing VOT boundary cases**
+- [x] **Step 1: Write failing VOT boundary cases**
 
 Add `CHECK_SEGMENT_VOT_BOUNDARIES` with expected `+20 ms`, `0 ms` and `-20 ms` cases. Include a source slice whose time domain begins below zero to prove validation uses the object's domain.
 
@@ -112,15 +112,15 @@ Melder_assert (votMilliseconds (0.30, 0.30) == 0.0);
 Melder_assert (votMilliseconds (0.30, 0.28) == -20.0);
 ```
 
-- [ ] **Step 2: Implement manual-boundary validation and measurement**
+- [x] **Step 2: Implement manual-boundary validation and measurement**
 
 Implement `analyseVOT` so `optional<double>{0.0}` is treated as a supplied time. Check finite values, source-domain bounds, and mode/argument consistency. Return VOT in seconds and milliseconds with burst/voicing timestamps in metadata; do not reject `voicingTime <= burstTime`.
 
-- [ ] **Step 3: Run the boundary cases and build**
+- [x] **Step 3: Run the boundary cases and build**
 
 Run `CHECK_SEGMENT_VOT_BOUNDARIES`, `Praat.exe --FULL-TRUST --run test/fon/segmentAcousticVOT.praat`, then rebuild. Expected: positive, zero and negative VOT assertions pass; missing and out-of-range boundaries fail with specific messages.
 
-- [ ] **Step 4: Commit explicit VOT support**
+- [x] **Step 4: Commit explicit VOT support**
 
 ```powershell
 git add fon/SegmentAcousticAnalysis.h fon/SegmentAcousticAnalysis.cpp fon/Praat_tests_enums.h fon/Praat_tests.cpp test/fon/segmentAcousticVOT.praat
