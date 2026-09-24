@@ -40,6 +40,7 @@
 #include <string>
 #include <cmath>
 #include <limits>
+#include <random>
 
 #include "Gui.h"
 
@@ -72,6 +73,49 @@ static bool segmentVOTFailsWith (const SegmentInput &input, std::optional<double
 
 static bool segmentVOTNear (double value, double expected) {
 	return std::abs (value - expected) < 1e-9;
+}
+
+static bool segmentVOTWithin (double value, double expected, double tolerance) {
+	return std::abs (value - expected) < tolerance;
+}
+
+enum class SegmentVOTFixture {
+	positive,
+	lowPitch,
+	prevoiced,
+	transientOnly
+};
+
+static autoSound createSegmentVOTFixture (SegmentVOTFixture fixture) {
+	constexpr double sampleRate = 44100.0;
+	constexpr double duration = 0.6;
+	constexpr double samplePeriod = 1.0 / sampleRate;
+	constexpr integer numberOfSamples = (integer) (duration * sampleRate);
+	autoSound result = Sound_create (1, 0.0, duration, numberOfSamples, samplePeriod, samplePeriod / 2.0);
+	const bool prevoiced = fixture == SegmentVOTFixture::prevoiced;
+	const bool transientOnly = fixture == SegmentVOTFixture::transientOnly;
+	const double voiceOnset = fixture == SegmentVOTFixture::lowPitch ? 0.332 : prevoiced ? 0.28 : 0.33;
+	const double fundamental = fixture == SegmentVOTFixture::lowPitch ? 80.0 : 220.0;
+	std::mt19937 noiseGenerator (12345);
+	std::normal_distribution<double> burstNoise (0.0, 1.0);
+	for (integer i = 1; i <= numberOfSamples; i ++) {
+		const double time = result -> x1 + (i - 1) * result -> dx;
+		const bool voiced = ! transientOnly && time >= voiceOnset;
+		const double vocalFoldSignal = voiced ? 0.4 * sin (2.0 * NUMpi * fundamental * time) : 0.0;
+		const double burstEnd = transientOnly ? 0.301 : 0.33;
+		const bool burst = time >= 0.30 && time < burstEnd;
+		const double burstSignal = burst ? (prevoiced ? 0.15 : 0.3) * burstNoise (noiseGenerator) : 0.0;
+		result -> z [1] [i] = vocalFoldSignal + burstSignal;
+	}
+	return result;
+}
+
+static const MetricResult *findSegmentVOTMetric (const AnalysisResult &result, conststring32 metricId) {
+	for (const MetricResult &metric : result.metrics) {
+		if (metric.id == metricId)
+			return & metric;
+	}
+	return nullptr;
 }
 static integer length (conststring32 s) {
 	const integer result = Melder_length (s);
@@ -782,6 +826,52 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (segmentVOTFailsWith (input, 0.60, 0.70, VOTBoundaryMode::manual, U"outside the Sound time domain"));
 			Melder_assert (segmentVOTFailsWith (input, std::numeric_limits<double>::quiet_NaN (), 0.32,
 				VOTBoundaryMode::manual, U"finite time values"));
+		} break;
+		case kPraatTests::CHECK_SEGMENT_VOT_ESTIMATOR: {
+			const auto runFixture = [] (SegmentVOTFixture fixture) {
+				autoSound samples = createSegmentVOTFixture (fixture);
+				SegmentInput input;
+				input.samples = samples.get ();
+				input.metadata.startTime = 0.25;
+				input.metadata.endTime = 0.55;
+				return analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates);
+			};
+			const AnalysisResult positive = runFixture (SegmentVOTFixture::positive);
+			const MetricResult *burst = findSegmentVOTMetric (positive, U"burst_time_candidate");
+			const MetricResult *burstRise = findSegmentVOTMetric (positive, U"burst_rise_db");
+			const MetricResult *voicing = findSegmentVOTMetric (positive, U"voicing_time_candidate");
+			const MetricResult *voicingF0 = findSegmentVOTMetric (positive, U"voicing_f0_hz");
+			const MetricResult *hnr = findSegmentVOTMetric (positive, U"hnr_max_db");
+			const MetricResult *vot = findSegmentVOTMetric (positive, U"vot_candidate_ms");
+			Melder_assert (burst && burst -> value && segmentVOTWithin (burst -> value.value (), 0.30, 0.005));
+			Melder_assert (burstRise && burstRise -> value && burstRise -> value.value () >= 6.0 && burstRise -> status == MetricStatus::measured);
+			Melder_assert (voicing && voicing -> value && segmentVOTWithin (voicing -> value.value (), 0.33, 0.005));
+			Melder_assert (voicingF0 && voicingF0 -> value && voicingF0 -> status == MetricStatus::measured);
+			Melder_assert (hnr && hnr -> value && hnr -> status == MetricStatus::measured);
+			Melder_assert (vot && vot -> value && segmentVOTWithin (vot -> value.value (), 30.0, 5.0));
+			Melder_assert (burst -> status == MetricStatus::warning && voicing -> status == MetricStatus::warning);
+
+			const AnalysisResult lowPitch = runFixture (SegmentVOTFixture::lowPitch);
+			const MetricResult *lowPitchVot = findSegmentVOTMetric (lowPitch, U"vot_candidate_ms");
+			const MetricResult *lowPitchBurst = findSegmentVOTMetric (lowPitch, U"burst_time_candidate");
+			const MetricResult *lowPitchVoice = findSegmentVOTMetric (lowPitch, U"voicing_time_candidate");
+			const MetricResult *lowPitchF0 = findSegmentVOTMetric (lowPitch, U"voicing_f0_hz");
+			Melder_assert (lowPitchVot && lowPitchVot -> value && lowPitchVot -> status == MetricStatus::warning);
+			Melder_assert (segmentVOTWithin (lowPitchVot -> value.value (), 39.0, 5.0));
+			Melder_assert (lowPitchBurst && lowPitchBurst -> value && lowPitchVoice && lowPitchVoice -> value);
+			Melder_assert (lowPitchVoice -> value.value () > lowPitchBurst -> value.value ());
+			Melder_assert (lowPitchF0 && lowPitchF0 -> value && lowPitchF0 -> value.value () >= 60.0 && lowPitchF0 -> value.value () <= 110.0);
+			Melder_assert (segmentVOTNear (lowPitchVot -> value.value (),
+				votMilliseconds (lowPitchBurst -> value.value (), lowPitchVoice -> value.value ())));
+
+			const AnalysisResult prevoiced = runFixture (SegmentVOTFixture::prevoiced);
+			const MetricResult *prevoicedVot = findSegmentVOTMetric (prevoiced, U"vot_candidate_ms");
+			Melder_assert (prevoicedVot && prevoicedVot -> value && segmentVOTWithin (prevoicedVot -> value.value (), -20.0, 6.0));
+			Melder_assert (prevoicedVot -> status == MetricStatus::warning);
+
+			const AnalysisResult transient = runFixture (SegmentVOTFixture::transientOnly);
+			const MetricResult *transientVot = findSegmentVOTMetric (transient, U"vot_candidate_ms");
+			Melder_assert (transientVot && ! transientVot -> value && transientVot -> status == MetricStatus::unavailable);
 		} break;
 	}
 	MelderInfo_writeLine (Melder_single (t * 1e9 / n), U" nanoseconds per iteration");

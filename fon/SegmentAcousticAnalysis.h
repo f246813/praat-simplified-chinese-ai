@@ -80,6 +80,32 @@ enum class VOTBoundaryMode {
 	estimateCandidates
 };
 
+// Defaults preserve the existing AI estimator thresholds; all candidates remain subject to manual confirmation.
+struct VOTCandidateSettings {
+	double burstBandMinimumHz { 2000.0 };
+	double burstBandMaximumHz { 8000.0 };
+	double burstBandSmoothingHz { 100.0 };
+	double burstThresholdDb { 6.0 };
+	double intensityTimeStepSeconds { 0.001 };
+	double pitchTimeStepSeconds { 0.002 };
+	double pitchFloorHz { 75.0 };
+	double pitchCeilingHz { 600.0 };
+	integer maximumPitchCandidates { 15 };
+	double pitchSilenceThreshold { 0.03 };
+	double pitchVoicingThreshold { 0.45 };
+	double pitchOctaveCost { 0.01 };
+	double pitchOctaveJumpCost { 0.35 };
+	double pitchVoicedUnvoicedCost { 0.14 };
+	integer stableVoicedFrames { 3 };
+	integer burstRiseLookbackFrames { 3 };
+	integer burstRiseHoldFrames { 5 };
+	double burstRiseHoldDropDb { 10.0 };
+	double burstOnsetBacktrackDropDb { 8.0 };
+	double secondVoicingGapSeconds { 0.02 };
+	double hnrSliceSeconds { 0.05 };
+	double hnrMinimumSliceSeconds { 0.03 };
+};
+
 struct MetricResult {
 	std::u32string id;
 	std::u32string unit;
@@ -117,7 +143,8 @@ struct ComparisonResult {
 ComparisonResult compareCompatibleMetrics (const AnalysisResult &target, const AnalysisResult &reference);
 double votMilliseconds (double burstTime, double voicingTime);
 AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burstTime,
-		std::optional<double> voicingTime, VOTBoundaryMode mode);
+		std::optional<double> voicingTime, VOTBoundaryMode mode,
+		const VOTCandidateSettings &candidateSettings = {});
 void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output);
 
 #endif

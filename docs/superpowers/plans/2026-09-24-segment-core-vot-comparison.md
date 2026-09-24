@@ -140,7 +140,7 @@ git commit -m "fix: support zero and negative VOT"
 - `VOTBoundaryMode::estimateCandidates` takes no explicit boundaries and returns burst and voicing candidates plus per-boundary quality.
 - It does not infer phone identity; the user confirms or edits both candidates before accepting a measurement.
 
-- [ ] **Step 1: Add synthetic estimator regression cases**
+- [x] **Step 1: Add synthetic estimator regression cases**
 
 Extend the Praat script with a known 30 ms release-to-voicing signal, a low-pitch case, prevoicing and a transient burst that decays immediately. Assert the stable signal estimates within 5 ms and the transient-only case is `unavailable` or `warning`, not a fabricated precise result.
 
@@ -148,11 +148,11 @@ Extend the Praat script with a known 30 ms release-to-voicing signal, a low-pitc
 Create Sound from formula: "vot30", 1, 0, 1, 44100, ~ if x < 0.30 then 0 else if x < 0.33 then 0.3 * randomGauss (0, 1) else 0.5 * sin (2*pi*220*x) fi fi
 ```
 
-- [ ] **Step 2: Port the existing estimator stages without changing their tested thresholds**
+- [x] **Step 2: Port the existing estimator stages without changing their tested thresholds**
 
 Move the high-band burst-envelope and pitch-onset candidate calculations from `ai/praat_ai/tools.py` into the C++ core. Keep current documented parameters together in a settings struct, preserve the short HNR slice, return each boundary's quality/reason, and keep the candidate times editable in the caller.
 
-- [ ] **Step 3: Run synthetic estimator tests and compare with the current baseline**
+- [x] **Step 3: Run synthetic estimator tests and compare with the current baseline**
 
 Run the `Praat` test case and `.praat` script. Compare the current 30 ms fixture against the previous accepted 30/32/32 ms outputs; any difference greater than 5 ms must be explained by the new quality rule before continuing.
 

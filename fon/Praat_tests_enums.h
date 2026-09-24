@@ -69,6 +69,7 @@ enums_begin (kPraatTests, 0)
 	enums_add (kPraatTests, 49, TIME_STOPWATCH, U"TimeStopwatch")
 	enums_add (kPraatTests, 50, CHECK_SEGMENT_ANALYSIS_RESULT, U"CheckSegmentAnalysisResult")
 	enums_add (kPraatTests, 51, CHECK_SEGMENT_VOT_BOUNDARIES, U"CheckSegmentVOTBoundaries")
-enums_end (kPraatTests, 51, CHECK_RANDOM_1009_2009)
+	enums_add (kPraatTests, 52, CHECK_SEGMENT_VOT_ESTIMATOR, U"CheckSegmentVOTEstimator")
+enums_end (kPraatTests, 52, CHECK_RANDOM_1009_2009)
 
 /* End of file Praat_tests_enums.h */
