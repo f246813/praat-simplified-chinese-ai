@@ -50,16 +50,117 @@ SegmentSource
   来源对象身份/显示名、Sound 或 LongSound、绝对起止时间、采样信息
 
 AnalysisRequest
-  分析类别、一个或两个 SegmentSource、测量参数、用户提供的音类/语言/IPA/说话人元数据
+  一侧 SegmentSource、分析类别、测量参数、用户提供的音类/语言/IPA/说话人元数据
+
+ComparisonRequest
+  target 与 reference 两份 AnalysisResult；比较操作要求两侧都有有效片段
 
 MetricResult
   指标标识、数值、单位、状态(measured/warning/unavailable)、原因
 
 AnalysisResult
-  原始输入与边界、参数快照、各 MetricResult、target/reference 差值、绘图数据
+  单侧原始输入与边界、参数快照、各 MetricResult、绘图数据
+
+ComparisonResult
+  两侧 AnalysisResult 的兼容性、指标差值或不可比较原因
 ```
 
 核心职责按 VOT、元音鼻化、鼻辅音、R 音分成可独立测试的分析函数；调用者只负责选择来源和展示结果，不复制 DSP 公式。
+
+建议的 C++ 接口契约如下。这里的结构名是方案名，落地时按 Praat 的 `autoSound`、`Sound`、`LongSound` 和错误处理惯例映射；所有时间使用来源对象的绝对秒值，内部截取后仍携带原始 `tmin/tmax`。
+
+```cpp
+struct SourceIdentity {
+    optional<integer> objectId;     // 当前 Praat 会话中的对象 ID
+    string displayName;
+    optional<string> filePath;
+    SourceKind kind;                // Sound 或 LongSound
+    integer channels;
+    double sampleRate;
+};
+
+struct UserMetadata {
+    optional<string> language, ipa, speakerId, neighboringVowel;
+};
+
+struct SegmentMetadata {
+    SourceIdentity source;          // 名称/文件名、对象类型、声道、原始采样率
+    double startTime, endTime;      // 来源对象时间轴上的绝对秒
+    UserMetadata annotation;        // 可选语言、IPA、说话人、相邻元音
+};
+
+struct SegmentInput {
+    const Sound * samples;          // 借用；LongSound 由适配层先按区间提取成 Sound
+    SegmentMetadata metadata;
+};
+
+struct SpectralSettings {
+    double windowLength, timeStep;  // 秒
+    integer fftSize;                // >= 窗内采样点数；实际值写入参数快照
+    WindowKind windowKind;
+    double minFrequency, maxFrequency;
+    bool removeFrameMean;
+    double preemphasisFrequency;    // 0 表示关闭
+};
+struct FormantSettings {
+    integer numberOfFormants;
+    double maximumFormant, windowLength, timeStep, preemphasis;
+};
+
+struct ParameterValue { string name, value, unit; };
+struct ParameterSnapshot { vector<ParameterValue> values; };
+struct TimeSeries {
+    string metricId, unit;
+    vector<double> absoluteTimes, values;
+};
+
+enum class AnalysisKind { VowelNasality, NasalConsonant, RSegment, VOT };
+enum class MetricStatus { measured, warning, unavailable };
+struct MetricResult {
+    string id, unit;
+    optional<double> value;         // unavailable 时必须为空；数值 0 是有效数值
+    MetricStatus status;
+    string reason;
+};
+
+struct MetricComparison {
+    string metricId, unit;
+    optional<double> targetValue, referenceValue, difference;
+    MetricStatus targetStatus, referenceStatus;
+    string reason;                  // 空表示可直接比较；否则解释为何无差值
+};
+
+struct AnalysisResult {
+    int schemaVersion;
+    AnalysisKind kind;
+    SegmentMetadata source;         // 只保存值，不保留 samples 指针
+    ParameterSnapshot parameters;
+    vector<MetricResult> metrics;
+    vector<TimeSeries> curves;      // 绝对时间；绘图层另生成相对时间坐标
+};
+struct ComparisonResult {
+    SegmentMetadata target, reference;
+    vector<MetricComparison> rows;
+};
+
+enum class VOTBoundaryMode { manual, estimateCandidates };
+
+AnalysisResult analyseVowelNasality(
+    const SegmentInput &, const VowelNasalityParameters &);
+AnalysisResult analyseNasalConsonant(
+    const SegmentInput &, const NasalConsonantParameters &);
+AnalysisResult analyseRSegment(
+    const SegmentInput &, RSegmentClass, const RSegmentParameters &);
+AnalysisResult analyseVOT(
+    const SegmentInput &, optional<double> burstTime,
+    optional<double> voicingTime, VOTBoundaryMode);
+ComparisonResult compareCompatibleMetrics(
+    const AnalysisResult & target, const AnalysisResult & reference);
+```
+
+`VowelNasalityParameters` 包含 `SpectralSettings`、P0/P1 搜索带和 Formant 参数；`NasalConsonantParameters` 包含频带边界及窗长、FFT 点数策略、帧移；`RSegmentParameters` 包含所选谱段、频谱窗参数和 Formant 参数。鼻化和鼻辅音的频谱默认关闭预加重，R 擦音允许显式调整；去直流、预加重和滤波设置均需写入参数快照并在两侧一致。不同采样率时窗长/帧移仍按秒一致，实际 FFT 点数至少覆盖该帧样本数并随结果保存，不能靠零填充宣称获得更高真实分辨率。`compareCompatibleMetrics` 只对相同指标定义、单位及匹配参数计算“目标−参照”的原始差值；不生成归一化百分比或综合分。`MetricResult` 的 `optional` 区分缺失与真实 0。`VOTBoundaryMode::manual` 要求两个边界都显式提供；`estimateCandidates` 要求两个边界都缺省并返回两个可编辑候选；只提供一侧属于输入错误。显式提供的 `0` 仍是时间值，不能充当缺省哨兵。结果结构带 `schemaVersion`、通用指标 ID、单位和参数快照，未来可追加 F0 归一化配置/指标而不改写既有导出字段；当前版本不填入 F0 结果。Info 与 TSV/CSV 输出共用同一 `AnalysisResult` 格式化器。
+
+核心在 `fon` 层复用 Praat 已有的 `Sound_to_Spectrum`、`Sound_to_Formant_burg`、`Formant_getBandwidthAtTime` 和 `Spectrum_getCentreOfGravity` 等实现；每个分析窗先按相同设置提取，再由同一段级核心计算类别特征。编辑器和对象动作只负责把 Sound/LongSound 转成有效片段并调用核心，不在 `foned`、`praat_Sound.cpp` 或 Python 中另行复制公式。
 
 - **编辑器菜单**：使用 Praat 原生 C++ 菜单/表单和现有音频对象机制；默认目标为当前 Sound/LongSound 编辑器的选区。编辑器没有有效选区时，要求用户给出范围或明确选择整段，不静默改范围。
 - **对象动作与脚本**：在 `fon/praat_Sound.cpp` 注册可供 Sound/LongSound 使用的动作，使 Praat 脚本可以带上范围和参数调用核心。结果支持以文本/TSV 写入指定文件；脚本调用不能擅自弹出 Info 窗口。
@@ -76,21 +177,21 @@ AnalysisResult
 
 ### 元音鼻化和鼻辅音
 
-选择“鼻化分析”后，先选择“元音鼻化”或“鼻辅音”。界面有“目标音”和可选“参照音”两个并列面板。每个面板可以选已加载对象或“从文件夹读取……”，并独立指定绝对起止时间。目标初始使用编辑器选区；参照音的读取、播放或边界调整不应改变目标选择。
+选择“鼻化分析”后，先选择“元音鼻化”或“鼻辅音”。界面有“目标音”和“参照音”两个并列面板。目标单样本测量允许暂不选参照；运行比较时必须先为两侧都选择有效片段。每个面板可以选已加载对象或“从文件夹读取……”，并独立指定绝对起止时间。目标初始使用编辑器选区；参照音的读取、播放或边界调整不应改变目标选择。
 
 每个面板显示波形与语图，允许调整边界，并提供“分别试听”和“依次试听”。元音鼻化可记录元音类别（/a/、/i/、/ə/、其他/未知）、IPA、语言和说话人等可选元数据；这些字段辅助解释结果，不作为自动测量分支的强制档案。鼻辅音可编辑测量频带及时间窗/步长。
 
 ### R 音声学分析
 
-入口使用新名称“R 音声学分析”。目标音与参照音选择沿用双面板流程。用户明确选择“擦音”“塞擦音”或“近音类 r”；其他类别显示“不支持此分析类别”，不套用最接近的公式。
+入口使用新名称“R 音声学分析”。比较模式下必须分别选择目标音和参照音，再选择“擦音”“塞擦音”或“近音类 r”；任一侧缺失时禁用比较并说明原因。其他类别显示“不支持此分析类别”，不套用最接近的公式。
 
 - 擦音：用户标定噪声段范围，并可预览被纳入频谱统计的区间。
-- 塞擦音：单独标出闭塞开始、闭塞结束/释放、摩擦起点和摩擦终点。闭塞/释放信息用于时长和分段显示；频谱只用用户界定的稳定摩擦段，排除闭塞与释放瞬态。
+- 塞擦音：单独标出闭塞起点、释放时刻（闭塞终点）、释放瞬态结束/稳定摩擦起点、摩擦终点。结果报告闭塞、释放过渡和摩擦时长；频谱只用用户界定的稳定摩擦段，排除闭塞与释放瞬态。
 - 近音类 r：用户标定有声段范围，显示 F2/F3/F3−F2 的时间轨迹；无效或缺失帧不伪造为零。
 
 ### 对照结果
 
-结果表按指标并列展示目标、参照、单位、差值和各自质量状态。差值只在指标定义、单位、参数及可用频带兼容时提供。频谱或时间曲线使用不同颜色/图例标出来源和实际时间范围；长度不同的片段可以映射到 0–100% 相对时长用于叠图，但表格始终保留真实起止时间与真实时长。
+结果表按指标并列展示目标、参照、单位、差值和各自质量状态。差值只在指标定义、单位、参数及可用频带兼容时提供。采样率不同但都覆盖共同频带时保留原采样率测量并提示 warning；频谱叠图映射到记录过的共同频率网格，时间窗长仍以秒统一。任一侧有效带宽不足时保留两侧可用的原始值，但不给不可比指标差值。频谱或时间曲线使用不同颜色/图例标出来源和实际时间范围；长度不同的片段可以映射到 0–100% 相对时长用于叠图，但表格始终保留真实起止时间与真实时长。
 
 导出文本/TSV 至少包含：Praat 版本、来源对象/文件标识、目标/参照绝对边界、采样率和声道、分析类别、指标值与单位、差值、质量状态及原因、全部可调参数、可选语言/音类/说话人元数据。导出需可区分“空值/不可用”和数值 0。
 
@@ -102,28 +203,28 @@ AnalysisResult
 
 | 指标 | 定义与单位 | 适用与限制 |
 |---|---|---|
-| A1−P0 | F1 区域最高谐波振幅 A1 减低频鼻音极点相关谐波振幅 P0，单位 dB。 | 同一分析谱内计算；P0 与 A1 无法稳定分辨、谐波冲突或不适合的元音条件下返回不可用，不用 0 替代。 |
-| A1−P1 | A1 减 F1 与 F2 之间的鼻音极点相关谐波振幅 P1，单位 dB。 | 与 A1−P0 同时显示为不同特征；高元音等条件可能导致失效，不能任意互相补值。 |
+| A1−P0 | `20 log10(|H_A1| / |H_P0|)`，单位 dB。A1 为同一分析帧中 F1 带宽内最高谐波的幅度；P0 为低频鼻音极点搜索带内局部峰所对应谐波的幅度。 | 初始 P0 搜索带可设为 250–450 Hz，但它只是可编辑、需随结果记录的先验范围，不是跨元音/说话人的固定生理界限。A1 与 P0 落在同一谐波或无法区分时返回不可用。 |
+| A1−P1 | `20 log10(|H_A1| / |H_P1|)`，单位 dB。P1 为 F1 与 F2 之间鼻音极点搜索带内局部峰所对应谐波的幅度；初始搜索带可设为 790–1100 Hz，并与当前 F1/F2 区间取交集。 | 与 A1−P0 分开显示。低 F1/高元音导致 A1−P0 失效时可单独报告 A1−P1；不能把一个指标的值复制到另一个指标。 |
 | F1 带宽 B1 | 对同一设置的 Burg 共振峰分析得到第一共振峰带宽，单位 Hz。 | 只在元音段和稳定的 formant 设置下报告；不得直接解释为声道开放或舌位。 |
-| A3−P0 | F3 区域谐波振幅 A3 减 P0，单位 dB；界面标为“频谱倾斜相关特征（A3−P0）”。 | 不将它描述成通用的全频谱斜率。与其他特征一样保留说话人、元音与录音条件限制。 |
+| A3−P0 | `20 log10(|H_A3| / |H_P0|)`，单位 dB。A3 为 F3 带宽内最高谐波幅度，P0 沿用上述低频鼻音极点幅度；界面标为“频谱倾斜相关特征（A3−P0）”。 | 这是文献中的 spectral-tilt proxy，不是通用全频谱斜率。F3 或 P0 无法可靠定位时不可用；保留说话人、元音与录音条件限制。 |
 
-支持按片段整体及可用时的相对时间位置测量/绘图。所有分析参数和有效帧范围随结果保存。参照比较不做归一化百分数和综合鼻化分，后续若要做说话人归一化必须先有独立验证设计。
+使用同一可配置分析窗，在元音段 25%、50%、75% 位置及可用的连续帧上取值；初始窗长 50 ms、帧移 5 ms，窗型和参数可编辑，目标/参照必须一致并随结果保存。F1/F2/F3 中心与带宽使用同一份 Praat Formant 设置；A1 取 F1 带宽内谐波幅度最大的谐波，P0/P1 取各自搜索带内局部峰对应的谐波。各谐波幅度先按同一窗和幅度标定转换成 dB，再相减，幅度比按 `20 log10` 计算。结果展示各采样位置/轨迹，并可报告有效帧的中位数作为片段摘要，不把摘要当成分类分数。所有分析参数和有效帧范围随结果保存。参照比较不做归一化百分数和综合鼻化分，后续若要做说话人归一化必须先有独立验证设计。
 
 ### 鼻辅音
 
 | 指标 | 定义与单位 | 适用与限制 |
 |---|---|---|
-| 低/高频能量比 | 线性能量比 `sum(power[f_low … f_split]) / sum(power[f_split … f_high])`，无量纲。推荐初始频带为 0–320 Hz 与 320–5360 Hz，25 ms Hann 窗、512 点 FFT、2.5 ms 帧移。 | 这是描述性谱特征，不叫“鼻化百分比”或分类概率。两段使用同一可编辑频带/窗参数；目标和参照必须一致。 |
+| 低/高频能量比 | 每个分析帧计算线性能量比 `sum(power[f_low ≤ f < f_split]) / sum(power[f_split ≤ f ≤ f_high])`，无量纲；`power` 为窗化 FFT 各频点功率，分割频点只计入高频分母侧一次。片段摘要为有效帧比值的中位数，并可显示逐帧曲线。推荐初始频带为 0–320 Hz 与 320–5360 Hz，25 ms Hann 窗、512 点 FFT、2.5 ms 帧移（16 kHz 示例）；其他采样率按帧采样点数调整 FFT 点数并记录。 | 这是描述性谱特征，不叫“鼻化百分比”或分类概率。原始频带来自英语鼻音/半元音区分研究；普通话不同部位鼻辅音的解释必须经本项目标注样本验证。两段使用同一可编辑频带、窗长、帧移及预处理；目标和参照必须一致。若分母为零或有效频带不足则不可用。 |
 | 片段时长 | `end − start`，以 ms 显示并保存秒值。 | 起止点由用户确认；自动边界只可作为待确认的初始标记。 |
 
-若采样率/Nyquist 或有效录音带宽不足以覆盖上限，界面提示并标记不可比；用户可以对目标/参照共同选择新频带后重新测量。不得只对一侧静默截断频带。
+若采样率/Nyquist 或有效录音带宽不足以覆盖上限，界面提示并标记不可比；用户可以对目标/参照共同选择新频带后重新测量。采样率不同但两侧均覆盖所选频带时保留原始采样率、以同一秒制窗长和频带测量，并显示可比性 warning；绘图只在明确记录的共同频率网格上插值。不得只对一侧静默截断频带。
 
 ### R 音声学特征
 
 | 用户选定类别 | 输出 | 定义与约束 |
 |---|---|---|
-| 擦音 | 谱重心 COG（Hz）、主峰频率（Hz）、谱扩展度（Hz）、谱平坦度（0–1）。 | COG 为所选频带功率加权频率均值；扩展度为以 COG 为中心的功率加权标准差；谱平坦度为几何平均功率/算术平均功率。主峰取同一分析谱与选定频带中的最大功率频点。目标与参照共用频带、窗、步长、平滑设置。 |
-| 塞擦音 | 闭塞时长、摩擦时长（ms）及稳定摩擦段的上述谱特征。 | 释放瞬态和闭塞段不得混入稳态摩擦频谱；边界由用户确认并随结果保存。 |
+| 擦音 | 谱重心 COG（Hz）、主峰频率（Hz）、谱扩展度（Hz）、谱平坦度（0–1）。 | COG 为所选频带功率加权频率均值 `Σ(f·P)/ΣP`；扩展度为以 COG 为中心的功率加权标准差；谱平坦度为 `exp(mean(ln(P+ε))) / mean(P+ε)`，其中 `ε=max(P)×10⁻¹²`。主峰取同一分析谱与选定频带中的最大功率频点。逐帧分析初始使用 25 ms Hann 窗、5 ms 帧移；显示逐帧曲线与有效帧中位数摘要。目标与参照共用频带、窗、步长和平滑设置。 |
+| 塞擦音 | 闭塞时长、释放过渡时长、摩擦时长（ms）及稳定摩擦段的上述谱特征。 | 释放时刻作为闭塞终点；释放过渡从释放时刻计至稳定摩擦起点。闭塞段和释放瞬态不得混入稳态摩擦频谱；边界由用户确认并随结果保存。若稳定摩擦段短于一个分析窗，谱指标不可用但边界时长仍可报告。 |
 | 近音类 r | F2、F3、F3−F2（Hz）及各轨迹。 | 目标与参照共用 Burg 阶数、最高共振峰、窗长、预加重和帧移；无声或无可靠共振峰帧报告缺失原因。绘图可按相对片段时间叠加，原始秒数仍保留。 |
 
 这些参数描述声学信号，不直接测量舌头卷曲形态。普通话卷舌/儿化的解释需要对应音类、元音环境和人工标注数据支持；当前版本不将单个数值换算成“卷舌度”。
@@ -132,7 +233,7 @@ AnalysisResult
 
 每个指标独立返回 `measured`、`warning` 或 `unavailable`。warning 保留可用数值和具体风险；unavailable 不含数值。所有结果行显示状态和人可理解的原因，不把缺失值写成 0 或空白后让用户猜。
 
-至少需要明确处理：对象/选区不存在、起止时间颠倒或越界、片段短于分析窗口、近乎静音、周期性不足、A1/P0/P1 无法分辨、共振峰追踪失败、释放边界不清、用户选择了不支持的发音类别、Nyquist/有效带宽不足、比较参数不一致、格式读取失败，以及核心分析抛出的 Praat 错误。预览绘图失败时保留文字测量和错误说明；不允许异常穿过 GUI 窗口过程导致崩溃。
+至少需要明确处理：对象/选区不存在、起止时间颠倒或越界、片段短于分析窗口、近乎静音、周期性不足、A1/P0/P1 无法分辨、共振峰追踪失败、释放边界不清、用户选择了不支持的发音类别、Nyquist/有效带宽不足、比较参数不一致、格式读取失败，以及核心分析抛出的 Praat 错误。请求字段非法或时间域越界属于输入错误，在对应字段旁显示原因且不运行测量；单项 DSP 指标失败时只将该指标标为 `unavailable`，不丢掉其他已测指标；目标/参照整体不可比时保留两侧原始测量，但不给差值。Praat `MelderError` 和标准 C++ 异常必须在对象动作/GUI/AI 适配边界捕获并转换为可读错误，任何异常都不得穿过窗口过程。预览绘图失败时保留文字测量和错误说明。
 
 参数校验应区分“未提供”和数值 0。任何自动边界都记录为候选值及来源；用户修订后保存最终边界，不覆盖自动候选的来源记录。
 
@@ -171,9 +272,10 @@ AnalysisResult
 - 项目上游和借用代码记录：[`CREDITS.zh-CN.md`](https://github.com/f246813/praat-simplified-chinese-ai/blob/modern/CREDITS.zh-CN.md)。
 - Chen (1997), 元音鼻音化中的 A1−P0/A1−P1 及其适用条件：[PubMed](https://pubmed.ncbi.nlm.nih.gov/9348695/)。
 - 普通话鼻韵尾按元音环境分析 A1−P0/P1：[APSIPA 2020 论文](https://www.apsipa.org/proceedings/2020/pdfs/0000584.pdf)。
-- Pruthi & Espy-Wilson (2004), 鼻辅音的低频/中高频能量参数及帧设置：[论文页面](https://www.sciencedirect.com/science/article/pii/S0167639304000573)。该比值在本设计中仅作为原始描述性特征。
+- Pruthi & Espy-Wilson (2004), 英语鼻音/半元音能量比定义及帧设置：[论文全文 PDF](https://bpb-us-e1.wpmucdn.com/blog.umd.edu/dist/c/619/files/2019/11/journal_pruthi_espy_sc_04.pdf)。该比值在本设计中仅作为原始描述性特征，普通话适用性待验证。
 - Styler (2017), 鼻化声学指标的跨说话人/语言差异：[PubMed](https://pubmed.ncbi.nlm.nih.gov/29092545/)。
 - Carignan (2021), 鼻化特征测量方法与适用限制：[论文 PDF](https://discovery.ucl.ac.uk/id/eprint/10121435/1/JASA_NAF_R2.pdf)。
+- Styler (2015 dissertation), A3−P0 对频谱倾斜的操作定义：[论文 PDF](https://wstyler.ucsd.edu/files/styler_dissertation_final.pdf)。
 - A3−P0 作为相关辅助特征的讨论：[JSLHR 2024](https://pubs.asha.org/doi/10.1044/2024_JSLHR-24-00083)。
 - 普通话齿擦音频谱重心受说话人及元音环境影响：[Hauser 2023](https://pmc.ncbi.nlm.nih.gov/articles/PMC10666527/)。
 - 普通话 R 音及其 F2/F3 声学变异：[PubMed 2024](https://pubmed.ncbi.nlm.nih.gov/39279469/)。
