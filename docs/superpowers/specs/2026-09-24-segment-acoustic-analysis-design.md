@@ -20,6 +20,8 @@
 
 代码库引用的上游与借用代码来源以 [`CREDITS.zh-CN.md`](https://github.com/f246813/praat-simplified-chinese-ai/blob/modern/CREDITS.zh-CN.md) 为准。它能解释继承来源，不能证明本项目已经具备这里规划的类别化分析功能。
 
+旧的本地 AI 纠音草案 [`docs/ai-frontend/DESIGN.zh-CN.md`](../../ai-frontend/DESIGN.zh-CN.md) 仍描述整句音素对齐、DTW 与阈值评分，但这些是另一条产品路线；文首范围说明已排除它们对本段级工具的约束。交接文档中的 AI 对话 VOT 自动估计属于现存入口，后续应迁移到共用核心并提供人工边界复核，不能据此扩大为自动音素识别。
+
 ## 产品边界
 
 ### 本次要做
