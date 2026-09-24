@@ -6,13 +6,14 @@
 #include "PraatAiControl.h"
 #include "GuiP.h"
 #include "machine.h"
-#include "melder_sysenv.h"
+#include "praat.h"
 #include "praat_python.h"
 #include "praat_translate.h"
 #include "Preferences.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -22,6 +23,7 @@
 	#include <windows.h>
 #else
 	#include <cstdlib>
+	#include <unistd.h>
 #endif
 
 namespace {
@@ -29,11 +31,43 @@ namespace {
 	char32 theAiAlignmentMode [32];
 	bool statusSuccess = false;
 	bool statusRunning = false;
+	/*
+		API 模式（前端接云端大模型）：状态行必须说清楚，不然「running」看着像在等
+		本机 llama-server，用户点了菜单里的「启动/停止前端」也看不出发生了什么
+		（2026-09-22 用户报的「没反应」有一半是这个）。
+	*/
+	bool statusApiEnabled = false;
 	bool statusVramLow = false;
 	double statusVramFreeGb = 0.0;
 	MelderString statusFrontendModel;
 	MelderString statusFrontendStatus;
+	MelderString statusApiStatus;
 	char32 theAiProjectDirectoryBuffer [Preferences_STRING_BUFFER_SIZE];
+	constexpr conststring32 defaultFrontendModel = U"Qwen3.5-0.8B-Q4_K_M.gguf";
+	/*
+		用户在编辑器里手动拖出来的选区。只在「编辑器还开着」时才算数：
+		编辑器关掉之后 editors[] 里的那个指针会被清成 null，这里自然就失效了。
+	*/
+	Thing theNotedEditor = nullptr;
+	Thing theNotedEditorObject = nullptr;
+	double theNotedSelectionStart = 0.0, theNotedSelectionEnd = 0.0;
+
+	bool notedSelectionMatches (integer iobject, Daata object) {
+		if (! theNotedEditor || theNotedEditorObject != (Thing) object)
+			return false;
+		if (! (theNotedSelectionEnd > theNotedSelectionStart))
+			return false;   // 只点了一下光标，没拖选
+		for (integer ieditor = 0; ieditor < praat_MAXNUM_EDITORS; ieditor ++)
+			if ((Thing) theCurrentPraatObjects -> list [iobject]. editors [ieditor] == theNotedEditor)
+				return true;
+		return false;
+	}
+
+	std::string formatSelectionSeconds (double value) {
+		std::ostringstream text;
+		text << std::fixed << std::setprecision (6) << value;
+		return text. str();
+	}
 
 	std::string jsonStringField (const std::string &json, const std::string &name, const std::string &fallback = "") {
 		const std::string key = "\"" + name + "\"";
@@ -84,10 +118,38 @@ namespace {
 		}
 	}
 
+	bool isProjectDirectory (const std::filesystem::path &directory) {
+		std::error_code error;
+		return std::filesystem::exists (directory / "run_ai_control.py", error) ||
+			std::filesystem::exists (directory / "runtime" / "status.json", error);
+	}
+
 	std::filesystem::path projectDirectoryPath () {
 		const char32 *directory = theAiProjectDirectory [0] ? theAiProjectDirectory : U"ai";
 		autostring8 directory8 = Melder_32to8 (directory);
-		return std::filesystem::u8path (directory8 ? directory8.get() : "ai");
+		const std::filesystem::path configuredDirectory = std::filesystem::u8path (directory8 ? directory8.get() : "ai");
+		if (configuredDirectory.is_absolute())
+			return configuredDirectory;
+		std::error_code error;
+		const std::filesystem::path currentDirectory =
+			std::filesystem::current_path (error) / configuredDirectory;
+		if (isProjectDirectory (currentDirectory))
+			return currentDirectory;
+		#if defined (_WIN32)
+			wchar_t executablePath [MAX_PATH];
+			const DWORD executablePathLength = GetModuleFileNameW (
+				nullptr, executablePath, static_cast <DWORD> (MAX_PATH)
+			);
+			if (executablePathLength > 0 && executablePathLength < MAX_PATH) {
+				const std::filesystem::path executableDirectory =
+					std::filesystem::path (executablePath, executablePath + executablePathLength). parent_path();
+				const std::filesystem::path executableRelativeDirectory =
+					executableDirectory / configuredDirectory;
+				if (isProjectDirectory (executableRelativeDirectory))
+					return executableRelativeDirectory;
+			}
+		#endif
+		return currentDirectory;
 	}
 
 	std::filesystem::path controlScriptPath () {
@@ -108,35 +170,72 @@ namespace {
 		);
 	}
 
-	autostring32 runControlCommand (conststring32 command, conststring32 value = nullptr) {
+	void setEnvironmentUtf8 (const char *name, const std::string &value) {
+		#if defined (_WIN32)
+			const int nameLength = MultiByteToWideChar (CP_UTF8, 0, name, -1, nullptr, 0);
+			const int valueLength = MultiByteToWideChar (
+				CP_UTF8, 0, value. c_str(), static_cast <int> (value. size()), nullptr, 0
+			);
+			if (nameLength <= 0 || valueLength < 0)
+				return;
+			std::wstring wideName (nameLength, L'\0');
+			std::wstring wideValue (valueLength, L'\0');
+			MultiByteToWideChar (CP_UTF8, 0, name, -1, wideName. data(), nameLength);
+			if (valueLength > 0)
+				MultiByteToWideChar (
+					CP_UTF8, 0, value. c_str(), static_cast <int> (value. size()),
+					wideValue. data(), valueLength
+				);
+			SetEnvironmentVariableW (wideName. c_str(), wideValue. c_str());
+		#else
+			setenv (name, value. c_str(), 1);
+		#endif
+	}
+
+	void clearEnvironmentUtf8 (const char *name) {
+		#if defined (_WIN32)
+			const int nameLength = MultiByteToWideChar (CP_UTF8, 0, name, -1, nullptr, 0);
+			if (nameLength <= 0)
+				return;
+			std::wstring wideName (nameLength, L'\0');
+			MultiByteToWideChar (CP_UTF8, 0, name, -1, wideName. data(), nameLength);
+			SetEnvironmentVariableW (wideName. c_str(), nullptr);
+		#else
+			unsetenv (name);
+		#endif
+	}
+
+	void runControlCommand (conststring32 command, conststring32 value = nullptr) {
 		const std::string script8 = controlScriptPath(). u8string();
+		const std::string directory8 = projectDirectoryPath(). u8string();
 		autostring32 script32 = Melder_8to32_e (script8. c_str());
-		autoMelderString buffer;
-		MelderString_append (
-			& buffer,
-			U"\"", praat_python_getExecutablePath(), U"\" \"",
-			script32 ? script32. get() : U"", U"\" ", command
+		autostring32 directory32 = Melder_8to32_e (directory8. c_str());
+		autostring8 command8 = Melder_32to8 (command ? command : U"");
+		autostring8 value8 = Melder_32to8 (value ? value : U"");
+		setEnvironmentUtf8 (
+			"PRAAT_AI_CONTROL_COMMAND",
+			command8 ? command8. get() : ""
 		);
-		if (value && value [0])
-			MelderString_append (& buffer, U" \"", value, U"\"");
-		return runSystem_STR (buffer. string);
-	}
-
-	void setProcessEnvironment (const wchar_t *name, const wchar_t *value) {
-		#if defined (_WIN32)
-			SetEnvironmentVariableW (name, value);
-		#else
-			(void) name;
-			(void) value;
-		#endif
-	}
-
-	void clearProcessEnvironment (const wchar_t *name) {
-		#if defined (_WIN32)
-			SetEnvironmentVariableW (name, nullptr);
-		#else
-			(void) name;
-		#endif
+		if (value8 && value8. get() [0])
+			setEnvironmentUtf8 ("PRAAT_AI_CONTROL_VALUE", value8. get());
+		else
+			clearEnvironmentUtf8 ("PRAAT_AI_CONTROL_VALUE");
+		setEnvironmentUtf8 ("PRAAT_AI_CONTROL_QUIET", "1");
+		try {
+			praat_runPythonScriptFile (
+				script32 ? script32. get() : U"",
+				directory32 ? directory32. get() : nullptr
+			);
+		} catch (...) {
+			clearEnvironmentUtf8 ("PRAAT_AI_CONTROL_COMMAND");
+			clearEnvironmentUtf8 ("PRAAT_AI_CONTROL_VALUE");
+			clearEnvironmentUtf8 ("PRAAT_AI_CONTROL_QUIET");
+			throw;
+		}
+		clearEnvironmentUtf8 ("PRAAT_AI_CONTROL_COMMAND");
+		clearEnvironmentUtf8 ("PRAAT_AI_CONTROL_VALUE");
+		clearEnvironmentUtf8 ("PRAAT_AI_CONTROL_QUIET");
+		PraatAiControl_refreshStatus();
 	}
 
 	void setModelPath (conststring32 path) {
@@ -156,17 +255,9 @@ namespace {
 			switch (iterator -> second) {
 				case 1: setModelPath (U"D:/models/Qwen3.5-0.8B-Q4_K_M.gguf"); break;
 				case 2: setModelPath (U"D:/llama.cpp/Qwen3.5-2B-UD-Q5_K_XL.gguf"); break;
-				case 3: {
-					autoStringSet files = GuiFileSelect_getInfileNames (
-						nullptr,
-						U"Select a GGUF model file",
-						false
-					);
-					if (files -> size > 0)
-						setModelPath (files -> at [1] -> string. get());
-				} break;
-				case 4: PraatAiControl_startFrontend(); break;
-				case 5: PraatAiControl_stopFrontend(); break;
+				case 3: PraatAiControl_chooseFrontendModel (); break;
+				case 4: PraatAiControl_startFrontend (); break;
+				case 5: PraatAiControl_stopFrontend (); break;
 				default: break;
 			}
 			if (theModelPresetItems [0])
@@ -177,11 +268,152 @@ namespace {
 			Melder_flushError ();
 		}
 	}
+
+	std::string cleanContextField (conststring32 value) {
+		autostring8 value8 = Melder_32to8 (value ? value : U"");
+		std::string result = value8 ? value8. get() : "";
+		std::replace (result. begin(), result. end(), '\t', ' ');
+		std::replace (result. begin(), result. end(), '\r', ' ');
+		std::replace (result. begin(), result. end(), '\n', ' ');
+		return result;
+	}
+
+	long praatProcessId () {
+		/*
+			当前 Praat 的进程号：写进 chat_context.tsv，供对话窗口判断这份列表
+			是不是正在跑的这个 Praat 写的（C5）。
+		*/
+		#if defined (_WIN32)
+			return static_cast <long> (GetCurrentProcessId ());
+		#else
+			return static_cast <long> (getpid ());
+		#endif
+	}
+
+	std::string buildChatContext () {
+		std::ostringstream text;
+		text << "id\tclass\tname\tselected\tsel_start\tsel_end\n";
+		if (theCurrentPraatObjects) {
+			for (integer iobject = 1; iobject <= theCurrentPraatObjects -> n; iobject ++) {
+				Daata object = theCurrentPraatObjects -> list [iobject]. object;
+				if (! object)
+					continue;
+				text
+					<< theCurrentPraatObjects -> list [iobject]. id << '\t'
+					<< cleanContextField (Thing_className (object)) << '\t'
+					<< cleanContextField (theCurrentPraatObjects -> list [iobject]. name. get()) << '\t'
+					<< (theCurrentPraatObjects -> list [iobject]. isSelected ? "1" : "0");
+				if (notedSelectionMatches (iobject, object))
+					text
+						<< '\t' << formatSelectionSeconds (theNotedSelectionStart)
+						<< '\t' << formatSelectionSeconds (theNotedSelectionEnd);
+				else
+					text << "\t\t";   // 没有圈选就留空两列，行数与表头保持一致
+				text << '\n';
+			}
+		}
+		return text. str();
+	}
+
+	void writeChatContext (bool force = false) {
+		static std::string previousContext;
+		/*
+			末尾写上自己的进程号（C5）：对话窗口看到标记就是当前这个 Praat，就
+			知道这份列表是最新的，不用每条消息再投一条空脚本刷新——省一次完整
+			往返（投递 + 等待），也少一次被模态窗口挡住的机会。
+			对这个文件的解析会忽略这一行（praat_ai.tools.parse_object_context）。
+		*/
+		const std::string context = buildChatContext ()
+			+ "# praat-pid=" + std::to_string (praatProcessId ()) + "\n";
+		if (! force && context == previousContext)
+			return;   // 选中对象没有变化时不重复写盘
+		previousContext = context;
+		const std::filesystem::path runtimeDirectory = projectDirectoryPath() / "runtime";
+		std::error_code error;
+		std::filesystem::create_directories (runtimeDirectory, error);
+		std::ofstream output (runtimeDirectory / "chat_context.tsv", std::ios::binary | std::ios::trunc);
+		if (! output. is_open())
+			return;
+		output << context;
+	}
+
+	std::filesystem::path praatExecutablePath () {
+		#if defined (_WIN32)
+			wchar_t executablePath [MAX_PATH];
+			const DWORD length = GetModuleFileNameW (
+				nullptr, executablePath, static_cast <DWORD> (MAX_PATH)
+			);
+			if (length > 0 && length < MAX_PATH)
+				return std::filesystem::path (executablePath, executablePath + length);
+		#endif
+		return { };
+	}
+
+	/*
+		跑一个「脱离」的 Python 启动器：Praat 只等它几百毫秒（它把真正的窗口进程
+		拉起来就退出了）。
+
+		顺便告诉那个窗口「是谁启动了你」——Praat 的进程号 + Praat.exe 路径。前端
+		按这两条线索盯着：Praat 关掉之后，对话窗口和 API 配置小窗都自己退出
+		（见 ai/praat_ai/parent_watch.py，用户 2026-09-21 报的 bug）。
+	*/
+	void runDetachedLauncher (const std::filesystem::path &launcher) {
+		const std::string launcher8 = launcher. u8string();
+		const std::string directory8 = projectDirectoryPath(). u8string();
+		autostring32 launcher32 = Melder_8to32_e (launcher8. c_str());
+		autostring32 directory32 = Melder_8to32_e (directory8. c_str());
+		const std::filesystem::path executable = praatExecutablePath ();
+		#if defined (_WIN32)
+			const std::wstring pidText = std::to_wstring (praatProcessId ());
+			SetEnvironmentVariableW (
+				L"PRAAT_AI_PRAAT_EXECUTABLE",
+				executable. empty() ? nullptr : executable. wstring(). c_str()
+			);
+			SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_PID", pidText. c_str());
+		#endif
+		try {
+			praat_runPythonScriptFile (
+				launcher32 ? launcher32. get() : U"",
+				directory32 ? directory32. get() : nullptr
+			);
+		} catch (...) {
+			#if defined (_WIN32)
+				SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_EXECUTABLE", nullptr);
+				SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_PID", nullptr);
+			#endif
+			throw;
+		}
+		#if defined (_WIN32)
+			SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_EXECUTABLE", nullptr);
+			SetEnvironmentVariableW (L"PRAAT_AI_PRAAT_PID", nullptr);
+		#endif
+	}
+
+	void launchAiChatWindow () {
+		writeChatContext (true);
+		runDetachedLauncher (projectDirectoryPath() / "start_ai_chat.py");
+	}
+
+	void launchApiSettingsWindow () {
+		/*
+			「前端 → API 配置…」：新起一个**独立**进程显示那个 Tk 窗口。
+
+			不能走 runControlCommand()：那条路 = praat_runPythonScriptFile()，
+			Praat 会一直读子进程的标准输出直到子进程退出；而这个窗口要等用户点
+		关闭才退出，于是 Praat 的主线程整个被堵住（实测窗口 Responding=False）：
+			缩一下语图窗口或对象窗口就成了幽灵窗口，再点关闭就是「未响应 → 结束
+			进程」，用户看到的就是崩溃（2026-09-21 用户报的）。
+		*/
+		runDetachedLauncher (projectDirectoryPath() / "start_api_settings.py");
+	}
+
 }
 
 void PraatAiControl_initPreferences () {
 	Preferences_addString (U"AI.projectDirectory", theAiProjectDirectory, U"ai");
 	Preferences_addString (U"AI.alignmentMode", theAiAlignmentMode, U"auto");
+	MelderString_copy (& statusFrontendModel, defaultFrontendModel);
+	MelderString_copy (& statusFrontendStatus, U"stopped");
 	conststring32 configuredDirectory = Melder_getenv (U"PRAAT_AI_PROJECT_DIR");
 	if (configuredDirectory && configuredDirectory [0])
 		str32cpy (theAiProjectDirectory, configuredDirectory);
@@ -211,15 +443,29 @@ bool PraatAiControl_refreshStatus () {
 	autostring32 status32 = Melder_8to32_e (status. c_str());
 	MelderString_copy (& statusFrontendModel, model32 ? model32. get() : U"");
 	MelderString_copy (& statusFrontendStatus, status32 ? status32. get() : U"unknown");
+	statusApiEnabled = jsonBoolField (* text, "api_enabled", false);
+	MelderString_empty (& statusApiStatus);
+	if (statusApiEnabled) {
+		const std::string apiModel = jsonStringField (* text, "api_model");
+		autostring32 apiModel32 = Melder_8to32_e (apiModel. c_str());
+		MelderString_append (
+			& statusApiStatus,
+			U"API 模式（",
+			apiModel32 && apiModel32. get() [0] ? apiModel32. get() : U"云端模型",
+			U"，不需要本机模型服务）"
+		);
+	}
 	return statusSuccess;
 }
 
 conststring32 PraatAiControl_getFrontendModel () {
-	return statusFrontendModel. string;
+	return statusFrontendModel. string ? statusFrontendModel. string : defaultFrontendModel;
 }
 
 conststring32 PraatAiControl_getFrontendStatus () {
-	return statusFrontendStatus. string;
+	if (statusApiEnabled && statusApiStatus. string)
+		return statusApiStatus. string;
+	return statusFrontendStatus. string ? statusFrontendStatus. string : U"stopped";
 }
 
 conststring32 PraatAiControl_getVramText (bool *low) {
@@ -236,55 +482,13 @@ conststring32 PraatAiControl_getVramText (bool *low) {
 	return text. string;
 }
 
-void PraatAiControl_startFrontend () {
-	runControlCommand (U"start");
-	PraatAiControl_refreshStatus();
-}
-
-void PraatAiControl_stopFrontend () {
-	runControlCommand (U"stop");
-	PraatAiControl_refreshStatus();
-}
-
-void PraatAiControl_runAnalysis () {
-	#if defined (_WIN32)
-		const std::wstring commandName = L"PRAAT_AI_CONTROL_COMMAND";
-		const std::wstring commandValue = L"run";
-		setProcessEnvironment (commandName. c_str(), commandValue. c_str());
-	#else
-		setenv ("PRAAT_AI_CONTROL_COMMAND", "run", 1);
-	#endif
-	try {
-		const std::string script8 = controlScriptPath(). u8string();
-		const std::string directory8 = projectDirectoryPath(). u8string();
-		autostring32 script32 = Melder_8to32_e (script8. c_str());
-		autostring32 directory32 = Melder_8to32_e (directory8. c_str());
-		praat_runPythonScriptFile (
-			script32 ? script32. get() : U"",
-			directory32 ? directory32. get() : nullptr
-		);
-	} catch (...) {
-		#if defined (_WIN32)
-			clearProcessEnvironment (commandName. c_str());
-		#else
-			unsetenv ("PRAAT_AI_CONTROL_COMMAND");
-		#endif
-		throw;
-	}
-	#if defined (_WIN32)
-		clearProcessEnvironment (commandName. c_str());
-	#else
-		unsetenv ("PRAAT_AI_CONTROL_COMMAND");
-	#endif
-}
-
 void PraatAiControl_addModelMenu (GuiWindow window) {
 	#if motif
 		GuiMenu menu = GuiMenu_createInForm (
 			window,
 			-190, -8,
-			Machine_getMenuBarBottom(),
-			Machine_getMenuBarBottom() + 24,
+			Machine_getMenuBarBottom (),
+			Machine_getMenuBarBottom () + 24,
 			U"Models",
 			0
 		);
@@ -313,6 +517,133 @@ void PraatAiControl_addModelMenu (GuiWindow window) {
 		);
 		theModelMenuActions [stopItem] = 5;
 	#endif
+}
+
+void PraatAiControl_chooseFrontendModel () {
+	autoStringSet files = GuiFileSelect_getInfileNames (
+		nullptr,
+		U"Select a GGUF model file",
+		false
+	);
+	if (files -> size > 0)
+		setModelPath (files -> at [1] -> string. get());
+}
+
+void PraatAiControl_configureApi () {
+	/*
+		「前端 → API 配置…」：打开那个填 API key 的小窗口。
+
+		窗口本身是 Python + Tk 的（ai/praat_ai/api_settings.py）：填服务商、Base URL、
+		模型名和 key，点「测试连接」确认，保存后写进 ai_config.json 的 api 节，
+		前端下一次请求就改用云端模型（本地 llama-server 的配置原样留着）。
+
+		窗口要跑在**独立进程**里（launchApiSettingsWindow），不能让 Praat 等它——
+		否则窗口开着的时候 Praat 整个不响应，缩窗就变幽灵窗口（见那个函数的注释）。
+	*/
+	launchApiSettingsWindow ();
+	PraatAiControl_refreshStatus ();
+}
+
+void PraatAiControl_startFrontend () {
+	runControlCommand (U"start");
+	PraatAiControl_refreshStatus();
+	if (statusRunning)
+		launchAiChatWindow ();
+}
+
+void PraatAiControl_stopFrontend () {
+	runControlCommand (U"stop");
+	PraatAiControl_refreshStatus();
+}
+
+void PraatAiControl_runAnalysis () {
+	if (! theCurrentPraatObjects || theCurrentPraatObjects -> totalSelection < 2)
+		Melder_throw (U"AI 纠音需要至少两个已选中的 Sound 对象。");
+	const std::string script8 = (projectDirectoryPath() / "run_ai_tutor.py"). u8string();
+	const std::string directory8 = projectDirectoryPath(). u8string();
+	autostring32 script32 = Melder_8to32_e (script8. c_str());
+	autostring32 directory32 = Melder_8to32_e (directory8. c_str());
+	praat_runPythonScriptFile (
+		script32 ? script32. get() : U"",
+		directory32 ? directory32. get() : nullptr
+	);
+}
+
+void PraatAiControl_refreshChatContext (bool force) {
+	if (Melder_batch)
+		return;   // 批处理里没有对话窗口
+	writeChatContext (force);   // 默认内容没变化时不重复写盘
+}
+
+void PraatAiControl_reportChatScriptFailure (conststring32 message) {
+	/*
+		app 发来的脚本报错时走这里（sys/praat.cpp 的 cb_userMessage）。
+
+		为什么不直接 Melder_flushError：Windows 上那会开一个
+		MessageBox (MB_OK | MB_TOPMOST)，它自带消息循环。用户不点掉它，
+		对话窗口就看不到「这一条为什么失败」——只会一条条等到 25 秒超时，
+		而且错误原文（英文）还留在那个框里，前端读不到（guide.md §8.5、§8.9）。
+
+		这里改成：错误写进对话窗口读的结果文件（一行，前端直接显示），
+		再补一句完成标记，让前端立刻结束等待而不是干等超时。
+	*/
+	const std::filesystem::path runtimeDirectory = projectDirectoryPath() / "runtime";
+	std::error_code error;
+	std::filesystem::create_directories (runtimeDirectory, error);
+	autostring8 message8 = Melder_32to8 (message ? message : U"");
+	const std::string raw = message8 ? message8. get() : "";
+	/*
+		结果文件一行一条结果，所以把多行错误压成一行：去掉空行、每行首尾空白，
+		用 " | " 连起来（Praat 的错误里通常有「命令原文 / 第几行 / 脚本名」三段）。
+	*/
+	std::string text = "脚本没跑完（Praat 报错，后面的消息不会被它挡住）：";
+	std::istringstream lines (raw);
+	std::string line;
+	bool first = true;
+	while (std::getline (lines, line)) {
+		const size_t begin = line. find_first_not_of (" \t\r");
+		if (begin == std::string::npos)
+			continue;
+		const size_t end = line. find_last_not_of (" \t\r");
+		if (! first)
+			text += " | ";
+		text += line. substr (begin, end - begin + 1);
+		first = false;
+	}
+	if (first)   // 一个字符都没有（理论上不会）
+		text += "（Praat 没有给出错误文字）";
+	{
+		std::ofstream result (runtimeDirectory / "chat_result.tsv", std::ios::binary | std::ios::app);
+		if (result. is_open()) {
+			result << text << "\n";
+		}
+	}
+	{
+		std::ofstream state (runtimeDirectory / "chat_state.txt", std::ios::binary | std::ios::app);
+		if (state. is_open()) {
+			state << "done\n";
+		}
+	}
+	{
+		/*
+			另写一份原始错误给前端读：前端看到这个文件就知道「这一条是失败的」，
+			而不是把错误行当成正常结果（chat.py 的 _read_failure）。
+		*/
+		std::ofstream failure (runtimeDirectory / "chat_failure.txt", std::ios::binary | std::ios::trunc);
+		if (failure. is_open()) {
+			failure << raw << "\n";
+		}
+	}
+}
+
+void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end) {
+	if (Melder_batch)
+		return;
+	theNotedEditor = editor;
+	theNotedEditorObject = object;
+	theNotedSelectionStart = start;
+	theNotedSelectionEnd = end;
+	writeChatContext ();   // 内容没变化时不会重复写盘
 }
 
 /* End of file PraatAiControl.cpp */

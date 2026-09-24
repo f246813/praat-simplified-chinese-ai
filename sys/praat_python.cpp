@@ -19,6 +19,7 @@
 #include <string>
 #include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <sstream>
 #include <iomanip>
 
@@ -71,6 +72,23 @@ static bool handlePythonOutputLine (
 	}
 	progressWasShown = true;
 	return true;
+}
+
+/*
+	Python 调用跑完时的收尾：先把「满格 + 完成」那一帧画出来，停一小会儿再关窗口。
+
+	不然一个几秒就跑完的操作（模型已经在跑、或者本来就快）在用户眼里只剩
+	「窗口闪一下就没了」——2026-09-21 用户报的。这里只在这条 Python 调用链上等
+	一下，不影响 Praat 自己的其它进度窗口。
+*/
+static void finishProgressWindow () {
+	Melder_progress (0.999, U"完成。");
+	#if defined (_WIN32)
+		Sleep (250);
+	#else
+		usleep (250000);
+	#endif
+	Melder_progress (1.0);
 }
 
 static std::string escape_json_string (const std::string &str) {
@@ -136,6 +154,51 @@ static std::wstring utf8_to_wstring (const std::string &u8) {
 
 static char32 thePythonExecutablePath [Preferences_STRING_BUFFER_SIZE];
 
+static std::filesystem::path findAiPythonExecutable () {
+	const auto isPythonExecutable = [] (const std::filesystem::path &path) {
+		std::error_code error;
+		return std::filesystem::is_regular_file (path, error);
+	};
+	std::vector<std::filesystem::path> roots;
+	std::error_code error;
+	const std::filesystem::path currentDirectory = std::filesystem::current_path (error);
+	if (! currentDirectory.empty()) {
+		roots.push_back (currentDirectory);
+		if (currentDirectory.has_parent_path())
+			roots.push_back (currentDirectory.parent_path());
+	}
+	#if defined (_WIN32)
+		wchar_t executablePath [MAX_PATH];
+		const DWORD executablePathLength = GetModuleFileNameW (
+			nullptr, executablePath, static_cast <DWORD> (MAX_PATH)
+		);
+		if (executablePathLength > 0 && executablePathLength < MAX_PATH) {
+			const std::filesystem::path executableDirectory =
+				std::filesystem::path (executablePath, executablePath + executablePathLength). parent_path();
+			roots.push_back (executableDirectory);
+			if (executableDirectory.has_parent_path())
+				roots.push_back (executableDirectory.parent_path());
+		}
+	#endif
+	for (const std::filesystem::path &root : roots) {
+		#if defined (_WIN32)
+			const std::vector<std::filesystem::path> candidates {
+				root / "venv-ai" / "Scripts" / "python.exe",
+				root / ".venv" / "Scripts" / "python.exe"
+			};
+		#else
+			const std::vector<std::filesystem::path> candidates {
+				root / "venv-ai" / "bin" / "python3",
+				root / ".venv" / "bin" / "python3"
+			};
+		#endif
+		for (const std::filesystem::path &candidate : candidates)
+			if (isPythonExecutable (candidate))
+				return candidate;
+	}
+	return { };
+}
+
 void praat_python_initPreferences () {
 	#if defined (_WIN32)
 		Preferences_addString (U"Python.executablePath", thePythonExecutablePath, U"python");
@@ -145,9 +208,31 @@ void praat_python_initPreferences () {
 	conststring32 configuredPath = Melder_getenv (U"PRAAT_PYTHON_EXECUTABLE");
 	if (configuredPath && configuredPath [0])
 		str32cpy (thePythonExecutablePath, configuredPath);
+	else if (str32equ (thePythonExecutablePath, U"python") || str32equ (thePythonExecutablePath, U"python3")) {
+		const std::filesystem::path detectedPath = findAiPythonExecutable ();
+		if (! detectedPath.empty()) {
+			const std::string detectedPath8 = path_to_utf8 (detectedPath);
+			autostring32 detectedPath32 = Melder_8to32_e (detectedPath8.c_str());
+			if (detectedPath32)
+				str32cpy (thePythonExecutablePath, detectedPath32.get());
+		}
+	}
 }
 
 conststring32 praat_python_getExecutablePath () {
+	if (
+		! thePythonExecutablePath [0] ||
+		str32equ (thePythonExecutablePath, U"python") ||
+		str32equ (thePythonExecutablePath, U"python3")
+	) {
+		const std::filesystem::path detectedPath = findAiPythonExecutable ();
+		if (! detectedPath.empty()) {
+			const std::string detectedPath8 = path_to_utf8 (detectedPath);
+			autostring32 detectedPath32 = Melder_8to32_e (detectedPath8.c_str());
+			if (detectedPath32)
+				str32cpy (thePythonExecutablePath, detectedPath32.get());
+		}
+	}
 	if (thePythonExecutablePath [0] != U'\0')
 		return thePythonExecutablePath;
 	#if defined (_WIN32)
@@ -577,7 +662,7 @@ static void ensure_helper_module (const std::filesystem::path& tempDir) {
 	}
 }
 
-void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWorkingDir) {
+static void praat_runPythonScriptFile_impl (conststring32 filePath, conststring32 optionalWorkingDir) {
 	if (! filePath || filePath [0] == U'\0')
 		Melder_throw (U"No Python script file specified.");
 
@@ -636,7 +721,19 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 			autoMelderString objFileName;
 			MelderString_append (& objFileName, iobj, U"_", sanitizedBaseName, ext);
 			autostring8 objFileName8 = Melder_32to8 (objFileName.string);
-			std::filesystem::path objPath = tempDir / (objFileName8 ? objFileName8.get() : "obj");
+			/*
+				对象名一律按 UTF-8 走 utf8_to_path()。
+
+				以前这里是 `tempDir / objFileName8.get()`：std::filesystem::path 收窄
+				字符串时按系统 ANSI 代码页解释（中文 Windows 上是 936/GBK），于是
+					- 名字是「思い出す」时变成乱码文件名（1_Sound_鎬濄亜鍑恒仚.wav）；
+					- 名字是「あなた」这类 UTF-8 字节不是合法 GBK 序列的名字时，
+					  libc++ 直接抛 std::filesystem::filesystem_error。
+				两个后果都实测过：后者会让「启动前端」带着未捕获异常逃出窗口过程，
+				libc++abi 调 std::terminate → abort()，Praat 无提示闪退
+				（2026-09-20，Praat.exe.18460.dmp / .2312.dmp / .22172.dmp）。
+			*/
+			std::filesystem::path objPath = tempDir / utf8_to_path (objFileName8 ? objFileName8.get() : "obj");
 			std::string objPathStr = path_to_utf8 (objPath);
 
 			if (isSound) {
@@ -827,7 +924,7 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 		if (! pendingOutput. empty ())
 			handlePythonOutputLine (pendingOutput, outputAccum, progressWasShown);
 		if (progressWasShown)
-			Melder_progress (1.0);
+			finishProgressWindow ();
 
 		WaitForSingleObject (pi.hProcess, INFINITE);
 		DWORD exitCode = 0;
@@ -909,7 +1006,7 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 			handlePythonOutputLine (line, outputAccum, progressWasShown);
 		}
 		if (progressWasShown)
-			Melder_progress (1.0);
+			finishProgressWindow ();
 		int status = pclose (pipe);
 		int exitCode = WIFEXITED (status) ? WEXITSTATUS (status) : -1;
 
@@ -987,7 +1084,7 @@ void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWo
 	} catch (...) {}
 }
 
-void praat_runPythonScriptText (conststring32 scriptText, conststring32 optionalScriptDirectory) {
+static void praat_runPythonScriptText_impl (conststring32 scriptText, conststring32 optionalScriptDirectory) {
 	if (! scriptText || scriptText [0] == U'\0')
 		Melder_throw (U"Python script text is empty.");
 
@@ -1007,7 +1104,42 @@ void praat_runPythonScriptText (conststring32 scriptText, conststring32 optional
 
 	std::string scriptPathStr = path_to_utf8 (scriptPath);
 	autostring32 scriptPath32 = Melder_8to32_e (scriptPathStr.c_str());
-	praat_runPythonScriptFile (scriptPath32.get(), optionalScriptDirectory);
+	praat_runPythonScriptFile (scriptPath32.get(), optionalScriptDirectory);   // 走带兜底的那一层
+}
+
+/*
+	Python 运行器是直接从窗口过程里被调进来的（AI 前端菜单 aiFrontendStartCallback 等、
+	Python 脚本窗口的「运行」按钮）。任何 C++ 异常一旦逃出窗口过程，libc++abi 就会调
+	std::terminate → abort()，Praat 会**没有任何提示地闪退**——菜单回调只 catch
+	MelderError，抓不到 std::filesystem::filesystem_error 这类标准库异常。
+	2026-09-20 实测：选中名为「あなた」的对象、点「启动前端」，就是死在这条路上
+	（Praat.exe.18460.dmp，praat_context.json 停在 28 字节）。
+	所以这两个入口统一兜一层：标准库异常转成 Melder 错误，用户能看到对话框。
+*/
+template <typename Callback>
+static void guardPythonRunner (conststring32 action, Callback &&callback) {
+	try {
+		callback ();
+	} catch (MelderError) {
+		throw;   // Melder 错误原样交给上层（菜单回调会弹对话框）
+	} catch (const std::exception &error) {
+		Melder_throw (U"运行 Python 脚本时发生内部错误（", action, U"）：",
+				Melder_peek8to32_u (error. what()));
+	} catch (...) {
+		Melder_throw (U"运行 Python 脚本时发生未知的内部错误（", action, U"）。");
+	}
+}
+
+void praat_runPythonScriptFile (conststring32 filePath, conststring32 optionalWorkingDir) {
+	guardPythonRunner (U"运行脚本文件", [&] () {
+		praat_runPythonScriptFile_impl (filePath, optionalWorkingDir);
+	});
+}
+
+void praat_runPythonScriptText (conststring32 scriptText, conststring32 optionalScriptDirectory) {
+	guardPythonRunner (U"运行脚本内容", [&] () {
+		praat_runPythonScriptText_impl (scriptText, optionalScriptDirectory);
+	});
 }
 
 autostring32 praat_python_generateAgentPrompt () {

@@ -659,6 +659,174 @@ void _GuiText_exit () {
 	@end
 #endif
 
+#if motif
+	static LRESULT CALLBACK _ModernEditSubclassProc (
+		HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+		UINT_PTR uIdSubclass, DWORD_PTR dwRefData
+	) {
+		bool isScrolled = (dwRefData & GuiText_SCROLLED) != 0;
+		switch (uMsg) {
+			case WM_MOUSEMOVE: {
+				TRACKMOUSEEVENT tme;
+				tme.cbSize = sizeof (TRACKMOUSEEVENT);
+				tme.dwFlags = TME_LEAVE;
+				tme.hwndTrack = hwnd;
+				tme.dwHoverTime = 0;
+				TrackMouseEvent (& tme);
+
+				if (! GetPropW (hwnd, L"PraatHover")) {
+					SetPropW (hwnd, L"PraatHover", (HANDLE) 1);
+					RedrawWindow (hwnd, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
+				}
+				break;
+			}
+			case WM_MOUSELEAVE: {
+				if (GetPropW (hwnd, L"PraatHover")) {
+					RemovePropW (hwnd, L"PraatHover");
+					RedrawWindow (hwnd, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
+				}
+				break;
+			}
+			case WM_SETFOCUS:
+			case WM_KILLFOCUS:
+			case WM_ENABLE: {
+				LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+				RedrawWindow (hwnd, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
+				return res;
+			}
+			case WM_NCCALCSIZE: {
+				if (! isScrolled) {
+					if (wParam) {
+						NCCALCSIZE_PARAMS *p = (NCCALCSIZE_PARAMS *) lParam;
+						p -> rgrc [0].left   += 2;
+						p -> rgrc [0].top    += 2;
+						p -> rgrc [0].right  -= 2;
+						p -> rgrc [0].bottom -= 2;
+						return 0;
+					}
+					RECT *r = (RECT *) lParam;
+					r -> left   += 2;
+					r -> top    += 2;
+					r -> right  -= 2;
+					r -> bottom -= 2;
+					return 0;
+				} else {
+					LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+					if (wParam) {
+						NCCALCSIZE_PARAMS *p = (NCCALCSIZE_PARAMS *) lParam;
+						p -> rgrc [0].left   += 1;
+						p -> rgrc [0].top    += 1;
+						p -> rgrc [0].right  -= 1;
+						p -> rgrc [0].bottom -= 1;
+					}
+					return res;
+				}
+			}
+			case WM_SIZE: {
+				LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+				if (! isScrolled) {
+					RECT rc;
+					GetClientRect (hwnd, & rc);
+					if (rc.right > 12 && rc.bottom > 6) {
+						rc.left += 4;
+						rc.right -= 4;
+						rc.top += 2;
+						rc.bottom -= 1;
+						SendMessage (hwnd, EM_SETRECT, 0, (LPARAM) & rc);
+					}
+				}
+				return res;
+			}
+			case WM_NCPAINT: {
+				HDC hdc = GetWindowDC (hwnd);
+				if (! hdc)
+					break;
+
+				RECT rcWin;
+				GetWindowRect (hwnd, & rcWin);
+				OffsetRect (& rcWin, -rcWin.left, -rcWin.top);
+
+				bool isEnabled = IsWindowEnabled (hwnd);
+				bool isFocus   = (GetFocus () == hwnd) && isEnabled;
+				bool isHover   = (GetPropW (hwnd, L"PraatHover") != nullptr) && isEnabled;
+
+				// Exclude the client area so non-client painting never clips or overwrites text
+				RECT rcClient;
+				GetClientRect (hwnd, & rcClient);
+				POINT ptClient = { 0, 0 };
+				ClientToScreen (hwnd, & ptClient);
+				RECT rcWinScreen;
+				GetWindowRect (hwnd, & rcWinScreen);
+				OffsetRect (& rcClient, ptClient.x - rcWinScreen.left, ptClient.y - rcWinScreen.top);
+				ExcludeClipRect (hdc, rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
+
+				// Fill non-client background with parent dialog background brush
+				FillRect (hdc, & rcWin, theWinGuiBackgroundBrush ());
+
+				COLORREF borderCol;
+				if (! isEnabled)
+					borderCol = RGB (226, 232, 240);   // #E2E8F0
+				else if (isHover || isFocus)
+					borderCol = RGB (148, 163, 184);   // #94A3B8 Slate-400
+				else
+					borderCol = RGB (209, 213, 219);   // #D1D5DB Neutral Gray-300
+
+				// Always use a clean 1px border on all 4 sides
+				HPEN hPen = CreatePen (PS_SOLID, 1, borderCol);
+				HPEN oldPen = (HPEN) SelectObject (hdc, hPen);
+				HBRUSH oldBrush = (HBRUSH) SelectObject (hdc, GetStockObject (NULL_BRUSH));
+
+				if (! isScrolled) {
+					// Draw uniform 1px rounded card border
+					RoundRect (hdc, rcWin.left, rcWin.top, rcWin.right, rcWin.bottom, 6, 6);
+
+					// Windows 11 Fluent Design: ONLY the bottom edge displays the 2px accent underline when focused!
+					if (isFocus && rcWin.bottom > 3) {
+						RECT rcAccent = { rcWin.left + 2, rcWin.bottom - 2, rcWin.right - 2, rcWin.bottom };
+						HBRUSH hAccentBrush = CreateSolidBrush (RGB (0, 103, 192)); // #0067C0 Win11 Fluent Blue
+						FillRect (hdc, & rcAccent, hAccentBrush);
+						DeleteObject (hAccentBrush);
+					}
+				} else {
+					// Scrolled editor: sleek crisp 1px rectangle border
+					Rectangle (hdc, rcWin.left, rcWin.top, rcWin.right, rcWin.bottom);
+
+					if (isFocus && rcWin.bottom > 3) {
+						RECT rcAccent = { rcWin.left, rcWin.bottom - 2, rcWin.right, rcWin.bottom };
+						HBRUSH hAccentBrush = CreateSolidBrush (RGB (0, 103, 192));
+						FillRect (hdc, & rcAccent, hAccentBrush);
+						DeleteObject (hAccentBrush);
+					}
+				}
+
+				SelectObject (hdc, oldPen);
+				SelectObject (hdc, oldBrush);
+				DeleteObject (hPen);
+				ReleaseDC (hwnd, hdc);
+				return 0;
+			}
+			case WM_NCDESTROY: {
+				RemovePropW (hwnd, L"PraatHover");
+				RemoveWindowSubclass (hwnd, _ModernEditSubclassProc, uIdSubclass);
+				break;
+			}
+			default: break;
+		}
+		return DefSubclassProc (hwnd, uMsg, wParam, lParam);
+	}
+
+	void _GuiWin_subclassModernEdit (HWND hwnd, uint32 flags) {
+		if (! hwnd)
+			return;
+		bool isScrolled = (flags & GuiText_SCROLLED) != 0;
+		if (isScrolled)
+			return; // Scrolled multiline editors manage their own non-client scrollbars
+		SendMessage (hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM (6, 6));
+		SetWindowSubclass (hwnd, _ModernEditSubclassProc, 2, (DWORD_PTR) flags);
+		SetWindowPos (hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+	}
+#endif
+
 GuiText GuiText_create (GuiForm parent, int left, int right, int top, int bottom, uint32 flags) {
 	autoGuiText me = Thing_new (GuiText);
 	my d_shell = parent -> d_shell;
@@ -760,7 +928,7 @@ GuiText GuiText_create (GuiForm parent, int left, int right, int top, int bottom
 		my d_widget = _Gui_initializeWidget (xmTextWidgetClass, parent -> d_widget, flags & GuiText_SCROLLED ? U"scrolledText" : U"text");
 		_GuiObject_setUserData (my d_widget, me.get());
 		my d_editable = (flags & GuiText_NONEDITABLE) == 0;
-		my d_widget -> window = CreateWindow (L"edit", nullptr, WS_CHILD | WS_BORDER
+		my d_widget -> window = CreateWindow (L"edit", nullptr, WS_CHILD
 			| ( flags & GuiText_ANYWRAP ? ES_AUTOVSCROLL : ES_AUTOHSCROLL )
 			| ES_MULTILINE | ES_WANTRETURN | WS_CLIPSIBLINGS
 			| ( flags & GuiText_SCROLLED ? WS_VSCROLL | ( flags & GuiText_ANYWRAP ? 0 : WS_HSCROLL ) : 0 ),
@@ -768,14 +936,15 @@ GuiText GuiText_create (GuiForm parent, int left, int right, int top, int bottom
 			my d_widget -> parent -> window, (HMENU) 1, theGui.instance, nullptr);
 		SetWindowLongPtr (my d_widget -> window, GWLP_USERDATA, (LONG_PTR) my d_widget);
 		if (! font10) {
-			font10 = CreateFont (13, 0, 0, 0, 0, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0/*FIXED_PITCH | FF_MODERN*/, /*L"Doulos SIL"*/L"Courier New");
-			font12 = CreateFont (16, 0, 0, 0, 0, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0/*FIXED_PITCH | FF_MODERN*/, /*L"Doulos SIL"*/L"Courier New");
-			font14 = CreateFont (19, 0, 0, 0, 0, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0/*FIXED_PITCH | FF_MODERN*/, /*L"Doulos SIL"*/L"Courier New");
-			font18 = CreateFont (24, 0, 0, 0, 0, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0/*FIXED_PITCH | FF_MODERN*/, /*L"Doulos SIL"*/L"Courier New");
-			font24 = CreateFont (32, 0, 0, 0, 0, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0/*FIXED_PITCH | FF_MODERN*/, /*L"Doulos SIL"*/L"Courier New");
+			font10 = CreateFont (13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+			font12 = CreateFont (16, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+			font14 = CreateFont (19, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+			font18 = CreateFont (24, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+			font24 = CreateFont (32, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
 		}
-		SetWindowFont (my d_widget -> window, font12 /*theScrolledHint ? font : GetStockFont (ANSI_VAR_FONT)*/, false);
+		SetWindowFont (my d_widget -> window, (flags & GuiText_SCROLLED) ? font12 : theWinGuiNormalLabelFont (), false);
 		Edit_LimitText (my d_widget -> window, 0);
+		_GuiWin_subclassModernEdit (my d_widget -> window, flags);
 		my v_positionInForm (my d_widget, left, right, top, bottom, parent);
 		/*
 			The first created text widget shall attract the input focus.

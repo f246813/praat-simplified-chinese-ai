@@ -27,6 +27,8 @@
 #include "melder.h"
 #include "Graphics.h"
 #include "Gui.h"
+/* 私有的 widget 头（进度窗口要靠它拿到原生 HWND 来强制重画那一帧）。 */
+#include "GuiP.h"
 #include "Interpreter.h"
 #include "Script.h"
 #include "Notebook.h"
@@ -86,11 +88,23 @@ static bool waitWhileProgress (double progress, conststring32 message, GuiDialog
 		(void) cancelButton;   // the Interrupt button has its own callback
 	#endif
 	if (progress >= 1.0) {
+		/*
+			满格时先把「满格 + 说明」那一帧画出来再隐藏：以前直接
+			`GuiThing_hide`，一个几秒就跑完的操作在用户眼里只剩「闪一下」。
+		*/
+		GuiProgressBar_setValue (scale, 1.0);
+		if (message)
+			GuiLabel_setText (label1, message);
+		GuiLabel_setText (label2, U"");
+		#if motif
+			UpdateWindow ((HWND) scale -> d_widget -> window);
+			RedrawWindow ((HWND) dia -> d_widget -> window, nullptr, nullptr,
+				RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+		#endif
 		GuiThing_hide (dia);
 	} else {
 		if (progress <= 0.0)
 			progress = 0.0;
-		GuiThing_show (dia);   // TODO: prevent raising to the front
 		const char32 *newline = str32chr (message, U'\n');
 		if (newline) {
 			static MelderString buffer;
@@ -103,9 +117,16 @@ static bool waitWhileProgress (double progress, conststring32 message, GuiDialog
 			GuiLabel_setText (label1, message);
 			GuiLabel_setText (label2, U"");
 		}
+		/*
+			先把进度条设好再显示窗口：原来是「先 show 再 set」，第一帧就是空白
+			窗口（2026-09-21 用户报的「窗口打开时没有进度条」）。显示之后立刻
+			重画一遍，这一帧才算真的画出来——`GdiFlush ()` 只把 GDI 调用刷出去，
+			不抽消息队列。
+		*/
+		GuiProgressBar_setValue (scale, progress);
+		GuiThing_show (dia);   // TODO: prevent raising to the front
 		#if gtk
 			trace (U"update the progress bar");
-			GuiProgressBar_setValue (scale, progress);
 			while (gtk_events_pending ()) {
 				trace (U"event pending");
 				gtk_main_iteration ();
@@ -116,10 +137,35 @@ static bool waitWhileProgress (double progress, conststring32 message, GuiDialog
 				return false;   // don't continue
 			}
 		#elif motif
-			GuiProgressBar_setValue (scale, progress);
 			GdiFlush ();
-		#elif cocoa
+			/*
+				窗口刚弹出来时进度条看着是空的：Win32 的 progress bar 在**被映射
+				的那一帧**里画的还是旧位置（0），下一次进度更新才出现填充
+				（2026-09-21 用户报的「窗口打开时没有进度条」；连拍两张同刻截图实测：
+				第一张 0 像素、0.2 秒后那张才有）。
+
+				所以这里：先把窗口真的显示出来（抽一次消息队列，处理掉刚才那次
+				show），再重设一次位置并强制重画控件本身——这一次它已经可见，
+				填充就会出现在第一帧里。
+			*/
+			{
+				MSG message;
+				while (PeekMessage (& message, nullptr, 0, 0, PM_REMOVE)) {
+					if (message. message != WM_QUIT) {
+						TranslateMessage (& message);
+						DispatchMessage (& message);
+					}
+				}
+			}
 			GuiProgressBar_setValue (scale, progress);
+			RedrawWindow ((HWND) dia -> d_widget -> window, nullptr, nullptr,
+				RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+			/* 两遍：第一遍让控件在「已经显示」的状态下初始化，第二遍才把填充画出来
+			   （实测一遍的时候第一帧还是空的）。 */
+			UpdateWindow ((HWND) scale -> d_widget -> window);
+			GuiProgressBar_setValue (scale, progress);
+			UpdateWindow ((HWND) scale -> d_widget -> window);
+		#elif cocoa
 			//[scale -> d_cocoaProgressBar   displayIfNeeded];
 			//[CATransaction flush];
 			GuiShell_drain (scale -> d_shell, true, true);

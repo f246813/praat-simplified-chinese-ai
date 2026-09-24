@@ -174,8 +174,8 @@ private:
 		return globalY_fraction_to_pxlt (_ymin_fraction);
 	}
 	double top_pxlt() const {
-		constexpr double legendMargin = 23.0;
-		return globalY_fraction_to_pxlt (our _ymax_fraction) - legendMargin;
+		return globalY_fraction_to_pxlt (our _ymax_fraction) -
+				our functionEditor() -> TOP_LEGEND_MARGIN;
 	}
 public:
 	virtual void v_form_pictureSelection (EditorCommand);

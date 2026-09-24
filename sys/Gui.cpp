@@ -128,22 +128,102 @@ void Gui_getWindowPositioningBounds (double *x, double *y, double *width, double
 		return font;
 	}
 #elif defined (_WIN32)
+	static HFONT createModernUIFont (int height, int weight) {
+		NONCLIENTMETRICSW ncm;
+		memset (& ncm, 0, sizeof (ncm));
+		ncm.cbSize = sizeof (ncm);
+		if (SystemParametersInfoW (SPI_GETNONCLIENTMETRICS, sizeof (ncm), & ncm, 0)) {
+			LOGFONTW lf = ncm.lfMessageFont;
+			lf.lfQuality = CLEARTYPE_QUALITY;
+			lf.lfWeight = weight;
+			if (lf.lfFaceName [0] != L'\0' &&
+			    wcscmp (lf.lfFaceName, L"Tahoma") != 0 &&
+			    wcscmp (lf.lfFaceName, L"MS Sans Serif") != 0 &&
+			    wcscmp (lf.lfFaceName, L"SimSun") != 0)
+			{
+				HFONT hf = CreateFontIndirectW (& lf);
+				if (hf) return hf;
+			}
+		}
+		return CreateFontW (
+			height, 0, 0, 0, weight, FALSE, FALSE, FALSE,
+			DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+			CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+			L"Microsoft YaHei UI"
+		);
+	}
+
 	HFONT theWinGuiNormalLabelFont () {
 		static HFONT font;
 		if (! font)
-			font = CreateFont (15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, nullptr);
+			font = createModernUIFont (-14, FW_NORMAL);
 		return font;
 	}
 	HFONT theWinGuiBoldLabelFont () {
 		static HFONT font;
 		if (! font)
-			font = CreateFont (15, 0, 0, 0, FW_HEAVY/*FW_BOLD*/, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, nullptr);
+			font = createModernUIFont (-14, FW_SEMIBOLD);
 		return font;
 	}
+
+	HFONT theWinGuiIconFont (int height) {
+		static struct { int h; HFONT font; } s_cached [8];
+		for (int i = 0; i < 8; i ++) {
+			if (s_cached [i].h == height && s_cached [i].font)
+				return s_cached [i].font;
+		}
+
+		static const wchar_t *families [] = {
+			L"Segoe Fluent Icons",
+			L"Segoe MDL2 Assets",
+			L"Segoe UI Symbol"
+		};
+		HDC screenDc = GetDC (nullptr);
+		HFONT result = nullptr;
+		if (screenDc) {
+			for (const wchar_t *family : families) {
+				HFONT hf = CreateFontW (
+					height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+					DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+					ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+					family
+				);
+				if (hf) {
+					HFONT old = (HFONT) SelectObject (screenDc, hf);
+					wchar_t actual [64] = { 0 };
+					GetTextFaceW (screenDc, 64, actual);
+					SelectObject (screenDc, old);
+					if (wcsicmp (actual, family) == 0) {
+						result = hf;
+						break;
+					}
+					DeleteObject (hf);
+				}
+			}
+			ReleaseDC (nullptr, screenDc);
+		}
+		if (! result) {
+			result = CreateFontW (
+				height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+				DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+				ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+				L"Segoe UI Symbol"
+			);
+		}
+		for (int i = 0; i < 8; i ++) {
+			if (s_cached [i].font == nullptr) {
+				s_cached [i].h = height;
+				s_cached [i].font = result;
+				break;
+			}
+		}
+		return result;
+	}
+
 	HBRUSH theWinGuiBackgroundBrush () {
 		static HBRUSH brush;
 		if (! brush)
-			brush = CreateSolidBrush (RGB (224, 224, 224));
+			brush = CreateSolidBrush (RGB (245, 246, 248));
 		return brush;
 	}
 #endif

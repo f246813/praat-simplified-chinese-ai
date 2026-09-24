@@ -17,8 +17,11 @@
  */
 
 #include "Ltas.h"
+#include "LongSound.h"
 #include "Manipulation.h"
 #include "ParamCurve.h"
+#include "SegmentAcousticAnalysis.h"
+#include "SegmentAcousticVOT.h"
 #include "Sound_and_Spectrogram.h"
 #include "Sound_and_Spectrum.h"
 #include "Sound_extensions.h"
@@ -38,6 +41,208 @@
 #include "SpeechRecognizer.h"
 
 #include "praat_Sound.h"
+#include "melder_audio.h"
+
+#include <algorithm>
+#include <cmath>
+#include <exception>
+
+static std::optional<double> optionalVotBoundary (double value) {
+	return isundef (value) ? std::optional<double> {} : std::optional<double> { value };
+}
+
+AnalysisResult praat_Sound_analyseVOT (Sound sound, double startTime, double endTime,
+		std::optional<double> burstTime, std::optional<double> voicingTime,
+		const VOTCandidateSettings &settings,
+		SourceKind sourceKind, conststring32 sourceName,
+		std::optional<integer> objectId, std::optional<std::u32string> filePath)
+{
+	Melder_require (burstTime.has_value() == voicingTime.has_value(),
+		U"Manual VOT analysis requires both burst and voicing times, or neither for candidate estimation.");
+	SegmentInput input;
+	input.samples = sound;
+	input.metadata.startTime = startTime;
+	input.metadata.endTime = endTime;
+	input.metadata.source.kind = sourceKind;
+	if (sourceName)
+		input.metadata.source.displayName = sourceName;
+	input.metadata.source.objectId = objectId;
+	input.metadata.source.filePath = std::move (filePath);
+	input.metadata.source.channels = sound -> ny;
+	input.metadata.source.sampleRate = 1.0 / sound -> dx;
+	const VOTBoundaryMode mode = burstTime && voicingTime ? VOTBoundaryMode::manual :
+		VOTBoundaryMode::estimateCandidates;
+	return analyseVOT (input, burstTime, voicingTime, mode, settings);
+}
+
+AnalysisResult praat_LongSound_analyseVOT (LongSound longSound, double startTime, double endTime,
+		std::optional<double> burstTime, std::optional<double> voicingTime,
+		const VOTCandidateSettings &settings, std::optional<integer> objectId)
+{
+	Melder_require (std::isfinite (startTime) && std::isfinite (endTime) && startTime < endTime &&
+		startTime >= longSound -> xmin && endTime <= longSound -> xmax,
+		U"The VOT analysis range must be increasing and inside the LongSound time domain.");
+	Melder_require (burstTime.has_value() == voicingTime.has_value(),
+		U"Manual VOT analysis requires both burst and voicing times, or neither for candidate estimation.");
+	double extractionStart = startTime, extractionEnd = endTime;
+	if (burstTime && voicingTime) {
+		Melder_require (std::isfinite (burstTime.value()) && std::isfinite (voicingTime.value()) &&
+			burstTime.value() >= longSound -> xmin && burstTime.value() <= longSound -> xmax &&
+			voicingTime.value() >= longSound -> xmin && voicingTime.value() <= longSound -> xmax,
+			U"VOT boundary times must fall inside the LongSound time domain.");
+		extractionStart = std::min ({ extractionStart, burstTime.value(), voicingTime.value() });
+		extractionEnd = std::max ({ extractionEnd, burstTime.value(), voicingTime.value() });
+	}
+	autoSound segment = LongSound_extractPart (longSound, extractionStart, extractionEnd, true);
+	std::optional<std::u32string> filePath;
+	if (! MelderFile_isNull (& longSound -> file))
+		filePath = MelderFile_peekPath (& longSound -> file);
+	return praat_Sound_analyseVOT (segment.get(), startTime, endTime, burstTime, voicingTime,
+		settings, SourceKind::longSound, longSound -> name.get(), objectId, std::move (filePath));
+}
+
+static void writeVOTAnalysisResult (const AnalysisResult &result, conststring32 resultFileName) {
+	autoMelderString serialized;
+	AnalysisResult_toTsv (result, & serialized);
+	writeSegmentAnalysisTsvAtomically (resultFileName, serialized.string);
+}
+
+void praat_Sound_writeVOTAnalysisToFile (Sound sound, double startTime, double endTime,
+		std::optional<double> burstTime, std::optional<double> voicingTime,
+		const VOTCandidateSettings &settings, conststring32 resultFileName,
+		SourceKind sourceKind, conststring32 sourceName,
+		std::optional<integer> objectId, std::optional<std::u32string> filePath)
+{
+	Melder_require (resultFileName && resultFileName [0] != U'\0', U"A VOT result file path is required.");
+	const AnalysisResult result = praat_Sound_analyseVOT (sound, startTime, endTime, burstTime, voicingTime,
+		settings, sourceKind, sourceName, objectId, std::move (filePath));
+	writeVOTAnalysisResult (result, resultFileName);
+}
+
+void praat_LongSound_writeVOTAnalysisToFile (LongSound longSound, double startTime, double endTime,
+		std::optional<double> burstTime, std::optional<double> voicingTime,
+		const VOTCandidateSettings &settings, conststring32 resultFileName, std::optional<integer> objectId)
+{
+	Melder_require (resultFileName && resultFileName [0] != U'\0', U"A VOT result file path is required.");
+	const AnalysisResult result = praat_LongSound_analyseVOT (longSound, startTime, endTime,
+		burstTime, voicingTime, settings, objectId);
+	writeVOTAnalysisResult (result, resultFileName);
+}
+
+static std::optional<std::u32string> selectedObjectFilePath (integer objectPosition) {
+	Melder_assert (objectPosition >= 1 && objectPosition <= theCurrentPraatObjects -> n);
+	MelderFile file = & theCurrentPraatObjects -> list [objectPosition]. file;
+	return MelderFile_isNull (file) ? std::optional<std::u32string> {} :
+		std::optional<std::u32string> { MelderFile_peekPath (file) };
+}
+
+/***** SHARED SEGMENT ANALYSIS *****/
+
+FORM (INFO_ONE__Sound_VOT_INFO, U"VOT analysis", U"VOT...") {
+	REAL_OR_UNDEFINED (startTime, U"Start time (s); undefined means Sound start", U"undefined")
+	REAL_OR_UNDEFINED (endTime, U"End time (s); undefined means Sound end", U"undefined")
+	REAL_OR_UNDEFINED (burstTime, U"Burst/release time (s); undefined for a candidate", U"undefined")
+	REAL_OR_UNDEFINED (voicingTime, U"Voicing onset time (s); undefined for a candidate", U"undefined")
+	REAL (burstThresholdDb, U"Minimum burst rise (dB)", U"6.0")
+	REAL (pitchFloorHz, U"Pitch floor (Hz)", U"75.0")
+	OK
+DO
+	FIND_ONE_WITH_IOBJECT (Sound)
+	try {
+		const double actualStartTime = isundef (startTime) ? my xmin : startTime;
+		const double actualEndTime = isundef (endTime) ? my xmax : endTime;
+		VOTCandidateSettings settings;
+		settings.burstThresholdDb = burstThresholdDb;
+		settings.pitchFloorHz = pitchFloorHz;
+		const AnalysisResult result = praat_Sound_analyseVOT (me, actualStartTime, actualEndTime,
+			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings,
+			SourceKind::sound, FULL_NAME, ID, selectedObjectFilePath (IOBJECT));
+		autoMelderString summary;
+		AnalysisResult_toInfoSummary (result, & summary);
+		Melder_information (summary.string);
+	} catch (const std::exception &error) {
+		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
+	}
+END_NO_NEW_DATA
+}
+
+FORM (WRITE_ONE__Sound_VOT_TSV, U"VOT analysis", U"Write VOT analysis to file...") {
+	REAL_OR_UNDEFINED (startTime, U"Start time (s); undefined means Sound start", U"undefined")
+	REAL_OR_UNDEFINED (endTime, U"End time (s); undefined means Sound end", U"undefined")
+	REAL_OR_UNDEFINED (burstTime, U"Burst/release time (s); undefined for a candidate", U"undefined")
+	REAL_OR_UNDEFINED (voicingTime, U"Voicing onset time (s); undefined for a candidate", U"undefined")
+	REAL (burstThresholdDb, U"Minimum burst rise (dB)", U"6.0")
+	REAL (pitchFloorHz, U"Pitch floor (Hz)", U"75.0")
+	OUTFILE (resultFileName, U"Result TSV file", U"vot-analysis.tsv")
+	OK
+DO
+	FIND_ONE_WITH_IOBJECT (Sound)
+	try {
+		const double actualStartTime = isundef (startTime) ? my xmin : startTime;
+		const double actualEndTime = isundef (endTime) ? my xmax : endTime;
+		VOTCandidateSettings settings;
+		settings.burstThresholdDb = burstThresholdDb;
+		settings.pitchFloorHz = pitchFloorHz;
+		praat_Sound_writeVOTAnalysisToFile (me, actualStartTime, actualEndTime,
+			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, resultFileName,
+			SourceKind::sound, FULL_NAME, ID, selectedObjectFilePath (IOBJECT));
+	} catch (const std::exception &error) {
+		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
+	}
+END_NO_NEW_DATA
+}
+
+FORM (INFO_ONE__LongSound_VOT_INFO, U"VOT analysis", U"VOT...") {
+	REAL_OR_UNDEFINED (startTime, U"Start time (s); undefined means LongSound start", U"undefined")
+	REAL_OR_UNDEFINED (endTime, U"End time (s); undefined means LongSound end", U"undefined")
+	REAL_OR_UNDEFINED (burstTime, U"Burst/release time (s); undefined for a candidate", U"undefined")
+	REAL_OR_UNDEFINED (voicingTime, U"Voicing onset time (s); undefined for a candidate", U"undefined")
+	REAL (burstThresholdDb, U"Minimum burst rise (dB)", U"6.0")
+	REAL (pitchFloorHz, U"Pitch floor (Hz)", U"75.0")
+	OK
+DO
+	FIND_ONE_WITH_IOBJECT (LongSound)
+	try {
+		const double actualStartTime = isundef (startTime) ? my xmin : startTime;
+		const double actualEndTime = isundef (endTime) ? my xmax : endTime;
+		VOTCandidateSettings settings;
+		settings.burstThresholdDb = burstThresholdDb;
+		settings.pitchFloorHz = pitchFloorHz;
+		const AnalysisResult result = praat_LongSound_analyseVOT (me, actualStartTime, actualEndTime,
+			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, ID);
+		autoMelderString summary;
+		AnalysisResult_toInfoSummary (result, & summary);
+		Melder_information (summary.string);
+	} catch (const std::exception &error) {
+		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
+	}
+END_NO_NEW_DATA
+}
+
+FORM (WRITE_ONE__LongSound_VOT_TSV, U"VOT analysis", U"Write VOT analysis to file...") {
+	REAL_OR_UNDEFINED (startTime, U"Start time (s); undefined means LongSound start", U"undefined")
+	REAL_OR_UNDEFINED (endTime, U"End time (s); undefined means LongSound end", U"undefined")
+	REAL_OR_UNDEFINED (burstTime, U"Burst/release time (s); undefined for a candidate", U"undefined")
+	REAL_OR_UNDEFINED (voicingTime, U"Voicing onset time (s); undefined for a candidate", U"undefined")
+	REAL (burstThresholdDb, U"Minimum burst rise (dB)", U"6.0")
+	REAL (pitchFloorHz, U"Pitch floor (Hz)", U"75.0")
+	OUTFILE (resultFileName, U"Result TSV file", U"vot-analysis.tsv")
+	OK
+DO
+	FIND_ONE_WITH_IOBJECT (LongSound)
+	try {
+		const double actualStartTime = isundef (startTime) ? my xmin : startTime;
+		const double actualEndTime = isundef (endTime) ? my xmax : endTime;
+		VOTCandidateSettings settings;
+		settings.burstThresholdDb = burstThresholdDb;
+		settings.pitchFloorHz = pitchFloorHz;
+		praat_LongSound_writeVOTAnalysisToFile (me, actualStartTime, actualEndTime,
+			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, resultFileName, ID);
+	} catch (const std::exception &error) {
+		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
+	}
+END_NO_NEW_DATA
+}
 
 /***** LONGSOUND *****/
 
@@ -1160,10 +1365,39 @@ DO
 	MODIFY_EACH_END
 }
 
+static double s_soundPausedTime = 0.0;
+static Sound s_soundPausedPtr = nullptr;
+
 DIRECT (PLAY_EACH__Sound_play) {
-	FIND_ALL_LISTED (Sound, SoundList)
-		SoundList_play (list.get(), nullptr, nullptr);
-	END_NO_NEW_DATA
+	if (MelderAudio_isPlaying) {
+		integer samplesPlayed = MelderAudio_getSamplesPlayed ();
+		FIND_ALL_LISTED (Sound, SoundList)
+		if (list -> size >= 1) {
+			Sound snd = list -> at [1];
+			s_soundPausedPtr = snd;
+			s_soundPausedTime = snd -> x1 + (samplesPlayed - 1) * snd -> dx;
+			if (s_soundPausedTime < snd -> xmin) s_soundPausedTime = snd -> xmin;
+			if (s_soundPausedTime >= snd -> xmax) {
+				s_soundPausedTime = 0.0;
+				s_soundPausedPtr = nullptr;
+			}
+		}
+		MelderAudio_stopPlaying (MelderAudio_EXPLICIT);
+	} else {
+		FIND_ALL_LISTED (Sound, SoundList)
+		if (list -> size == 1 && s_soundPausedPtr == list -> at [1] && s_soundPausedTime > 0.0) {
+			Sound snd = list -> at [1];
+			double tResume = s_soundPausedTime;
+			s_soundPausedTime = 0.0;
+			s_soundPausedPtr = nullptr;
+			Sound_playPart (snd, tResume, snd -> xmax, nullptr, nullptr);
+		} else {
+			s_soundPausedTime = 0.0;
+			s_soundPausedPtr = nullptr;
+			SoundList_play (list.get(), nullptr, nullptr);
+		}
+	}
+END_NO_NEW_DATA
 }
 
 FORM (MODIFY_Sound_preemphasizeInplace, U"Sound: Pre-emphasize (in-place)", U"Sound: Pre-emphasize (in-place)...") {
@@ -2338,6 +2572,10 @@ void praat_Sound_init () {
 				HELP__AnnotationTutorial);
 		praat_addAction1 (classLongSound, 0, U"-- to text grid --", nullptr, 1, nullptr);
 		praat_addAction1 (classLongSound, 0, U"To TextGrid...", nullptr, 1, NEW_LongSound_to_TextGrid);
+	praat_addAction1 (classLongSound, 0, U"VOT -", nullptr, 0, nullptr);
+		praat_addAction1 (classLongSound, 0, U"VOT...", nullptr, 1, INFO_ONE__LongSound_VOT_INFO);
+		praat_addAction1 (classLongSound, 0, U"Write VOT analysis to file...", nullptr,
+				GuiMenu_DEPTH_1 | GuiMenu_HIDDEN, WRITE_ONE__LongSound_VOT_TSV);
 	praat_addAction1 (classLongSound, 0, U"Convert to Sound", nullptr, 0, nullptr);
 	praat_addAction1 (classLongSound, 0, U"Extract part...", nullptr, 0, NEW_LongSound_extractPart);
 	praat_addAction1 (classLongSound, 0, U"Concatenate?", nullptr, 0,
@@ -2538,6 +2776,10 @@ void praat_Sound_init () {
 				CONVERT_EACH_TO_ONE__Sound_to_TextTier);
 		praat_addAction1 (classSound, 0, U"To IntervalTier", nullptr, GuiMenu_DEPTH_1 | GuiMenu_HIDDEN,
 				CONVERT_EACH_TO_ONE__Sound_to_IntervalTier);
+	praat_addAction1 (classSound, 0, U"VOT -", nullptr, 0, nullptr);
+		praat_addAction1 (classSound, 0, U"VOT...", nullptr, 1, INFO_ONE__Sound_VOT_INFO);
+		praat_addAction1 (classSound, 0, U"Write VOT analysis to file...", nullptr,
+				GuiMenu_DEPTH_1 | GuiMenu_HIDDEN, WRITE_ONE__Sound_VOT_TSV);
 	praat_addAction1 (classSound, 0, U"Analyse periodicity -", nullptr, 0, nullptr);
 		praat_addAction1 (classSound, 0, U"How to choose a pitch analysis method", nullptr, 1,
 				HELP__How_to_choose_a_pitch_analysis_method);

@@ -21,6 +21,7 @@
 #include "ScriptEditor.h"
 #include "Graphics.h"
 #include "Function.h"
+#include "praat_translate.h"
 
 struct FunctionEditor_picture {
 	/* KEEP IN SYNC WITH PREFS. */
@@ -94,6 +95,11 @@ Thing_define (FunctionEditor, Editor) {
 	constexpr static double MARGIN = 107.0;
 	constexpr static double BOTTOM_MARGIN = 2.0;
 	constexpr static double TOP_MARGIN = 3.0;
+	/*
+		Vertical space that every function area reserves above itself for its legend
+		(see FunctionArea :: top_pxlt), in pixelettes.
+	*/
+	constexpr static double TOP_LEGEND_MARGIN = 23.0;
 	double dataLeft_pxlt () const { return our _functionViewerLeft + our MARGIN; }
 	double dataRight_pxlt () const { return our _functionViewerRight - our MARGIN; }
 	double dataBottom_pxlt () const { return our BOTTOM_MARGIN + our space * 3; }
@@ -108,11 +114,9 @@ Thing_define (FunctionEditor, Editor) {
 	}
 	constexpr static double SELECTION_VIEWER_MARGIN = 0.0;
 	void viewInnerSelectionViewerAsFractionByFraction () const {
-		Graphics_setViewport (our graphics.get(), our _selectionViewerLeft + our MARGIN, our _selectionViewerRight - our MARGIN,
-				our BOTTOM_MARGIN + our space * 3, our height_pxlt - (our TOP_MARGIN + our space));
 		Graphics_setViewport (our graphics.get(),
 			our _selectionViewerLeft + our SELECTION_VIEWER_MARGIN, our _selectionViewerRight - our SELECTION_VIEWER_MARGIN,
-			our SELECTION_VIEWER_MARGIN, our height_pxlt - our space - our SELECTION_VIEWER_MARGIN
+			our SELECTION_VIEWER_MARGIN, our height_pxlt - our space - 20.0
 		);
 		Graphics_setWindow (our graphics.get(), 0.0, 1.0, 0.0, 1.0);
 	}
@@ -135,14 +139,20 @@ Thing_define (FunctionEditor, Editor) {
 	GuiScrollBar scrollBar;
 	GuiCheckButton groupButton;
 	GuiObject bottomArea;
-	GuiLabel aiFrontendStatusLabel, aiVramStatusLabel;
-	GuiButton aiStartButton, aiStopButton, aiRunButton;
-	GuiRadioButton aiAutoAlignmentButton, aiMfaAlignmentButton, aiWav2vec2AlignmentButton;
+	GuiMenu aiFrontendMenu;
+	GuiMenuItem aiAlignmentAutoItem, aiAlignmentMfaItem, aiAlignmentWav2vec2Item;
+	GuiMenuItem aiModelStatusItem, aiFrontendStatusItem, aiVramStatusItem;
 	integer aiStatusTimer = 0;
-	bool aiVramIsLow = false;
 	bool group, enableUpdates;
 	int nrect;
 	struct { double left, right, bottom, top; } rect [8];
+	int hoveredPlayButton = -1;
+	int pressedPlayButton = -1;
+	double playButtonPressTime = 0.0;
+	bool hoveredToggleViewer = false;
+	int hoveredIpaRow = 0, hoveredIpaCol = 0;
+	int pressedIpaRow = 0, pressedIpaCol = 0;
+	double ipaPressTime = 0.0;
 	double marker [1 + 3], playCursor, startZoomHistory, endZoomHistory;
 	int numberOfMarkers;
 
@@ -194,12 +204,12 @@ Thing_define (FunctionEditor, Editor) {
 	virtual conststring32 v_format_domain () { return U"Time"; }
 	virtual const char *v_format_short () { return u8"%.3f"; }
 	virtual const char *v_format_long () { return u8"%f"; }
-	virtual conststring32 v_format_units_long () { return U"秒"; }
-	virtual conststring32 v_format_units_short () { return U"秒"; }
-	virtual const char *v_format_totalDuration () { return u8"总时长 %f 秒"; }
-	virtual const char *v_format_window () { return u8"可见部分 %f 秒"; }
-	virtual const char *v_format_selection () { return u8"%f (%.3f / 秒)"; }
-	virtual int v_fixedPrecision_long () { return 6; }
+	virtual conststring32 v_format_units_long () { return g_language_choice == 0 ? U"seconds" : U"秒"; }
+	virtual conststring32 v_format_units_short () { return g_language_choice == 0 ? U"s" : U"秒"; }
+	virtual const char *v_format_totalDuration () { return g_language_choice == 0 ? "Total duration %f seconds" : u8"总时长 %f 秒"; }
+	virtual const char *v_format_window () { return g_language_choice == 0 ? "Visible part %f seconds" : u8"可见部分 %f 秒"; }
+	virtual const char *v_format_selection () { return g_language_choice == 0 ? "%f (%.3f / s)" : u8"%f (%.3f / 秒)"; }
+	virtual int v_fixedPrecision_long () { return (int) classPref_timeDecimals(); }
 	virtual bool v_hasText () { return false; }
 	virtual void v_play (double /* startTime */, double /* endTime */) { }
 	virtual bool v_mouseInWideDataView (GuiDrawingArea_MouseEvent event, double x_world, double globalY_fraction);

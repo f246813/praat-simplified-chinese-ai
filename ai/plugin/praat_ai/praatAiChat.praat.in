@@ -1,0 +1,9 @@
+# 启动本地 AI 对话窗口（Python 前端）。
+#
+# 这个文件由 ai/tools/build_plugin.py --install 按当前机器生成：把下面两行里的
+# 命令行和项目目录换成本机的绝对路径。想改就改完照抄回这个模板，再重新安装。
+#
+# 项目目录：@PROJECT_DIRECTORY@
+
+chatCommand$ = @CHAT_COMMAND@
+runSystem: chatCommand$

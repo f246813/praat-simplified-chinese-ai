@@ -21,11 +21,9 @@
 #include "EditorM.h"
 #include "GuiP.h"
 #include "FunctionArea.h"
+#include <algorithm>
+#include <exception>
 #include "PraatAiControl.h"
-#if motif
-	#include <commctrl.h>
-#endif
-#include <string>
 
 Thing_implement_pureVirtual (FunctionEditor, Editor, 0);
 
@@ -43,188 +41,214 @@ namespace {
 	constexpr double SCROLL_INCREMENT_FRACTION = 20.0;
 	constexpr int TEXT_HEIGHT = 50;
 	constexpr int BUTTON_X = 3;
-	constexpr int BUTTON_WIDTH = 40;
+	constexpr int BUTTON_WIDTH = 58;
 	constexpr int BUTTON_SPACING = 8;
 
 	constexpr integer THE_MAXIMUM_GROUP_SIZE = 100;
 	integer theGroupSize = 0;
 	FunctionEditor theGroupMembers [1 + THE_MAXIMUM_GROUP_SIZE];
 
-	#if motif
-	constexpr UINT_PTR AI_TOOLBAR_PARENT_SUBCLASS_ID = 0x0A17;
-
-	LRESULT CALLBACK aiToolbarParentSubclassProc (
-		HWND window,
-		UINT message,
-		WPARAM wParam,
-		LPARAM lParam,
-		UINT_PTR /* subclassId */,
-		DWORD_PTR refData
-	) {
-		FunctionEditor me = reinterpret_cast <FunctionEditor> (refData);
-		if (
-			message == WM_CTLCOLORSTATIC &&
-			me &&
-			me -> aiVramIsLow &&
-			me -> aiVramStatusLabel &&
-			reinterpret_cast <HWND> (lParam) == me -> aiVramStatusLabel -> d_widget -> window
-		) {
-			SetTextColor (reinterpret_cast <HDC> (wParam), RGB (220, 0, 0));
-			SetBkMode (reinterpret_cast <HDC> (wParam), TRANSPARENT);
-			return reinterpret_cast <LRESULT> (GetSysColorBrush (COLOR_WINDOW));
-		}
-		return DefSubclassProc (window, message, wParam, lParam);
-	}
-
-	void updateAiToolbarLabels (FunctionEditor me) {
-		if (! me -> aiFrontendStatusLabel || ! me -> aiVramStatusLabel)
-			return;
-		autoMelderString frontendLine;
-		MelderString_append (
-			& frontendLine,
-			praat_translate (U"Frontend: "),
-			PraatAiControl_getFrontendModel(),
-			U" [",
-			praat_translate (
-				str32equ (PraatAiControl_getFrontendStatus(), U"running") ?
-					U"running" :
-					U"stopped"
-			),
-			U"]"
-		);
-		GuiLabel_setText (me -> aiFrontendStatusLabel, frontendLine. string);
-
-		bool vramIsLow = false;
-		conststring32 vramText = PraatAiControl_getVramText (& vramIsLow);
-		me -> aiVramIsLow = vramIsLow;
-		GuiLabel_setText (me -> aiVramStatusLabel, vramText);
-		InvalidateRect (me -> aiVramStatusLabel -> d_widget -> window, nullptr, TRUE);
-	}
-	#else
-	void updateAiToolbarLabels (FunctionEditor /* me */) { }
-	#endif
-
+	const MelderColour modernMarkerRed  = MelderColour (0.88, 0.12, 0.28); // #E11D48 Vibrant Rose Crimson
+	const MelderColour modernMarkerBlue = MelderColour (0.11, 0.38, 0.88); // #1D4ED8 Vibrant Cobalt Blue
+	const MelderColour modernMarkerCyan = MelderColour (0.01, 0.52, 0.78); // #0284C7 Clean Sky Cyan
+	const MelderColour modernGridCyan   = MelderColour (0.75, 0.83, 0.90); // #CBD5E1 Light subtle grid
+#if motif
 	void updateAiToolbarStatus (FunctionEditor me) {
 		PraatAiControl_refreshStatus();
-		updateAiToolbarLabels (me);
+		autoMelderString modelLine, statusLine;
+		MelderString_append (
+			& modelLine,
+			praat_translate (U"Model: "),
+			praat_translate (PraatAiControl_getFrontendModel())
+		);
+		MelderString_append (
+			& statusLine,
+			praat_translate (U"Status: "),
+			praat_translate (PraatAiControl_getFrontendStatus())
+		);
+		if (me -> aiModelStatusItem)
+			GuiMenuItem_setText (me -> aiModelStatusItem, modelLine. string);
+		if (me -> aiFrontendStatusItem)
+			GuiMenuItem_setText (me -> aiFrontendStatusItem, statusLine. string);
+
+		bool vramIsLow = false;
+		autoMelderString vramLine;
+		conststring32 vramText = PraatAiControl_getVramText (& vramIsLow);
+		if (vramIsLow)
+			MelderString_append (& vramLine, praat_translate (U"low VRAM: "));
+		MelderString_append (& vramLine, vramText);
+		if (me -> aiVramStatusItem)
+			GuiMenuItem_setText (me -> aiVramStatusItem, vramLine. string);
+
 	}
 
-	void gui_radiobutton_cb_aiAlignment (FunctionEditor me, GuiRadioButtonEvent event) {
-		const char32 *mode = U"auto";
-		if (event -> toggle == me -> aiMfaAlignmentButton)
-			mode = U"mfa";
-		else if (event -> toggle == me -> aiWav2vec2AlignmentButton)
-			mode = U"wav2vec2";
-		PraatAiControl_setAlignmentMode (mode);
-		updateAiToolbarLabels (me);
+	static uint32 aiRadioFlags (uint32 baseFlags, bool selected) {
+		return baseFlags | (selected ? GuiMenu_TOGGLE_ON : 0);
 	}
 
-	void gui_button_cb_aiStart (FunctionEditor me, GuiButtonEvent /* event */) {
+	/*
+		AI 菜单回调是从窗口过程里进来的：只要有一个非 MelderError 的 C++ 异常逃出去
+		（典型是 AI 前端那条链上的 std::filesystem::filesystem_error），libc++abi 就会
+		调 std::terminate → abort()，Praat 直接闪退，用户什么都看不到。
+		2026-09-20 实测：选中名为「あなた」的对象时点「启动前端」就是这样死的
+		（Praat.exe.18460.dmp）。所以这里给每个菜单动作兜底：标准库异常也弹对话框。
+	*/
+	template <typename Action>
+	static void runAiMenuAction (conststring32 actionName, Action &&action) {
 		try {
+			action ();
+		} catch (MelderError) {
+			Melder_flushError ();
+		} catch (const std::exception &error) {
+			Melder_flushError (
+				praat_translate (U"AI 前端操作失败"), U"（", actionName, U"）：",
+				Melder_peek8to32_u (error. what())
+			);
+		} catch (...) {
+			Melder_flushError (
+				praat_translate (U"AI 前端操作失败"), U"（", actionName, U"）：未知的内部错误。"
+			);
+		}
+	}
+
+	static void aiAlignmentAutoCallback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"Auto alignment"), [me] {
+			PraatAiControl_setAlignmentMode (U"auto");
+			updateAiToolbarStatus (me);
+		});
+	}
+
+	static void aiAlignmentMfaCallback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"MFA alignment"), [me] {
+			PraatAiControl_setAlignmentMode (U"mfa");
+			updateAiToolbarStatus (me);
+		});
+	}
+
+	static void aiAlignmentWav2vec2Callback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"wav2vec2 alignment"), [me] {
+			PraatAiControl_setAlignmentMode (U"wav2vec2");
+			updateAiToolbarStatus (me);
+		});
+	}
+
+	static void aiFrontendStartCallback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"Start frontend"), [me] {
 			PraatAiControl_startFrontend();
-			updateAiToolbarLabels (me);
-		} catch (MelderError) {
-			Melder_flushError ();
-		}
+			updateAiToolbarStatus (me);
+		});
 	}
 
-	void gui_button_cb_aiStop (FunctionEditor me, GuiButtonEvent /* event */) {
-		try {
+	static void aiFrontendStopCallback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"Stop frontend"), [me] {
 			PraatAiControl_stopFrontend();
-			updateAiToolbarLabels (me);
-		} catch (MelderError) {
-			Melder_flushError ();
-		}
+			updateAiToolbarStatus (me);
+		});
 	}
 
-	void gui_button_cb_aiRun (FunctionEditor me, GuiButtonEvent /* event */) {
-		try {
+	static void aiFrontendAddModelCallback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"Add model path"), [me] {
+			PraatAiControl_chooseFrontendModel();
+			updateAiToolbarStatus (me);
+		});
+	}
+
+	static void aiApiSettingsCallback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"API settings"), [me] {
+			PraatAiControl_configureApi();
+			updateAiToolbarStatus (me);
+		});
+	}
+
+	static void aiRunCallback (Thing boss, GuiMenuItemEvent /* event */) {
+		FunctionEditor me = reinterpret_cast <FunctionEditor> (boss);
+		runAiMenuAction (praat_translate (U"Run AI tutor"), [me] {
 			PraatAiControl_runAnalysis ();
-			PraatAiControl_refreshStatus();
-			updateAiToolbarLabels (me);
-		} catch (MelderError) {
-			Melder_flushError ();
-		}
+			updateAiToolbarStatus (me);
+		});
 	}
 
-	#if motif
 	void aiStatusTimerCallback (XtPointer closure, XtIntervalId * /* id */) {
 		FunctionEditor me = static_cast <FunctionEditor> (closure);
-		if (! me || ! me -> aiVramStatusLabel)
+		if (! me || ! me -> aiFrontendMenu)
 			return;
-		PraatAiControl_refreshStatus();
-		updateAiToolbarLabels (me);
+		updateAiToolbarStatus (me);
 		me -> aiStatusTimer = XtAddTimeOut (2000, aiStatusTimerCallback, me);
 	}
-	#endif
 
-	void createAiToolbar (FunctionEditor me, int top, int bottom) {
-		GuiRadioGroup_begin ();
-		me -> aiAutoAlignmentButton = GuiRadioButton_createShown (
-			me -> windowForm, 8, 90, top, bottom,
-			U"自动", gui_radiobutton_cb_aiAlignment, me,
-			str32equ (PraatAiControl_getAlignmentMode(), U"auto") ? GuiRadioButton_SET : 0
+	void createAiMenus (FunctionEditor me) {
+		GuiWindow window = static_cast <GuiWindow> (me -> windowForm -> d_shell);
+		GuiMenu alignmentMenu = GuiMenu_createInWindow (
+			window, U"Alignment", 0
 		);
-		me -> aiMfaAlignmentButton = GuiRadioButton_createShown (
-			me -> windowForm, 94, 152, top, bottom,
-			U"MFA", gui_radiobutton_cb_aiAlignment, me,
-			str32equ (PraatAiControl_getAlignmentMode(), U"mfa") ? GuiRadioButton_SET : 0
+		me -> aiAlignmentAutoItem = GuiMenu_addItem (
+			alignmentMenu, U"Auto",
+			aiRadioFlags (GuiMenu_RADIO_FIRST, str32equ (PraatAiControl_getAlignmentMode(), U"auto")),
+			aiAlignmentAutoCallback, me
 		);
-		me -> aiWav2vec2AlignmentButton = GuiRadioButton_createShown (
-			me -> windowForm, 156, 250, top, bottom,
-			U"wav2vec2", gui_radiobutton_cb_aiAlignment, me,
-			str32equ (PraatAiControl_getAlignmentMode(), U"wav2vec2") ? GuiRadioButton_SET : 0
+		me -> aiAlignmentMfaItem = GuiMenu_addItem (
+			alignmentMenu, U"MFA",
+			aiRadioFlags (GuiMenu_RADIO_NEXT, str32equ (PraatAiControl_getAlignmentMode(), U"mfa")),
+			aiAlignmentMfaCallback, me
 		);
-		GuiRadioGroup_end ();
-		me -> aiStartButton = GuiButton_createShown (
-			me -> windowForm, 262, 338, top, bottom,
-			U"Start frontend", gui_button_cb_aiStart, me, 0
+		me -> aiAlignmentWav2vec2Item = GuiMenu_addItem (
+			alignmentMenu, U"wav2vec2",
+			aiRadioFlags (GuiMenu_RADIO_NEXT, str32equ (PraatAiControl_getAlignmentMode(), U"wav2vec2")),
+			aiAlignmentWav2vec2Callback, me
 		);
-		me -> aiStopButton = GuiButton_createShown (
-			me -> windowForm, 342, 414, top, bottom,
-			U"Stop frontend", gui_button_cb_aiStop, me, 0
+
+		me -> aiFrontendMenu = GuiMenu_createInWindow (
+			window, U"Frontend", 0
 		);
-		me -> aiRunButton = GuiButton_createShown (
-			me -> windowForm, 418, 510, top, bottom,
-			U"Run AI tutor", gui_button_cb_aiRun, me, 0
+		me -> aiModelStatusItem = GuiMenu_addItem (
+			me -> aiFrontendMenu, U"Model: unavailable", GuiMenu_INSENSITIVE, nullptr, nullptr
 		);
-		const int middle = (top + bottom) / 2;
-		me -> aiFrontendStatusLabel = GuiLabel_createShown (
-			me -> windowForm, -350, -8, top, middle,
-			U"", GuiLabel_RIGHT
+		me -> aiFrontendStatusItem = GuiMenu_addItem (
+			me -> aiFrontendMenu, U"Status: stopped", GuiMenu_INSENSITIVE, nullptr, nullptr
 		);
-		me -> aiVramStatusLabel = GuiLabel_createShown (
-			me -> windowForm, -350, -8, middle, bottom,
-			U"", GuiLabel_RIGHT
+		me -> aiVramStatusItem = GuiMenu_addItem (
+			me -> aiFrontendMenu, U"VRAM: unavailable", GuiMenu_INSENSITIVE, nullptr, nullptr
 		);
-		#if motif
-			SetWindowSubclass (
-				me -> windowForm -> d_widget -> window,
-				aiToolbarParentSubclassProc,
-				AI_TOOLBAR_PARENT_SUBCLASS_ID,
-				reinterpret_cast <DWORD_PTR> (me)
-			);
-		#endif
+		GuiMenu_addSeparator (me -> aiFrontendMenu);
+		GuiMenu_addItem (
+			me -> aiFrontendMenu, U"Start frontend", 0, aiFrontendStartCallback, me
+		);
+		GuiMenu_addItem (
+			me -> aiFrontendMenu, U"Stop frontend", 0, aiFrontendStopCallback, me
+		);
+		GuiMenu_addSeparator (me -> aiFrontendMenu);
+		GuiMenu_addItem (
+			me -> aiFrontendMenu, U"Add model path...", 0, aiFrontendAddModelCallback, me
+		);
+		GuiMenu_addItem (
+			me -> aiFrontendMenu, U"API settings...", 0, aiApiSettingsCallback, me
+		);
+		GuiMenu_addSeparator (me -> aiFrontendMenu);
+		GuiMenu_addItem (
+			me -> aiFrontendMenu, U"Run AI tutor", 0, aiRunCallback, me
+		);
 		updateAiToolbarStatus (me);
-		#if motif
-			me -> aiStatusTimer = XtAddTimeOut (2000, aiStatusTimerCallback, me);
-		#endif
+		me -> aiStatusTimer = XtAddTimeOut (2000, aiStatusTimerCallback, me);
 	}
 
 	void destroyAiToolbar (FunctionEditor me) {
-		#if motif
-			if (me -> windowForm && me -> windowForm -> d_widget)
-				RemoveWindowSubclass (
-					me -> windowForm -> d_widget -> window,
-					aiToolbarParentSubclassProc,
-					AI_TOOLBAR_PARENT_SUBCLASS_ID
-				);
-			if (me -> aiStatusTimer) {
-				XtRemoveTimeOut (me -> aiStatusTimer);
-				me -> aiStatusTimer = 0;
-			}
-		#endif
+		if (me -> aiStatusTimer) {
+			XtRemoveTimeOut (me -> aiStatusTimer);
+			me -> aiStatusTimer = 0;
+		}
 	}
+	#else
+	void updateAiToolbarStatus (FunctionEditor /* me */) { }
+	void createAiMenus (FunctionEditor /* me */) { }
+	void destroyAiToolbar (FunctionEditor /* me */) { }
+	#endif
 }
 
 static bool group_equalDomain (double tmin, double tmax) {
@@ -270,6 +294,27 @@ static void updateGroup (FunctionEditor me, const bool windowMarkersChanged, con
 			FunctionEditor_redraw (thee);   // BUG: does this do *two* updates if thou containst the same data as me?
 		}
 	}
+}
+
+static void getToggleButtonBounds (FunctionEditor me, double *out_left, double *out_right, double *out_bottom, double *out_top) {
+	my viewAllAsPixelettes ();
+	int w = GuiControl_getWidth (my drawingArea);
+	if (w <= 0)
+		w = 800;
+	// 24x24 px true square button, inset 10px from right and 8px from top
+	int dcRight  = w - 10;
+	int dcLeft   = dcRight - 24;
+	int dcTop    = 8;
+	int dcBottom = dcTop + 24;
+
+	double x1, y1, x2, y2;
+	Graphics_DCtoWC (my graphics.get(), dcLeft, dcTop, & x1, & y1);
+	Graphics_DCtoWC (my graphics.get(), dcRight, dcBottom, & x2, & y2);
+
+	*out_left   = std::min (x1, x2);
+	*out_right  = std::max (x1, x2);
+	*out_bottom = std::min (y1, y2);
+	*out_top    = std::max (y1, y2);
 }
 
 static void drawBackgroundAndData (FunctionEditor me) {
@@ -399,6 +444,18 @@ static void drawBackgroundAndData (FunctionEditor me) {
 	my viewAllAsPixelettes ();
 	Graphics_setColour (my graphics.get(), DataGuiColour_WINDOW_BACKGROUND);
 	Graphics_fillRectangle (my graphics.get(), my _functionViewerLeft, my _selectionViewerRight, my BOTTOM_MARGIN, my height_pxlt);
+	/*
+		The function areas leave a strip of the canvas unpainted above themselves:
+		their own legend margin (FunctionArea :: top_pxlt) plus, at the very top,
+		the TOP_MARGIN + space that dataTop_pxlt() keeps free. That strip therefore
+		showed the window background colour as a light band above the topmost pane
+		and between the panes (2026-09-22, "语图上方的白条"). Paint the data column
+		with the data-area colour so the panes look flush; the frame around them
+		(left/right margins, bottom button row) keeps the window colour.
+	*/
+	Graphics_setColour (my graphics.get(), DataGuiColour_AREA_BACKGROUND);
+	Graphics_fillRectangle (my graphics.get(), my dataLeft_pxlt(), my dataRight_pxlt(),
+			my dataBottom_pxlt(), my height_pxlt);
 	Graphics_setColour (my graphics.get(), Melder_BLACK);
 
 	/*
@@ -410,25 +467,40 @@ static void drawBackgroundAndData (FunctionEditor me) {
 	Graphics_setTextAlignment (my graphics.get(), Graphics_CENTRE, Graphics_HALF);
 	for (integer i = 0; i < 8; i ++) {
 		const double left = my rect [i]. left, right = my rect [i]. right;
-		if (left < right)
-			Graphics_button (my graphics.get(), left, right, my rect [i]. bottom, my rect [i]. top);
+		if (left < right) {
+			const int btnState = ( (int) i == my pressedPlayButton ? 2 : ( (int) i == my hoveredPlayButton ? 1 : 0 ) );
+			Graphics_buttonEx (my graphics.get(), left, right, my rect [i]. bottom, my rect [i]. top, btnState);
+		}
 	}
 
 	/*
-		Opening triangle (sometimes over button).
+		Opening chevron button (sleek modern toggle).
 	*/
 	if (my v_hasSelectionViewer() && ! my instancePref_showSelectionViewer()) {
-		const bool weHaveToDrawOverSelectionRectangleWithText = ( selectionIsNonempty && my endSelection == my tmax && my endWindow != my tmax );
+		my viewAllAsPixelettes ();
+		double left, right, bottom, top;
+		getToggleButtonBounds (me, & left, & right, & bottom, & top);
 		Graphics_setLineWidth (my graphics.get(), 1.0);
-		const double left = my _functionViewerRight - my space + 9.0, right = my _functionViewerRight - 3.0;
-		const double bottom = my height_pxlt - my space - my TOP_MARGIN + 3.0, top = my height_pxlt - my TOP_MARGIN - 3.0;
-		Graphics_setColour (my graphics.get(), Melder_PINK);
-		const double x [] = { left, right, left }, y [] = { bottom, 0.5 * (bottom + top), top };
-		Graphics_fillArea (my graphics.get(), 3, x, y);
-		if (! weHaveToDrawOverSelectionRectangleWithText) {
-			Graphics_setColour (my graphics.get(), Melder_GREY);
-			Graphics_polyline_closed (my graphics.get(), 3, x, y);
+		if (my hoveredToggleViewer) {
+			Graphics_setColour (my graphics.get(), MelderColour (0.937, 0.965, 1.0));   // #EFF6FF
+			Graphics_fillRoundedRectangle (my graphics.get(), left, right, bottom, top, 4.0);
+			Graphics_setColour (my graphics.get(), MelderColour (0.576, 0.773, 0.992)); // #93C5FD
+			Graphics_roundedRectangle (my graphics.get(), left, right, bottom, top, 4.0);
+			Graphics_setColour (my graphics.get(), MelderColour (0.145, 0.388, 0.922)); // #2563EB
+		} else {
+			Graphics_setColour (my graphics.get(), MelderColour (0.973, 0.980, 0.988)); // #F8FAFC
+			Graphics_fillRoundedRectangle (my graphics.get(), left, right, bottom, top, 4.0);
+			Graphics_setColour (my graphics.get(), MelderColour (0.796, 0.835, 0.882)); // #CBD5E1
+			Graphics_roundedRectangle (my graphics.get(), left, right, bottom, top, 4.0);
+			Graphics_setColour (my graphics.get(), MelderColour (0.392, 0.455, 0.545)); // #64748B
 		}
+		// Modern sleek chevron pointing left '<'
+		const double midX = 0.5 * (left + right);
+		const double midY = 0.5 * (bottom + top);
+		Graphics_setLineWidth (my graphics.get(), 1.6);
+		Graphics_line (my graphics.get(), midX + 3.0, midY + 4.5, midX - 3.0, midY);
+		Graphics_line (my graphics.get(), midX - 3.0, midY, midX + 3.0, midY - 4.5);
+		Graphics_setLineWidth (my graphics.get(), 1.0);
 		Graphics_setColour (my graphics.get(), Melder_BLACK);
 	}
 
@@ -444,6 +516,15 @@ static void drawBackgroundAndData (FunctionEditor me) {
 		const double left = my rect [i]. left, right = my rect [i]. right;
 		const double bottom = my rect [i]. bottom, top = my rect [i]. top;
 		if (left < right) {
+			const int btnState = ( (int) i == my pressedPlayButton ? 2 : ( (int) i == my hoveredPlayButton ? 1 : 0 ) );
+			const double vCorrection = verticalCorrection + (btnState == 2 ? 1.0 : 0.0);
+			if (btnState == 1)
+				Graphics_setColour (my graphics.get(), DataGuiColour_EDITABLE);
+			else if (btnState == 2)
+				Graphics_setColour (my graphics.get(), MelderColour (0.0, 0.35, 0.65));
+			else
+				Graphics_setColour (my graphics.get(), Melder_BLACK);
+
 			conststring8 format = my v_format_long ();
 			double value = undefined, inverseValue = 0.0;
 			switch (i) {
@@ -456,14 +537,19 @@ static void drawBackgroundAndData (FunctionEditor me) {
 					/*
 						Window domain text.
 					*/
-					Graphics_setColour (my graphics.get(), Melder_BLUE);
+					Graphics_setColour (my graphics.get(), btnState == 1 ? DataGuiColour_EDITABLE : (btnState == 2 ? MelderColour (0.0, 0.35, 0.65) : DataGuiColour_EDITABLE));
 					Graphics_setTextAlignment (my graphics.get(), Graphics_LEFT, Graphics_HALF);
-					Graphics_text (my graphics.get(), left, 0.5 * (bottom + top) - verticalCorrection,
+					Graphics_text (my graphics.get(), left, 0.5 * (bottom + top) - vCorrection,
 							Melder_fixed (my startWindow, my v_fixedPrecision_long ()));
 					Graphics_setTextAlignment (my graphics.get(), Graphics_RIGHT, Graphics_HALF);
-					Graphics_text (my graphics.get(), right, 0.5 * (bottom + top) - verticalCorrection,
+					Graphics_text (my graphics.get(), right, 0.5 * (bottom + top) - vCorrection,
 							Melder_fixed (my endWindow, my v_fixedPrecision_long ()));
-					Graphics_setColour (my graphics.get(), Melder_BLACK);
+					if (btnState == 1)
+						Graphics_setColour (my graphics.get(), DataGuiColour_EDITABLE);
+					else if (btnState == 2)
+						Graphics_setColour (my graphics.get(), MelderColour (0.0, 0.35, 0.65));
+					else
+						Graphics_setColour (my graphics.get(), Melder_BLACK);
 					Graphics_setTextAlignment (my graphics.get(), Graphics_CENTRE, Graphics_HALF);
 				} break; case 2: {
 					value = my startWindow - my tmin;
@@ -481,26 +567,38 @@ static void drawBackgroundAndData (FunctionEditor me) {
 					inverseValue = 1.0 / value;
 				}
 			}
+			const int prec = my v_fixedPrecision_long ();
+			char dynFormat [128];
+			const char *pPctF = strstr (format, "%f");
+			if (pPctF) {
+				int prefixLen = (int) (pPctF - format);
+				snprintf (dynFormat, sizeof (dynFormat), "%.*s%%.%df%s", prefixLen, format, prec, pPctF + 2);
+			} else {
+				strncpy (dynFormat, format, sizeof (dynFormat) - 1);
+				dynFormat [sizeof (dynFormat) - 1] = '\0';
+			}
 			char text8 [100];
-			snprintf (text8, 100, format, value, inverseValue);
+			snprintf (text8, 100, dynFormat, value, inverseValue);
 			autostring32 text = Melder_8to32_e (text8);
 			if (Graphics_textWidth (my graphics.get(), text.get()) < right - left) {
-				Graphics_text (my graphics.get(), 0.5 * (left + right), 0.5 * (bottom + top) - verticalCorrection, text.get());
+				Graphics_text (my graphics.get(), 0.5 * (left + right), 0.5 * (bottom + top) - vCorrection, text.get());
 			} else if (format == my v_format_long()) {
 				snprintf (text8, 100, my v_format_short(), value);
 				text = Melder_8to32_e (text8);
 				if (Graphics_textWidth (my graphics.get(), text.get()) < right - left)
-					Graphics_text (my graphics.get(), 0.5 * (left + right), 0.5 * (bottom + top) - verticalCorrection, text.get());
+					Graphics_text (my graphics.get(), 0.5 * (left + right), 0.5 * (bottom + top) - vCorrection, text.get());
 			} else {
-				snprintf (text8, 100, my v_format_long(), value);
+				char fallbackFmt [64];
+				snprintf (fallbackFmt, sizeof (fallbackFmt), "%%.%df", prec);
+				snprintf (text8, 100, fallbackFmt, value);
 				text = Melder_8to32_e (text8);
 				if (Graphics_textWidth (my graphics.get(), text.get()) < right - left) {
-					Graphics_text (my graphics.get(), 0.5 * (left + right), 0.5 * (bottom + top) - verticalCorrection, text.get());
+					Graphics_text (my graphics.get(), 0.5 * (left + right), 0.5 * (bottom + top) - vCorrection, text.get());
 				} else {
 					snprintf (text8, 100, my v_format_short(), my endSelection - my startSelection);
 					text = Melder_8to32_e (text8);
 					if (Graphics_textWidth (my graphics.get(), text.get()) < right - left)
-						Graphics_text (my graphics.get(), 0.5 * (left + right), 0.5 * (bottom + top) - verticalCorrection, text.get());
+						Graphics_text (my graphics.get(), 0.5 * (left + right), 0.5 * (bottom + top) - vCorrection, text.get());
 				}
 			}
 		}
@@ -511,7 +609,7 @@ static void drawBackgroundAndData (FunctionEditor me) {
 	/*
 		Red marker text.
 	*/
-	Graphics_setColour (my graphics.get(), Melder_RED);
+	Graphics_setColour (my graphics.get(), modernMarkerRed);
 	if (cursorIsVisible) {
 		Graphics_setTextAlignment (my graphics.get(), Graphics_CENTRE, Graphics_BOTTOM);
 		Graphics_text (my graphics.get(), my startSelection, my height_pxlt - (my TOP_MARGIN + my space*0.9) - verticalCorrection * 7,
@@ -541,7 +639,7 @@ static void drawBackgroundAndData (FunctionEditor me) {
 		Red dotted marker lines.
 	*/
 	my viewDataAsWorldByFraction ();
-	Graphics_setColour (my graphics.get(), Melder_RED);
+	Graphics_setColour (my graphics.get(), modernMarkerRed);
 	Graphics_setLineType (my graphics.get(), Graphics_DOTTED);
 	if (cursorIsVisible)
 		Graphics_line (my graphics.get(), my startSelection, 0.0, my startSelection, 1.0);
@@ -974,6 +1072,18 @@ static void menu_cb_zoomAndScrollSettings (FunctionEditor me, EDITOR_ARGS) {
 		FunctionEditor_redraw (me);
 	EDITOR_END
 }
+static void menu_cb_timeDecimals (FunctionEditor me, EDITOR_ARGS) {
+	EDITOR_FORM (U"Time display precision", nullptr)
+		NATURAL (timeDecimals, U"Time display decimals (1-10)", my default_timeDecimals())
+	EDITOR_OK
+		SET_INTEGER (timeDecimals, my classPref_timeDecimals())
+	EDITOR_DO
+		Melder_require (timeDecimals >= 1 && timeDecimals <= 10,
+			U"Time display decimals must be between 1 and 10.");
+		my setClassPref_timeDecimals (timeDecimals);
+		FunctionEditor_redraw (me);
+	EDITOR_END
+}
 static void menu_cb_zoom (FunctionEditor me, EDITOR_ARGS) {
 	EDITOR_FORM (U"Zoom", nullptr)
 		REAL (from, Melder_cat (U"From (", my v_format_units_short(), U")"), U"0.0")
@@ -1329,6 +1439,7 @@ void structFunctionEditor :: v_createMenus () {
 
 	EditorMenu_addCommand (domainMenu, U"- Set visible part:", 0, nullptr);
 	EditorMenu_addCommand (domainMenu, U"Zoom and scroll settings...", 1, menu_cb_zoomAndScrollSettings);
+	EditorMenu_addCommand (domainMenu, U"Time display precision... || Time decimals...", 1, menu_cb_timeDecimals);
 	EditorMenu_addCommand (domainMenu, U"Zoom...", 1, menu_cb_zoom);
 	EditorMenu_addCommand (domainMenu, U"Show all", 'A' | GuiMenu_DEPTH_1, menu_cb_showAll);
 	EditorMenu_addCommand (domainMenu, U"Zoom in", 'I' | GuiMenu_DEPTH_1, menu_cb_zoomIn);
@@ -1390,6 +1501,8 @@ void structFunctionEditor :: v_createMenus () {
 		if (area)
 			area -> v_createMenus ();
 	}
+	if (our v_hasAiToolbar())
+		createAiMenus (this);
 }
 
 void structFunctionEditor :: v_updateMenuItems () {
@@ -1480,19 +1593,6 @@ static void gui_drawingarea_cb_expose (FunctionEditor me, GuiDrawingArea_ExposeE
 	*/
 	if (my instancePref_showSelectionViewer()) {
 		/*
-			Draw closing box.
-		*/
-		my viewAllAsPixelettes ();
-		Graphics_setLineWidth (my graphics.get(), 1.0);
-		const double left = my width_pxlt - my space + 9.0, right = my width_pxlt - 3.0;
-		const double bottom = my height_pxlt - my space + 5.0, top = my height_pxlt - 5.0;
-		Graphics_setColour (my graphics.get(), Melder_PINK);
-		Graphics_fillRectangle (my graphics.get(), left, right, bottom, top);
-		Graphics_setColour (my graphics.get(), Melder_GREY);
-		Graphics_line (my graphics.get(), left + 2.0, bottom + 2.0, right - 2.0, top - 2.0);
-		Graphics_line (my graphics.get(), left + 2.0, top - 2.0, right - 2.0, bottom + 2.0);
-		Graphics_setColour (my graphics.get(), Melder_BLACK);
-		/*
 			Draw content.
 		*/
 		my viewInnerSelectionViewerAsFractionByFraction ();
@@ -1500,6 +1600,35 @@ static void gui_drawingarea_cb_expose (FunctionEditor me, GuiDrawingArea_ExposeE
 			my v_drawRealTimeSelectionViewer (my playCursor);
 		else
 			my v_drawSelectionViewer ();
+
+		/*
+			Draw closing box (sleek modern close button).
+		*/
+		my viewAllAsPixelettes ();
+		double left, right, bottom, top;
+		getToggleButtonBounds (me, & left, & right, & bottom, & top);
+		Graphics_setLineWidth (my graphics.get(), 1.0);
+		if (my hoveredToggleViewer) {
+			Graphics_setColour (my graphics.get(), MelderColour (0.996, 0.886, 0.886)); // #FEE2E2
+			Graphics_fillRoundedRectangle (my graphics.get(), left, right, bottom, top, 4.0);
+			Graphics_setColour (my graphics.get(), MelderColour (0.988, 0.647, 0.647)); // #FCA5A5
+			Graphics_roundedRectangle (my graphics.get(), left, right, bottom, top, 4.0);
+			Graphics_setColour (my graphics.get(), MelderColour (0.863, 0.149, 0.149)); // #DC2626
+		} else {
+			Graphics_setColour (my graphics.get(), MelderColour (0.973, 0.980, 0.988)); // #F8FAFC
+			Graphics_fillRoundedRectangle (my graphics.get(), left, right, bottom, top, 4.0);
+			Graphics_setColour (my graphics.get(), MelderColour (0.796, 0.835, 0.882)); // #CBD5E1
+			Graphics_roundedRectangle (my graphics.get(), left, right, bottom, top, 4.0);
+			Graphics_setColour (my graphics.get(), MelderColour (0.392, 0.455, 0.545)); // #64748B
+		}
+		const double midX = 0.5 * (left + right);
+		const double midY = 0.5 * (bottom + top);
+		const double halfSize = 4.0;
+		Graphics_setLineWidth (my graphics.get(), 1.6);
+		Graphics_line (my graphics.get(), midX - halfSize, midY - halfSize, midX + halfSize, midY + halfSize);
+		Graphics_line (my graphics.get(), midX - halfSize, midY + halfSize, midX + halfSize, midY - halfSize);
+		Graphics_setLineWidth (my graphics.get(), 1.0);
+		Graphics_setColour (my graphics.get(), Melder_BLACK);
 	}
 
 	/*
@@ -1604,16 +1733,108 @@ static void gui_drawingarea_cb_mouse (FunctionEditor me, GuiDrawingArea_MouseEve
 	my viewAllAsPixelettes ();
 	double x_pxlt, y_pxlt;
 	Graphics_DCtoWC (my graphics.get(), event -> x, event -> y, & x_pxlt, & y_pxlt);
-	if (event -> isClick()) {
-		if (my v_hasSelectionViewer() || my instancePref_showSelectionViewer()) {
-			const double left = my width_pxlt - my space + 9.0, right = my width_pxlt - 3.0;
-			const double bottom = my height_pxlt - my space + 5.0, top = my height_pxlt - 5.0;
-			if (x_pxlt > left && x_pxlt < right && y_pxlt > bottom && y_pxlt < top) {
-				my setInstancePref_showSelectionViewer (! my instancePref_showSelectionViewer());   // toggle
-				my updateGeometry (GuiControl_getWidth (my drawingArea), GuiControl_getHeight (my drawingArea));
-				FunctionEditor_redraw (me);
-				return;
+
+	// Determine toggle button bounds
+	double toggleLeft, toggleRight, toggleBottom, toggleTop;
+	getToggleButtonBounds (me, & toggleLeft, & toggleRight, & toggleBottom, & toggleTop);
+	bool overToggle = (my v_hasSelectionViewer() || my instancePref_showSelectionViewer()) &&
+	                  (x_pxlt >= toggleLeft && x_pxlt <= toggleRight && y_pxlt >= toggleBottom && y_pxlt <= toggleTop);
+
+	if (event -> isMove()) {
+		int newHoveredPlay = -1;
+		if (event -> x >= 0 && event -> y >= 0) {
+			for (integer i = 0; i < 8; i ++) {
+				if (x_pxlt > my rect [i]. left && x_pxlt < my rect [i]. right &&
+				    y_pxlt > my rect [i]. bottom && y_pxlt < my rect [i]. top) {
+					newHoveredPlay = (int) i;
+					break;
+				}
 			}
+		}
+
+		int newIpaRow = 0, newIpaCol = 0;
+		if (my instancePref_showSelectionViewer() && my isInSelectionViewer (x_pxlt)) {
+			my viewInnerSelectionViewerAsFractionByFraction ();
+			double x_fraction, y_fraction;
+			Graphics_DCtoWC (my graphics.get(), event -> x, event -> y, & x_fraction, & y_fraction);
+			int r = (int) Melder_iceiling ((1.0 - y_fraction) * 12.0);
+			int c = (int) Melder_iceiling (x_fraction * 10.0);
+			if (r >= 1 && r <= 12 && c >= 1 && c <= 10) {
+				newIpaRow = r;
+				newIpaCol = c;
+			}
+		}
+
+		#ifdef _WIN32
+			if (newHoveredPlay != -1 || overToggle || (newIpaRow > 0 && newIpaCol > 0)) {
+				SetCursor (LoadCursor (nullptr, IDC_HAND));
+			} else if (my hoveredPlayButton != -1 || my hoveredToggleViewer || my hoveredIpaRow != 0) {
+				SetCursor (LoadCursor (nullptr, IDC_ARROW));
+			}
+		#endif
+
+		bool needRedraw = false;
+		if (newHoveredPlay != my hoveredPlayButton) {
+			my hoveredPlayButton = newHoveredPlay;
+			needRedraw = true;
+		}
+		if (overToggle != my hoveredToggleViewer) {
+			my hoveredToggleViewer = overToggle;
+			needRedraw = true;
+		}
+		if (newIpaRow != my hoveredIpaRow || newIpaCol != my hoveredIpaCol) {
+			my hoveredIpaRow = newIpaRow;
+			my hoveredIpaCol = newIpaCol;
+			needRedraw = true;
+		}
+
+		if (needRedraw)
+			FunctionEditor_redraw (me);
+		return;
+	}
+
+	if (event -> isDrop()) {
+		if (my pressedPlayButton != -1) {
+			double elapsed = Melder_clock () - my playButtonPressTime;
+			if (elapsed < 0.08) {
+				#ifdef _WIN32
+				Sleep ((DWORD) ((0.08 - elapsed) * 1000.0));
+				#endif
+			}
+			my pressedPlayButton = -1;
+			FunctionEditor_redraw (me);
+			#if gdi
+				if (my drawingArea && my drawingArea -> d_widget)
+					UpdateWindow ((HWND) my drawingArea -> d_widget);
+			#endif
+		}
+		if (my pressedIpaRow != 0) {
+			double elapsed = Melder_clock () - my ipaPressTime;
+			if (elapsed < 0.08) {
+				#ifdef _WIN32
+				Sleep ((DWORD) ((0.08 - elapsed) * 1000.0));
+				#endif
+			}
+			my pressedIpaRow = 0;
+			my pressedIpaCol = 0;
+			FunctionEditor_redraw (me);
+			#if gdi
+				if (my drawingArea && my drawingArea -> d_widget)
+					UpdateWindow ((HWND) my drawingArea -> d_widget);
+			#endif
+		}
+	}
+
+	if (event -> isClick()) {
+		if (overToggle) {
+			my setInstancePref_showSelectionViewer (! my instancePref_showSelectionViewer());   // toggle
+			my updateGeometry (GuiControl_getWidth (my drawingArea), GuiControl_getHeight (my drawingArea));
+			FunctionEditor_redraw (me);
+			#if gdi
+				if (my drawingArea && my drawingArea -> d_widget)
+					UpdateWindow ((HWND) my drawingArea -> d_widget);
+			#endif
+			return;
 		}
 		my clickWasModifiedByShiftKey = event -> shiftKeyPressed;
 		my clickWasModifiedByOptionKey = event -> optionKeyPressed;
@@ -1626,11 +1847,20 @@ static void gui_drawingarea_cb_mouse (FunctionEditor me, GuiDrawingArea_MouseEve
 		double x_fraction, y_fraction;
 		Graphics_DCtoWC (my graphics.get(), event -> x, event -> y, & x_fraction, & y_fraction);
 		if (event -> isClick()) {
+			int r = (int) Melder_iceiling ((1.0 - y_fraction) * 12.0);
+			int c = (int) Melder_iceiling (x_fraction * 10.0);
+			if (r >= 1 && r <= 12 && c >= 1 && c <= 10) {
+				my pressedIpaRow = r;
+				my pressedIpaCol = c;
+				my ipaPressTime = Melder_clock ();
+				FunctionEditor_redraw (me);
+				#if gdi
+					if (my drawingArea && my drawingArea -> d_widget)
+						UpdateWindow ((HWND) my drawingArea -> d_widget);
+				#endif
+			}
 			my v_clickSelectionViewer (x_fraction, y_fraction);
-			//Melder_assert (isdefined (my startSelection));   // precondition of v_updateText()
-			//my v_updateText ();
-			FunctionEditor_redraw (me);
-			updateGroup (me, false, false);   // TODO: why needed?
+			updateGroup (me, false, false);
 		} else;   // no dragging (yet?) in any selection viewer
 	} else if (my anchorIsInWideDataView) {
 		my viewDataAsWorldByFraction ();
@@ -1645,6 +1875,13 @@ static void gui_drawingarea_cb_mouse (FunctionEditor me, GuiDrawingArea_MouseEve
 			if (event -> isClick()) {
 				for (integer i = 0; i < 8; i ++) {
 					if (x_pxlt > my rect [i]. left && x_pxlt < my rect [i]. right && y_pxlt > my rect [i]. bottom && y_pxlt < my rect [i]. top) {
+						my pressedPlayButton = (int) i;
+						my playButtonPressTime = Melder_clock ();
+						FunctionEditor_redraw (me);
+						#if gdi
+							if (my drawingArea && my drawingArea -> d_widget)
+								UpdateWindow ((HWND) my drawingArea -> d_widget);
+						#endif
 						switch (i) {
 							case 0: my v_play (my tmin, my tmax); break;
 							case 1: my v_play (my startWindow, my endWindow); break;
@@ -1657,7 +1894,16 @@ static void gui_drawingarea_cb_mouse (FunctionEditor me, GuiDrawingArea_MouseEve
 						}
 					}
 				}
-			} else;   // no dragging in the play rectangles
+			} else if (event -> isDrag()) {
+				if (my pressedPlayButton != -1) {
+					integer i = my pressedPlayButton;
+					if (! (x_pxlt > my rect [i]. left && x_pxlt < my rect [i]. right &&
+					       y_pxlt > my rect [i]. bottom && y_pxlt < my rect [i]. top)) {
+						my pressedPlayButton = -1;
+						FunctionEditor_redraw (me);
+					}
+				}
+			}
 		} catch (MelderError) {
 			Melder_flushError ();
 		}
@@ -1667,8 +1913,7 @@ static void gui_drawingarea_cb_mouse (FunctionEditor me, GuiDrawingArea_MouseEve
 void structFunctionEditor :: v_createChildren () {
 	int x = BUTTON_X;
 	const int aiToolbarTop = Machine_getMenuBarBottom ();
-	const int aiToolbarHeight = our v_hasAiToolbar() ? 30 : 0;
-	const int contentTop = aiToolbarTop + aiToolbarHeight;
+	const int contentTop = aiToolbarTop;
 
 	/*
 		Create zoom buttons.
@@ -1737,15 +1982,6 @@ void structFunctionEditor :: v_createChildren () {
 	);
 	GuiDrawingArea_setSwipable (our drawingArea, our scrollBar, nullptr);
 
-	/*
-		Create the optional AI toolbar after the main drawing area.
-		The Windows Motif emulation relies on the main drawing area being
-		the form's active drawing target during editor initialization.
-	*/
-	if (our v_hasAiToolbar()) {
-		createAiToolbar (this, aiToolbarTop, contentTop);
-		our windowForm -> drawingArea = our drawingArea;
-	}
 }
 
 void structFunctionEditor :: v1_dataChanged (Editor sender) {
@@ -1868,6 +2104,8 @@ void FunctionEditor_selectionMarksChanged (FunctionEditor me) {
 	my v_updateText ();
 	FunctionEditor_redraw (me);
 	updateGroup (me, false, true);
+	PraatAiControl_noteEditorSelection (me, my data(), my startSelection, my endSelection);
+	// 让对话窗口知道用户刚在波形上拖了哪一段
 }
 
 void FunctionEditor_updateText (FunctionEditor me) {
@@ -1903,7 +2141,7 @@ void FunctionEditor_drawRangeMark (FunctionEditor me, double yWC, conststring32 
 	static MelderString text;
 	MelderString_copy (& text, yWC_string, units);
 	double textWidth = Graphics_textWidth (my graphics.get(), text.string) + Graphics_dxMMtoWC (my graphics.get(), 0.5);
-	Graphics_setColour (my graphics.get(), Melder_BLUE);
+	Graphics_setColour (my graphics.get(), modernMarkerBlue);
 	Graphics_line (my graphics.get(), my endWindow, yWC, my endWindow + textWidth, yWC);
 	Graphics_setTextAlignment (my graphics.get(), Graphics_LEFT, verticalAlignment);
 	if (verticalAlignment == Graphics_BOTTOM)
@@ -1917,7 +2155,7 @@ void FunctionEditor_insertCursorFunctionValue (FunctionEditor me, double yWC, co
 	const bool tooLow = ( Graphics_dyWCtoMM (my graphics.get(), textY - minimum) < 5.0 );
 	if (yWC < minimum || yWC > maximum)
 		return;
-	Graphics_setColour (my graphics.get(), Melder_CYAN);
+	Graphics_setColour (my graphics.get(), modernMarkerCyan);
 	Graphics_line (my graphics.get(), 0.99 * my endWindow + 0.01 * my startWindow, yWC, my endWindow, yWC);
 	Graphics_fillCircle_mm (my graphics.get(), 0.5 * (my startSelection + my endSelection), yWC, 1.5);
 	if (tooHigh) {
@@ -1932,20 +2170,20 @@ void FunctionEditor_insertCursorFunctionValue (FunctionEditor me, double yWC, co
 	MelderString_copy (& text, yWC_string, units);
 	double textWidth = Graphics_textWidth (my graphics.get(), text.string);
 	Graphics_fillCircle_mm (my graphics.get(), my endWindow + textWidth + Graphics_dxMMtoWC (my graphics.get(), 1.5), textY, 1.5);
-	Graphics_setColour (my graphics.get(), Melder_RED);
+	Graphics_setColour (my graphics.get(), modernMarkerRed);
 	Graphics_setTextAlignment (my graphics.get(), Graphics_LEFT, Graphics_HALF);
 	Graphics_text (my graphics.get(), textX, textY, text.string);
 }
 
 void FunctionEditor_drawHorizontalHair (FunctionEditor me, double yWC, conststring32 yWC_string, conststring32 units) {
-	Graphics_setColour (my graphics.get(), Melder_RED);
+	Graphics_setColour (my graphics.get(), modernMarkerRed);
 	Graphics_line (my graphics.get(), my startWindow, yWC, my endWindow, yWC);
 	Graphics_setTextAlignment (my graphics.get(), Graphics_RIGHT, Graphics_HALF);
 	Graphics_text (my graphics.get(), my startWindow, yWC,   yWC_string, units);
 }
 
 void FunctionEditor_drawGridLine (FunctionEditor me, double yWC) {
-	Graphics_setColour (my graphics.get(), Melder_CYAN);
+	Graphics_setColour (my graphics.get(), modernGridCyan);
 	Graphics_setLineType (my graphics.get(), Graphics_DOTTED);
 	Graphics_line (my graphics.get(), my startWindow, yWC, my endWindow, yWC);
 	Graphics_setLineType (my graphics.get(), Graphics_DRAWN);

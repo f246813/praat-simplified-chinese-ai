@@ -831,6 +831,23 @@ void MelderFile_moveAndOrRename (MelderFile fromFile, MelderFile toFile) {
 	}
 }
 
+void MelderFile_replaceAtomically (MelderFile fromFile, MelderFile toFile) {
+	if (! fromFile || ! toFile)
+		return;
+	#if defined (UNIX)
+		MelderFile_moveAndOrRename (fromFile, toFile);
+	#elif defined (_WIN32)
+		autostringW fromPathW = Melder_32toW_fileSystem (MelderFile_peekPath (fromFile));
+		autostringW toPathW = Melder_32toW_fileSystem (MelderFile_peekPath (toFile));
+		if (MoveFileExW (fromPathW.get(), toPathW.get(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			return;
+		Melder_throw (U"Could not atomically replace ", MelderFile_messageName (toFile), U" (Windows error ",
+			(integer) GetLastError(), U").");
+	#else
+		MelderFile_moveAndOrRename (fromFile, toFile);
+	#endif
+}
+
 char32 * Melder_peekExpandBackslashes (conststring32 message) {
 	static char32 names [11] [kMelder_MAXPATH+1];
 	static int index = 0;

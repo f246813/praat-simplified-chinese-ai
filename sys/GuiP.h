@@ -40,7 +40,21 @@ class GuiControlBlockValueChangedCallbacks {
 	void GuiGtk_initialize ();
 #elif motif
 	#include <windows.h>
+	#include <windowsx.h>
 	#include <commctrl.h>
+	#include <uxtheme.h>
+	#include <dwmapi.h>
+	#include <gdiplus.h>
+
+	inline void _GuiWin_ensureGdiplus () {
+		static bool initialized = false;
+		if (! initialized) {
+			Gdiplus::GdiplusStartupInput input;
+			ULONG_PTR token;
+			Gdiplus::GdiplusStartup (& token, & input, nullptr);
+			initialized = true;
+		}
+	}
 
 	#define MEMBER(widget,klas)  ((widget -> widgetClass & xm##klas##WidgetClass) != 0)
 	#define MEMBER2(widget,klas1,klas2)  ((widget -> widgetClass & (xm##klas1##WidgetClass | xm##klas2##WidgetClass)) != 0)
@@ -140,6 +154,7 @@ class GuiControlBlockValueChangedCallbacks {
 	void _GuiWinButton_destroy (GuiObject widget);
 	void _GuiWinButton_handleClick (GuiObject widget);
 	bool _GuiWinButton_tryToHandleShortcutKey (GuiObject widget);
+	void _GuiWin_subclassModernButton (HWND hwnd, uint32 flags);
 
 	/********** GuiCheckButton.cpp **********/
 	void _GuiWinCheckButton_destroy (GuiObject widget);
@@ -181,6 +196,7 @@ class GuiControlBlockValueChangedCallbacks {
 	/********** GuiText.cpp **********/
 	void _GuiWinText_destroy (GuiObject widget);
 	void _GuiWinText_map (GuiObject widget);
+	void _GuiWin_subclassModernEdit (HWND hwnd, uint32 flags);
 	void _GuiText_handleFocusReception (GuiObject widget);
 	void _GuiText_handleFocusLoss (GuiObject widget);
 	void _GuiText_setTheTextFocus (GuiObject widget);
@@ -198,6 +214,7 @@ class GuiControlBlockValueChangedCallbacks {
 	extern NSFont *theMacGuiNormalLabelFont (), *theMacGuiBoldLabelFont ();
 #elif defined (_WIN32)
 	extern HFONT theWinGuiNormalLabelFont (), theWinGuiBoldLabelFont ();
+	extern HFONT theWinGuiIconFont (int height = -14);
 	extern HBRUSH theWinGuiBackgroundBrush ();
 #endif
 

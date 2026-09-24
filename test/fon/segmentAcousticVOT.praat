@@ -1,0 +1,8 @@
+Praat test: "CheckSegmentVOTBoundaries", "", "", "", ""
+writeInfoLine: "SEGMENT_VOT_BOUNDARIES_PASS"
+Praat test: "CheckSegmentAnalysisResult", "", "", "", ""
+writeInfoLine: "SEGMENT_ANALYSIS_RESULT_PASS"
+Praat test: "CheckSegmentVOTEstimator", "", "", "", ""
+writeInfoLine: "SEGMENT_VOT_ESTIMATOR_PASS"
+Praat test: "CheckSegmentVOTInfoSummary", "", "", "", ""
+writeInfoLine: "SEGMENT_VOT_INFO_SUMMARY_PASS"

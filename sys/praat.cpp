@@ -48,6 +48,8 @@
 #include "../kar/UnicodeData.h"
 #include "InfoEditor.h"
 #include "praat_translate.h"
+#include "GuiP.h"
+#include "melder_audio.h"
 
 extern "C" char *sendpraat (void *display, const char *programName, long timeOut, const char *text);
 
@@ -55,7 +57,7 @@ Thing_implement (Praat_Command, Thing, 0);
 
 #define EDITOR  theCurrentPraatObjects -> list [IOBJECT]. editors
 
-#define WINDOW_WIDTH 520
+#define WINDOW_WIDTH 580
 #define WINDOW_HEIGHT 700
 
 /*
@@ -123,10 +125,64 @@ static structMelderFile messageFile { };
 
 static GuiList praatList_objects;
 static GuiLabel praatLabel_objects;
+static GuiButton praatButton_record;
+static GuiButton praatButton_open;
+static GuiButton praatButton_save;
+
+static void gui_cb_topButton_record (Thing /* boss */, GuiButtonEvent /* event */) {
+	try {
+		praat_doMenuCommand (U"Record mono Sound...", nullptr, nullptr);
+		praat_updateSelection ();
+	} catch (MelderError) {
+		Melder_flushError ();
+	}
+}
+
+static void gui_cb_topButton_open (Thing /* boss */, GuiButtonEvent /* event */) {
+	try {
+		praat_doMenuCommand (U"Read from file...", nullptr, nullptr);
+		praat_updateSelection ();
+	} catch (MelderError) {
+		Melder_flushError ();
+	}
+}
+
+static void gui_cb_topButton_save (Thing /* boss */, GuiButtonEvent /* event */) {
+	try {
+		if (praat_actions_canExecute (U"Save as WAV file..."))
+			praat_actions_executeByName (U"Save as WAV file...");
+		else if (praat_actions_canExecute (U"Save as text file..."))
+			praat_actions_executeByName (U"Save as text file...");
+		else if (praat_actions_canExecute (U"Save as tab-separated file..."))
+			praat_actions_executeByName (U"Save as tab-separated file...");
+		else if (praat_actions_canExecute (U"Save as short text file..."))
+			praat_actions_executeByName (U"Save as short text file...");
+		else if (praat_actions_canExecute (U"Save as binary file..."))
+			praat_actions_executeByName (U"Save as binary file...");
+		else
+			praat_doMenuCommand (U"Save as text file...", nullptr, nullptr);
+		praat_updateSelection ();
+	} catch (MelderError) {
+		Melder_flushError ();
+	}
+}
 
 void praat_refreshObjectsWindowLanguage () {
 	if (praatLabel_objects)
 		GuiLabel_setText (praatLabel_objects, U"Objects:");
+	if (praatButton_record)
+		GuiButton_setText (praatButton_record, praat_translate (U"Record"));
+	if (praatButton_open)
+		GuiButton_setText (praatButton_open, praat_translate (U"Open..."));
+	if (praatButton_save)
+		GuiButton_setText (praatButton_save, praat_translate (U"Save"));
+}
+
+void praat_updateTopButtons () {
+	if (praatButton_save) {
+		bool hasSelection = (theCurrentPraatObjects && theCurrentPraatObjects -> totalSelection > 0);
+		GuiThing_setSensitive (praatButton_save, hasSelection);
+	}
 }
 
 /***** selection *****/
@@ -452,6 +508,7 @@ void praat_updateSelection () {
 		theCurrentPraatObjects -> totalBeingCreated = 0;
 		praat_show ();
 	}
+	PraatAiControl_refreshChatContext ();   // 让对话窗口看到当前对象列表和选中状态
 }
 
 static void gui_cb_list_selectionChanged (Thing /* boss */, GuiList_SelectionChangedEvent event) {
@@ -479,6 +536,414 @@ static void gui_cb_list_selectionChanged (Thing /* boss */, GuiList_SelectionCha
 		theCurrentPraatObjects -> totalSelection += 1;
 	}
 	praat_show ();
+	PraatAiControl_refreshChatContext ();   // 鼠标改选中对象后同步给对话窗口
+}
+
+static HBITMAP createMenuIcon (const wchar_t *glyph, COLORREF color) {
+	HWND hwnd = (praatList_objects && praatList_objects -> d_widget) ? praatList_objects -> d_widget -> window : nullptr;
+	UINT dpi = 96;
+	HMODULE hUser32 = GetModuleHandleW (L"user32.dll");
+	if (hUser32 && hwnd) {
+		typedef UINT (WINAPI *GetDpiForWindowProc) (HWND);
+		GetDpiForWindowProc getDpi = (GetDpiForWindowProc) (void *) GetProcAddress (hUser32, "GetDpiForWindow");
+		if (getDpi)
+			dpi = getDpi (hwnd);
+	}
+	if (dpi <= 0) {
+		HDC hdcScreen = GetDC (nullptr);
+		if (hdcScreen) {
+			dpi = GetDeviceCaps (hdcScreen, LOGPIXELSX);
+			ReleaseDC (nullptr, hdcScreen);
+		}
+	}
+	if (dpi <= 0) dpi = 96;
+
+	// In Windows 10/11, menus scale with DPI.
+	// Standard small icon is 16px at 96 DPI, 20px at 120 DPI (125%), 24px at 144 DPI (150%), 32px at 192 DPI (200%).
+	int cx = MulDiv (16, dpi, 96);
+	if (hUser32) {
+		typedef int (WINAPI *GetSystemMetricsForDpiProc) (int, UINT);
+		GetSystemMetricsForDpiProc getMetricsDpi = (GetSystemMetricsForDpiProc) (void *) GetProcAddress (hUser32, "GetSystemMetricsForDpi");
+		if (getMetricsDpi) {
+			int smIcon = getMetricsDpi (SM_CXSMICON, dpi);
+			if (smIcon > cx) cx = smIcon;
+		}
+	}
+	if (cx <= 0) cx = 16;
+	int cy = cx;
+
+	HDC hdcScreen = GetDC (nullptr);
+	if (! hdcScreen) return nullptr;
+	HDC hdcMem = CreateCompatibleDC (hdcScreen);
+	if (! hdcMem) {
+		ReleaseDC (nullptr, hdcScreen);
+		return nullptr;
+	}
+
+	BITMAPINFO bi;
+	memset (& bi, 0, sizeof (bi));
+	bi.bmiHeader.biSize = sizeof (BITMAPINFOHEADER);
+	bi.bmiHeader.biWidth = cx;
+	bi.bmiHeader.biHeight = cy;
+	bi.bmiHeader.biPlanes = 1;
+	bi.bmiHeader.biBitCount = 32;
+	bi.bmiHeader.biCompression = BI_RGB;
+	void *pBitsDst = nullptr;
+	HBITMAP hbmpDst = CreateDIBSection (hdcMem, & bi, DIB_RGB_COLORS, & pBitsDst, nullptr, 0);
+	if (! hbmpDst || ! pBitsDst) {
+		DeleteDC (hdcMem);
+		ReleaseDC (nullptr, hdcScreen);
+		return nullptr;
+	}
+
+	// 2x Supersampling to eliminate small-font rasterization fuzziness
+	const int scale = 2;
+	int wBig = cx * scale;
+	int hBig = cy * scale;
+	HDC hdcBig = CreateCompatibleDC (hdcScreen);
+	BITMAPINFO biBig;
+	memset (& biBig, 0, sizeof (biBig));
+	biBig.bmiHeader.biSize = sizeof (BITMAPINFOHEADER);
+	biBig.bmiHeader.biWidth = wBig;
+	biBig.bmiHeader.biHeight = hBig;
+	biBig.bmiHeader.biPlanes = 1;
+	biBig.bmiHeader.biBitCount = 32;
+	biBig.bmiHeader.biCompression = BI_RGB;
+	void *pBitsBig = nullptr;
+	HBITMAP hbmpBig = CreateDIBSection (hdcBig, & biBig, DIB_RGB_COLORS, & pBitsBig, nullptr, 0);
+
+	if (hdcBig && hbmpBig && pBitsBig) {
+		memset (pBitsBig, 0, wBig * hBig * sizeof (DWORD));
+		HBITMAP oldBmpBig = (HBITMAP) SelectObject (hdcBig, hbmpBig);
+		int fontHeightBig = - (hBig * 4 / 5);
+		HFONT hFontBig = theWinGuiIconFont (fontHeightBig);
+		HFONT oldFontBig = (HFONT) SelectObject (hdcBig, hFontBig);
+
+		SetBkMode (hdcBig, TRANSPARENT);
+		SetTextColor (hdcBig, RGB (255, 255, 255));
+		RECT rcBig = { 0, 0, wBig, hBig };
+		DrawTextW (hdcBig, glyph, -1, & rcBig, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+		// Box-filter downsampling to cx * cy
+		DWORD *pixelsBig = (DWORD *) pBitsBig;
+		DWORD *pixelsDst = (DWORD *) pBitsDst;
+		BYTE rTarget = GetRValue (color);
+		BYTE gTarget = GetGValue (color);
+		BYTE bTarget = GetBValue (color);
+
+		for (int y = 0; y < cy; y ++) {
+			for (int x = 0; x < cx; x ++) {
+				int sumA = 0;
+				for (int dy = 0; dy < scale; dy ++) {
+					for (int dx = 0; dx < scale; dx ++) {
+						int sy = y * scale + dy;
+						int sx = x * scale + dx;
+						DWORD px = pixelsBig [sy * wBig + sx];
+						BYTE r = (BYTE) (px & 0xFF);
+						BYTE g = (BYTE) ((px >> 8) & 0xFF);
+						BYTE b = (BYTE) ((px >> 16) & 0xFF);
+						BYTE maxVal = r > g ? (r > b ? r : b) : (g > b ? g : b);
+						sumA += maxVal;
+					}
+				}
+				int a = sumA / (scale * scale);
+				if (a > 0) {
+					BYTE pr = (BYTE) (((int) rTarget * a + 127) / 255);
+					BYTE pg = (BYTE) (((int) gTarget * a + 127) / 255);
+					BYTE pb = (BYTE) (((int) bTarget * a + 127) / 255);
+					pixelsDst [y * cx + x] = ((DWORD) a << 24) | ((DWORD) pr << 16) | ((DWORD) pg << 8) | pb;
+				} else {
+					pixelsDst [y * cx + x] = 0;
+				}
+			}
+		}
+
+		SelectObject (hdcBig, oldFontBig);
+		SelectObject (hdcBig, oldBmpBig);
+		DeleteObject (hbmpBig);
+		DeleteDC (hdcBig);
+	}
+
+	DeleteDC (hdcMem);
+	ReleaseDC (nullptr, hdcScreen);
+	return hbmpDst;
+}
+
+static void setMenuItemIcon (HMENU hMenu, UINT cmdId, HBITMAP hbmp) {
+	if (! hbmp) return;
+	MENUITEMINFOW mii;
+	memset (& mii, 0, sizeof (mii));
+	mii.cbSize = sizeof (mii);
+	mii.fMask = MIIM_BITMAP;
+	mii.hbmpItem = hbmp;
+	SetMenuItemInfoW (hMenu, cmdId, FALSE, & mii);
+}
+
+static void setMenuItemIconByPos (HMENU hMenu, UINT pos, HBITMAP hbmp) {
+	if (! hbmp) return;
+	MENUITEMINFOW mii;
+	memset (& mii, 0, sizeof (mii));
+	mii.cbSize = sizeof (mii);
+	mii.fMask = MIIM_BITMAP;
+	mii.hbmpItem = hbmp;
+	SetMenuItemInfoW (hMenu, pos, TRUE, & mii);
+}
+
+static void gui_cb_list_contextMenu (Thing /* boss */, GuiList_ContextMenuEvent event) {
+#if motif
+	if (! praatList_objects || theCurrentPraatObjects -> n == 0)
+		return;
+
+	HMENU hMenu = CreatePopupMenu ();
+	if (! hMenu)
+		return;
+
+	enum {
+		CMD_VIEW_EDIT = 1001,
+		CMD_PLAY,
+		CMD_RENAME,
+		CMD_COPY,
+		CMD_INFO,
+		CMD_INSPECT,
+		CMD_SELECT_ALL,
+		CMD_DESELECT_ALL,
+		CMD_REMOVE,
+		CMD_SAVE_WAV,
+		CMD_SAVE_TEXTGRID,
+		CMD_SAVE_TAB,
+		CMD_SAVE_SHORT,
+		CMD_SAVE_BINARY,
+		CMD_QUERY_DURATION,
+		CMD_QUERY_SAMPLERATE,
+		CMD_QUERY_NUMSAMPLES
+	};
+
+	bool canViewEdit = praat_actions_canExecute (U"View & Edit") ||
+	                   praat_actions_canExecute (U"Edit") ||
+	                   praat_actions_canExecute (U"Open");
+	bool canPlay     = praat_actions_canExecute (U"Play");
+	bool canRename   = praat_canExecuteMenuCommand (U"Rename...");
+	bool canCopy     = praat_canExecuteMenuCommand (U"Copy...");
+	bool canInfo     = praat_canExecuteMenuCommand (U"Info");
+	bool canInspect  = praat_canExecuteMenuCommand (U"Inspect");
+	bool canRemove   = praat_canExecuteMenuCommand (U"Remove");
+	bool hasSelection = (theCurrentPraatObjects -> totalSelection > 0);
+	bool isCurrentlyPlaying = MelderAudio_isPlaying;
+	const bool isEnglish = (g_language_choice == 0);
+
+	// 1. View & Edit (查看与编辑)
+	UINT flagViewEdit = (canViewEdit ? MF_STRING : (MF_STRING | MF_GRAYED | MF_DISABLED));
+	AppendMenuW (hMenu, flagViewEdit, CMD_VIEW_EDIT, isEnglish ? L"View & Edit" : L"查看与编辑 (View & Edit)");
+
+	if (canViewEdit)
+		SetMenuDefaultItem (hMenu, CMD_VIEW_EDIT, FALSE);
+
+	// 2. Play / Pause (播放 / 暂停)
+	if (canPlay) {
+		const wchar_t* labelPlay = isCurrentlyPlaying
+			? (isEnglish ? L"Pause" : L"暂停 (Pause)")
+			: (isEnglish ? L"Play" : L"播放 (Play)");
+		AppendMenuW (hMenu, MF_STRING, CMD_PLAY, labelPlay);
+	}
+
+	AppendMenuW (hMenu, MF_SEPARATOR, 0, nullptr);
+
+	// 3. Rename... (重命名...)
+	UINT flagRename = (canRename ? MF_STRING : (MF_STRING | MF_GRAYED | MF_DISABLED));
+	AppendMenuW (hMenu, flagRename, CMD_RENAME, isEnglish ? L"Rename..." : L"重命名... (Rename...)");
+
+	// 4. Copy... (复制...)
+	UINT flagCopy = (canCopy ? MF_STRING : (MF_STRING | MF_GRAYED | MF_DISABLED));
+	AppendMenuW (hMenu, flagCopy, CMD_COPY, isEnglish ? L"Copy..." : L"复制... (Copy...)");
+
+	// 5. Info (信息)
+	UINT flagInfo = (canInfo ? MF_STRING : (MF_STRING | MF_GRAYED | MF_DISABLED));
+	AppendMenuW (hMenu, flagInfo, CMD_INFO, isEnglish ? L"Info" : L"信息 (Info)");
+
+	// 6. Inspect (检查)
+	UINT flagInspect = (canInspect ? MF_STRING : (MF_STRING | MF_GRAYED | MF_DISABLED));
+	AppendMenuW (hMenu, flagInspect, CMD_INSPECT, isEnglish ? L"Inspect" : L"检查 (Inspect)");
+
+	AppendMenuW (hMenu, MF_SEPARATOR, 0, nullptr);
+
+	// 7. Submenu: Save as ▶ (保存为)
+	HMENU hSubMenuSave = CreatePopupMenu ();
+	bool canSaveWav = praat_actions_canExecute (U"Save as WAV file...");
+	bool canSaveTextGrid = praat_actions_canExecute (U"Save as text file...");
+	bool canSaveTab = praat_actions_canExecute (U"Save as tab-separated file...");
+	bool canSaveShort = praat_actions_canExecute (U"Save as short text file...");
+	bool canSaveBinary = praat_actions_canExecute (U"Save as binary file...");
+
+	if (canSaveWav)
+		AppendMenuW (hSubMenuSave, MF_STRING, CMD_SAVE_WAV, isEnglish ? L"Save as WAV file..." : L"保存为 WAV 音频... (Save as WAV file...)");
+	if (canSaveTextGrid)
+		AppendMenuW (hSubMenuSave, MF_STRING, CMD_SAVE_TEXTGRID, isEnglish ? L"Save as TextGrid text file..." : L"保存为 TextGrid 文本... (Save as text file...)");
+	if (canSaveTab)
+		AppendMenuW (hSubMenuSave, MF_STRING, CMD_SAVE_TAB, isEnglish ? L"Save as tab-separated file..." : L"保存为制表符文件... (Save as tab-separated file...)");
+	if (canSaveShort)
+		AppendMenuW (hSubMenuSave, MF_STRING, CMD_SAVE_SHORT, isEnglish ? L"Save as short text file..." : L"保存为短文本文件... (Save as short text file...)");
+	if (canSaveBinary)
+		AppendMenuW (hSubMenuSave, MF_STRING, CMD_SAVE_BINARY, isEnglish ? L"Save as binary file..." : L"保存为二进制文件... (Save as binary file...)");
+
+	HBITMAP bmpSaveAs = nullptr;
+	int posSaveAs = -1;
+	if (GetMenuItemCount (hSubMenuSave) > 0) {
+		posSaveAs = GetMenuItemCount (hMenu);
+		AppendMenuW (hMenu, MF_POPUP, (UINT_PTR) hSubMenuSave, isEnglish ? L"Save as..." : L"保存为 (Save as)...");
+		bmpSaveAs = createMenuIcon (L"\uE74E", RGB (55, 65, 81));
+		setMenuItemIconByPos (hMenu, posSaveAs, bmpSaveAs);
+	} else {
+		DestroyMenu (hSubMenuSave);
+		hSubMenuSave = nullptr;
+	}
+
+	// 8. Submenu: Query ▶ (查询)
+	HMENU hSubMenuQuery = CreatePopupMenu ();
+	bool canGetDuration = praat_actions_canExecute (U"Get total duration");
+	bool canGetSampleRate = praat_actions_canExecute (U"Get sampling frequency");
+	bool canGetNumSamples = praat_actions_canExecute (U"Get number of samples");
+
+	if (canGetDuration)
+		AppendMenuW (hSubMenuQuery, MF_STRING, CMD_QUERY_DURATION, isEnglish ? L"Get total duration" : L"查询总时长 (Get total duration)");
+	if (canGetSampleRate)
+		AppendMenuW (hSubMenuQuery, MF_STRING, CMD_QUERY_SAMPLERATE, isEnglish ? L"Get sampling frequency" : L"查询采样率 (Get sampling frequency)");
+	if (canGetNumSamples)
+		AppendMenuW (hSubMenuQuery, MF_STRING, CMD_QUERY_NUMSAMPLES, isEnglish ? L"Get number of samples" : L"查询采样点数 (Get number of samples)");
+
+	HBITMAP bmpQuery = nullptr;
+	int posQuery = -1;
+	if (GetMenuItemCount (hSubMenuQuery) > 0) {
+		posQuery = GetMenuItemCount (hMenu);
+		AppendMenuW (hMenu, MF_POPUP, (UINT_PTR) hSubMenuQuery, isEnglish ? L"Query..." : L"查询 (Query)...");
+		bmpQuery = createMenuIcon (L"\uE721", RGB (55, 65, 81));
+		setMenuItemIconByPos (hMenu, posQuery, bmpQuery);
+	} else {
+		DestroyMenu (hSubMenuQuery);
+		hSubMenuQuery = nullptr;
+	}
+
+	AppendMenuW (hMenu, MF_SEPARATOR, 0, nullptr);
+
+	// 9. Select All (全选)
+	AppendMenuW (hMenu, MF_STRING, CMD_SELECT_ALL, isEnglish ? L"Select all" : L"全选 (Select All)");
+
+	// 10. Deselect All (取消全选)
+	if (hasSelection) {
+		AppendMenuW (hMenu, MF_STRING, CMD_DESELECT_ALL, isEnglish ? L"Deselect all" : L"取消全选 (Deselect All)");
+	}
+
+	AppendMenuW (hMenu, MF_SEPARATOR, 0, nullptr);
+
+	// 11. Remove (删除)
+	UINT flagRemove = (canRemove ? MF_STRING : (MF_STRING | MF_GRAYED | MF_DISABLED));
+	AppendMenuW (hMenu, flagRemove, CMD_REMOVE, isEnglish ? L"Remove" : L"删除 (Remove)");
+
+	// Set Menu Icons
+	HBITMAP bmpViewEdit   = createMenuIcon (L"\uE70F", canViewEdit ? RGB (0, 103, 192) : RGB (156, 163, 175));
+	HBITMAP bmpPlay       = canPlay ? createMenuIcon (isCurrentlyPlaying ? L"\uE769" : L"\uE768", isCurrentlyPlaying ? RGB (217, 119, 6) : RGB (16, 124, 65)) : nullptr;
+	HBITMAP bmpRename     = createMenuIcon (L"\uE8EC", canRename ? RGB (55, 65, 81) : RGB (156, 163, 175));
+	HBITMAP bmpCopy       = createMenuIcon (L"\uE8C8", canCopy ? RGB (55, 65, 81) : RGB (156, 163, 175));
+	HBITMAP bmpInfo       = createMenuIcon (L"\uE946", canInfo ? RGB (0, 103, 192) : RGB (156, 163, 175));
+	HBITMAP bmpInspect    = createMenuIcon (L"\uE721", canInspect ? RGB (55, 65, 81) : RGB (156, 163, 175));
+	HBITMAP bmpSelectAll  = createMenuIcon (L"\uE762", RGB (55, 65, 81));
+	HBITMAP bmpDeselectAll= hasSelection ? createMenuIcon (L"\uE894", RGB (55, 65, 81)) : nullptr;
+	HBITMAP bmpRemove     = createMenuIcon (L"\uE74D", canRemove ? RGB (220, 38, 38) : RGB (156, 163, 175));
+
+	setMenuItemIcon (hMenu, CMD_VIEW_EDIT, bmpViewEdit);
+	if (bmpPlay)
+		setMenuItemIcon (hMenu, CMD_PLAY, bmpPlay);
+	setMenuItemIcon (hMenu, CMD_RENAME, bmpRename);
+	setMenuItemIcon (hMenu, CMD_COPY, bmpCopy);
+	setMenuItemIcon (hMenu, CMD_INFO, bmpInfo);
+	setMenuItemIcon (hMenu, CMD_INSPECT, bmpInspect);
+	setMenuItemIcon (hMenu, CMD_SELECT_ALL, bmpSelectAll);
+	if (bmpDeselectAll)
+		setMenuItemIcon (hMenu, CMD_DESELECT_ALL, bmpDeselectAll);
+	setMenuItemIcon (hMenu, CMD_REMOVE, bmpRemove);
+
+	HWND hwnd = praatList_objects -> d_widget -> window;
+	SetForegroundWindow (hwnd);
+	int cmd = TrackPopupMenuEx (hMenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+		event -> x, event -> y, hwnd, nullptr);
+	DestroyMenu (hMenu);
+
+	if (bmpViewEdit) DeleteObject (bmpViewEdit);
+	if (bmpPlay) DeleteObject (bmpPlay);
+	if (bmpRename) DeleteObject (bmpRename);
+	if (bmpCopy) DeleteObject (bmpCopy);
+	if (bmpInfo) DeleteObject (bmpInfo);
+	if (bmpInspect) DeleteObject (bmpInspect);
+	if (bmpSaveAs) DeleteObject (bmpSaveAs);
+	if (bmpQuery) DeleteObject (bmpQuery);
+	if (bmpSelectAll) DeleteObject (bmpSelectAll);
+	if (bmpDeselectAll) DeleteObject (bmpDeselectAll);
+	if (bmpRemove) DeleteObject (bmpRemove);
+
+	switch (cmd) {
+		case CMD_VIEW_EDIT:
+			if (praat_actions_canExecute (U"View & Edit"))
+				praat_actions_executeByName (U"View & Edit");
+			else if (praat_actions_canExecute (U"Edit"))
+				praat_actions_executeByName (U"Edit");
+			else if (praat_actions_canExecute (U"Open"))
+				praat_actions_executeByName (U"Open");
+			break;
+		case CMD_PLAY:
+			praat_actions_executeByName (U"Play");
+			break;
+		case CMD_RENAME:
+			praat_doMenuCommand (U"Rename...", nullptr, nullptr);
+			break;
+		case CMD_COPY:
+			praat_doMenuCommand (U"Copy...", nullptr, nullptr);
+			break;
+		case CMD_INFO:
+			praat_doMenuCommand (U"Info", nullptr, nullptr);
+			break;
+		case CMD_INSPECT:
+			praat_doMenuCommand (U"Inspect", nullptr, nullptr);
+			break;
+		case CMD_SAVE_WAV:
+			praat_actions_executeByName (U"Save as WAV file...");
+			break;
+		case CMD_SAVE_TEXTGRID:
+			praat_actions_executeByName (U"Save as text file...");
+			break;
+		case CMD_SAVE_TAB:
+			praat_actions_executeByName (U"Save as tab-separated file...");
+			break;
+		case CMD_SAVE_SHORT:
+			praat_actions_executeByName (U"Save as short text file...");
+			break;
+		case CMD_SAVE_BINARY:
+			praat_actions_executeByName (U"Save as binary file...");
+			break;
+		case CMD_QUERY_DURATION:
+			praat_actions_executeByName (U"Get total duration");
+			break;
+		case CMD_QUERY_SAMPLERATE:
+			praat_actions_executeByName (U"Get sampling frequency");
+			break;
+		case CMD_QUERY_NUMSAMPLES:
+			praat_actions_executeByName (U"Get number of samples");
+			break;
+		case CMD_SELECT_ALL:
+			praat_selectAll ();
+			praat_show ();
+			break;
+		case CMD_DESELECT_ALL:
+			praat_deselectAll ();
+			praat_show ();
+			break;
+		case CMD_REMOVE:
+			praat_doMenuCommand (U"Remove", nullptr, nullptr);
+			break;
+		default:
+			break;
+	}
+#else
+	(void) event;
+#endif
 }
 
 void praat_list_renameAndSelect (integer position, conststring32 name) {
@@ -948,7 +1413,7 @@ extern "C" void DO_Quit (UiForm /* sendingForm */, integer /* narg */, Stackel /
 	Melder_sprint (line2Text, 200, praat_translate (U"Do you still want to quit "), Melder_upperCaseAppName(), U"?");
 
 	if (! theQuitDialog) {
-		const int dialogWidth = 470;
+		const int dialogWidth = 550;
 		const int dialogHeight = 135;
 		theQuitDialog = GuiDialog_create (theCurrentPraatApplication -> topShell,
 			150, 70, dialogWidth, dialogHeight,
@@ -971,16 +1436,16 @@ extern "C" void DO_Quit (UiForm /* sendingForm */, integer /* narg */, Stackel /
 		const int buttonY = dialogHeight - Gui_BOTTOM_DIALOG_SPACING - Gui_PUSHBUTTON_HEIGHT;
 
 		// Button 1: Help
-		const int helpWidth = 65;
+		const int helpWidth = 75;
 		GuiButton_createShown (theQuitDialog,
 			Gui_LEFT_DIALOG_SPACING, Gui_LEFT_DIALOG_SPACING + helpWidth,
 			buttonY, buttonY + Gui_PUSHBUTTON_HEIGHT,
 			U"Help", gui_button_cb_helpQuit, nullptr, 0);
 
 		// Right-aligned buttons: Cancel, Save Project (.praat), Quit
-		const int cancelWidth = 65;
-		const int saveWidth = 145;
-		const int quitWidth = 85;
+		const int cancelWidth = 80;
+		const int saveWidth = 180;
+		const int quitWidth = 140;
 		const int spacing = 10;
 
 		int x = dialogWidth - Gui_RIGHT_DIALOG_SPACING - quitWidth - spacing - saveWidth - spacing - cancelWidth;
@@ -1076,11 +1541,59 @@ void praat_dontUsePictureWindow () { praatP.dontUsePictureWindow = true; }
 		if (! MelderFile_exists (& messageFile))
 			return 0;
 		autoPraatBackground background;
+		/*
+			这条消息是不是对话前端发来的？只有前端的消息才走「报错不弹框、写回结果
+			文件」那条路；别的程序用 --send 发脚本时保持 Praat 原来的行为（弹错误框），
+			免得把别人的报错吞掉。前端的消息一定带 "# praat-ai" 或引用
+			"runtime/commands/chat_command_*.praat"（见 praat_ai/sendpraat.py）。
+		*/
+		bool fromChatFrontend = false;
+		try {
+			autostring32 messageText = MelderFile_readText (& messageFile);
+			fromChatFrontend = messageText && (
+				str32str (messageText. get(), U"praat-ai") != nullptr ||
+				str32str (messageText. get(), U"chat_command_") != nullptr
+			);
+		} catch (MelderError) {
+			Melder_clearError ();   // 读不出来就按「不是前端发来的」处理
+		}
+		bool messageFailed = false;
+		autostring32 failureText;
 		try {
 			praat_executeScript_noGUI (& messageFile, true);   // trust all messages, because they are sent by other apps that have control
 		} catch (MelderError) {
-			Melder_flushError (Melder_upperCaseAppName(), U": message not completely handled.");
+			/*
+				app 发来的脚本报错时**不要** Melder_flushError（2026-09-21，用户报的
+				「Praat 弹错误框会卡住后续消息」）：Windows 上它开的是
+				MessageBox (MB_OK | MB_TOPMOST) + 自己的消息循环，用户不点掉它，
+				对话窗口就只能一条条等到超时，而且错误原文前端读不到。
+
+				改成把错误拿走（clearError 之后不会再弹），交给 PraatAiControl
+				写进对话窗口读的结果文件 + 完成标记：前端立刻拿到「这一条失败了，
+				原因是……」，用户也能在对话里看到那句英文原文。
+			*/
+			if (fromChatFrontend) {
+				failureText = Melder_dup (Melder_getError ());
+				Melder_clearError ();
+				messageFailed = true;
+			} else {
+				Melder_flushError (Melder_upperCaseAppName(), U": message not completely handled.");
+			}
 		}
+		if (messageFailed)
+			PraatAiControl_reportChatScriptFailure (failureText ? failureText. get() : U"");
+		/*
+			对话窗口的脚本跑完了：把当前对象列表重新写给它（PraatAiControl 的
+			refreshChatContext）。
+
+			为什么必须在这里补一刀（2026-09-20 实测）：对象列表文件以前只在
+			「对象被创建/删除」或者用户在列表里改选中时才会重写，而 app 发过来的
+			脚本常常两条都不占（例如只写文件的空脚本）。于是对话窗口会拿着**上一个
+			Praat 实例**留下的旧列表去规划（例如挑一个早就不存在的 9 号对象），
+			Praat 弹一句英文错误框还挡住后面的消息。这里在每条 app 消息之后都重新
+			导出一次，前端的对象列表就跟正在跑的 Praat 对得上了。
+		*/
+		PraatAiControl_refreshChatContext (true);   // 强制写一次：前端的规划完全依赖这份列表
 		return 0;
 	}
 	#if 0
@@ -1199,6 +1712,9 @@ static void installPraatShellPreferences () {
 	Printer_prefs ();   // paper size, printer command...
 	structTextEditor :: f_preferences ();   // font size...
 	Preferences_addInt (U"Praat.languageChoice", & g_language_choice, 1);
+	#if defined (_WIN32)
+		Preferences_addInt (U"Praat.dpiMode", & g_dpi_mode, 0);
+	#endif
 	praat_python_initPreferences ();
 	PraatAiControl_initPreferences ();
 }
@@ -1552,6 +2068,8 @@ static bool tryToSwitchToRunningPraat (bool foundTheOpenOption, bool foundTheSen
 		autofile f;
 		try {
 			f = Melder_fopen (& messageFile, "w");
+			if (praatP. fullTrust)
+				fprintf (f, "\n# --FULL-TRUST\n");
 			fprintf (f, "%s", text8.get());
 			f.close (& messageFile);
 		} catch (MelderError) {
@@ -1569,6 +2087,8 @@ static bool tryToSwitchToRunningPraat (bool foundTheOpenOption, bool foundTheSen
 		autofile f;
 		try {
 			f = Melder_fopen (& messageFile, "w");
+			if (praatP. fullTrust)
+				fprintf (f, "\n# --FULL-TRUST\n");
 			fprintf (f, "%s", text8.get());
 			f.close (& messageFile);
 		} catch (MelderError) {
@@ -2135,10 +2655,19 @@ void praat_init (conststring32 title,
 		praatP.menuBar = raam;
 		praat_addMenus (praatP.menuBar);
 
-		trace (U"creating the object list in the Objects window");
-		praatLabel_objects = GuiLabel_createShown (raam, 3, -250, Machine_getMenuBarBottom () + 5, Machine_getMenuBarBottom () + 5 + Gui_LABEL_HEIGHT, U"Objects:", 0);
-		praatList_objects = GuiList_create (raam, 0, -250, Machine_getMenuBarBottom () + 26, -100, true, U" Objects ");
+		trace (U"creating the object list and top toolbar in the Objects window");
+		const int topBarY = Machine_getMenuBarBottom () + 5;
+		const int topBarH = 28;
+		praatButton_record = GuiButton_createShown (raam, 4, 82, topBarY, topBarY + topBarH,
+			praat_translate (U"Record"), gui_cb_topButton_record, nullptr, 0);
+		praatButton_open = GuiButton_createShown (raam, 86, 168, topBarY, topBarY + topBarH,
+			praat_translate (U"Open..."), gui_cb_topButton_open, nullptr, 0);
+		praatButton_save = GuiButton_createShown (raam, 172, 250, topBarY, topBarY + topBarH,
+			praat_translate (U"Save"), gui_cb_topButton_save, nullptr, 0);
+
+		praatList_objects = GuiList_create (raam, 0, -250, topBarY + topBarH + 4, -114, true, U" Objects ");
 		GuiList_setSelectionChangedCallback (praatList_objects, gui_cb_list_selectionChanged, nullptr);
+		GuiList_setContextMenuCallback (praatList_objects, gui_cb_list_contextMenu, nullptr);
 		GuiThing_show (praatList_objects);
 		praat_addFixedButtons (raam);
 

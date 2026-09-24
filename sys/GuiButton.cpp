@@ -80,6 +80,348 @@ Thing_implement (GuiButton, GuiControl, 0);
 		}
 		return false;
 	}
+
+	static const wchar_t *getButtonIconGlyph (const wchar_t *text) {
+		if (! text || text [0] == L'\0') return nullptr;
+		while (*text == L'+' || *text == 0x207A || *text == L' ' || *text == L'\t') text ++;
+
+		#define MATCHES(t) (wcsstr (text, t) != nullptr)
+		if (MATCHES (L"View & Edit") || MATCHES (L"查看与编辑") || MATCHES (L"查看并编辑") ||
+		    MATCHES (L"Edit alone") || MATCHES (L"Edit...") || wcscmp (text, L"Edit") == 0 || wcscmp (text, L"编辑") == 0)
+			return L"\uE70F";   // Edit pencil
+
+		if (MATCHES (L"Play") || MATCHES (L"播放"))
+			return L"\uE768";   // Play triangle
+
+		if (MATCHES (L"Stop") || MATCHES (L"停止"))
+			return L"\uE71A";   // Stop square
+
+		if (MATCHES (L"Rename") || MATCHES (L"重命名"))
+			return L"\uE8EC";   // Clean tag icon
+
+		if (MATCHES (L"Copy") || MATCHES (L"复制"))
+			return L"\uE8C8";   // Copy pages
+
+		if (MATCHES (L"Remove") || MATCHES (L"删除") || MATCHES (L"移除"))
+			return L"\uE74D";   // Trash can
+
+		if (MATCHES (L"Inspect") || MATCHES (L"检查"))
+			return L"\uE721";   // Magnifying glass
+
+		if (MATCHES (L"Info") || MATCHES (L"信息"))
+			return L"\uE946";   // Info circle
+
+		if (MATCHES (L"Bilingual") || MATCHES (L"双语") || MATCHES (L"对照表") || MATCHES (L"术语对照表"))
+			return L"\uF2B7";   // Globe with A and 字 (Bilingual Translation)
+
+		if (MATCHES (L"Tabulate") || MATCHES (L"制表"))
+			return L"\uF0E3";   // Tabulate / Report checklist
+
+		if (MATCHES (L"Table") || MATCHES (L"表格"))
+			return L"\uE80A";   // Grid table
+
+		if (MATCHES (L"Record") || MATCHES (L"录音") || MATCHES (L"录制"))
+			return L"\uE720";   // Microphone
+
+		if (MATCHES (L"Draw") || MATCHES (L"绘制"))
+			return L"\uE90A";   // Paint brush
+
+		if (MATCHES (L"Query") || MATCHES (L"查询"))
+			return L"\uE721";   // Search
+
+		if (MATCHES (L"Modify") || MATCHES (L"修改"))
+			return L"\uE790";   // Settings wrench
+
+		if (MATCHES (L"Apply") || MATCHES (L"应用"))
+			return L"\uE895";   // Refresh / Sync / Update (distinct from OK)
+
+		if (MATCHES (L"Pause") || MATCHES (L"暂停"))
+			return L"\uE769";   // Pause double bars
+
+		if (wcscmp (text, L"OK") == 0 || wcscmp (text, L"确定") == 0)
+			return L"\uE73E";   // OK check
+
+		if (wcscmp (text, L"Cancel") == 0 || wcscmp (text, L"取消") == 0 ||
+		    wcscmp (text, L"Close") == 0 || wcscmp (text, L"关闭") == 0)
+			return L"\uE711";   // Close X
+
+		if (MATCHES (L"Help") || MATCHES (L"帮助"))
+			return L"\uE897";   // Help question mark
+
+		if (MATCHES (L"Save") || MATCHES (L"保存") || MATCHES (L"Write") || MATCHES (L"写入"))
+			return L"\uE74E";   // Save disk
+
+		if (MATCHES (L"Open") || MATCHES (L"打开"))
+			return L"\uE8E5";   // Folder open
+
+		// Zoom buttons (FunctionEditor bottom-left controls)
+		if (wcscmp (text, L"all") == 0 || wcscmp (text, L"全部") == 0 || wcscmp (text, L"All") == 0 ||
+		    MATCHES (L"Show all") || MATCHES (L"显示全部"))
+			return L"\uE9A6";   // Fit page / Fit to window (enclosing bounds)
+
+		if (wcscmp (text, L"in") == 0 || wcscmp (text, L"放大") == 0 || MATCHES (L"Zoom in"))
+			return L"\uE8A3";   // Zoom in (+)
+
+		if (wcscmp (text, L"out") == 0 || wcscmp (text, L"缩小") == 0 || MATCHES (L"Zoom out"))
+			return L"\uE71F";   // Zoom out (-)
+
+		if (wcscmp (text, L"sel") == 0 || wcscmp (text, L"选择") == 0 || MATCHES (L"Zoom to selection") || MATCHES (L"缩放到选区"))
+			return L"\uE740";   // FullScreen / Expand selection to full window
+
+		if (wcscmp (text, L"bak") == 0 || wcscmp (text, L"返回") == 0 || wcscmp (text, L"back") == 0 || MATCHES (L"Zoom back") || MATCHES (L"缩放返回"))
+			return L"\uE72B";   // Back arrow (<-)
+
+		#undef MATCHES
+		return nullptr;
+	}
+
+	static LRESULT CALLBACK _ModernButtonSubclassProc (
+		HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+		UINT_PTR uIdSubclass, DWORD_PTR dwRefData
+	) {
+		switch (uMsg) {
+			case WM_MOUSEMOVE: {
+				TRACKMOUSEEVENT tme;
+				tme.cbSize = sizeof (TRACKMOUSEEVENT);
+				tme.dwFlags = TME_LEAVE;
+				tme.hwndTrack = hwnd;
+				tme.dwHoverTime = 0;
+				TrackMouseEvent (& tme);
+
+				if (! GetPropW (hwnd, L"PraatHover")) {
+					SetPropW (hwnd, L"PraatHover", (HANDLE) 1);
+					InvalidateRect (hwnd, nullptr, FALSE);
+				}
+
+				LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+				if (GetCapture () == hwnd) {
+					InvalidateRect (hwnd, nullptr, FALSE);
+					UpdateWindow (hwnd);
+				}
+				return res;
+			}
+			case WM_MOUSELEAVE: {
+				if (GetPropW (hwnd, L"PraatHover")) {
+					RemovePropW (hwnd, L"PraatHover");
+					InvalidateRect (hwnd, nullptr, FALSE);
+				}
+				break;
+			}
+			case WM_LBUTTONDOWN: {
+				LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+				InvalidateRect (hwnd, nullptr, FALSE);
+				UpdateWindow (hwnd);
+				return res;
+			}
+			case WM_LBUTTONUP: {
+				LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+				InvalidateRect (hwnd, nullptr, FALSE);
+				UpdateWindow (hwnd);
+				return res;
+			}
+			case WM_CAPTURECHANGED: {
+				LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+				InvalidateRect (hwnd, nullptr, FALSE);
+				UpdateWindow (hwnd);
+				return res;
+			}
+			case BM_SETSTATE: {
+				LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+				InvalidateRect (hwnd, nullptr, FALSE);
+				UpdateWindow (hwnd);
+				return res;
+			}
+			case WM_SETFOCUS:
+			case WM_KILLFOCUS:
+			case WM_ENABLE: {
+				LRESULT res = DefSubclassProc (hwnd, uMsg, wParam, lParam);
+				InvalidateRect (hwnd, nullptr, FALSE);
+				return res;
+			}
+
+			case WM_ERASEBKGND:
+				return 1;   // Double-buffered in WM_PAINT to prevent flicker
+
+			case WM_PAINT: {
+				PAINTSTRUCT ps;
+				HDC hdc = BeginPaint (hwnd, & ps);
+				if (! hdc)
+					return 0;
+
+				RECT rc;
+				GetClientRect (hwnd, & rc);
+				if (rc.right <= 0 || rc.bottom <= 0) {
+					EndPaint (hwnd, & ps);
+					return 0;
+				}
+
+				// Double buffering: create memory DC & bitmap
+				HDC memDC = CreateCompatibleDC (hdc);
+				HBITMAP memBmp = CreateCompatibleBitmap (hdc, rc.right, rc.bottom);
+				HBITMAP oldBmp = (HBITMAP) SelectObject (memDC, memBmp);
+
+				// Fill background with window background color so rounded corners blend seamlessly
+				FillRect (memDC, & rc, theWinGuiBackgroundBrush ());
+
+				bool isEnabled = IsWindowEnabled (hwnd);
+				bool isPressed = (SendMessage (hwnd, BM_GETSTATE, 0, 0) & BST_PUSHED) != 0 && isEnabled;
+
+				POINT pt;
+				GetCursorPos (& pt);
+				ScreenToClient (hwnd, & pt);
+				bool isCursorInside = PtInRect (& rc, pt);
+
+				bool isHovered = isCursorInside && isEnabled;
+				bool isFocus   = (GetFocus () == hwnd) && isEnabled;
+				bool isDefault = (dwRefData & (GuiButton_DEFAULT | GuiButton_ATTRACTIVE)) != 0;
+
+				COLORREF bgCol, borderCol, textCol, bottomLineCol;
+				if (! isEnabled) {
+					bgCol         = RGB (248, 249, 250);   // #F8F9FA
+					borderCol     = RGB (226, 232, 240);   // #E2E8F0
+					textCol       = RGB (156, 163, 175);   // #9CA3AF
+					bottomLineCol = borderCol;
+				} else if (isDefault) {
+					// Windows 11 Fluent Primary Blue Accent
+					if (isPressed) {
+						bgCol     = RGB (0, 95, 184);      // #005FB8
+						borderCol = RGB (0, 78, 152);
+					} else if (isHovered) {
+						bgCol     = RGB (24, 115, 196);    // #1873C4
+						borderCol = RGB (0, 95, 184);
+					} else {
+						bgCol     = RGB (0, 103, 192);     // #0067C0
+						borderCol = RGB (0, 95, 184);
+					}
+					textCol       = RGB (255, 255, 255);
+					bottomLineCol = borderCol;
+				} else {
+					// Modern Flat Card Button
+					if (isPressed) {
+						bgCol         = RGB (226, 232, 240);   // #E2E8F0
+						borderCol     = RGB (148, 163, 184);   // #94A3B8
+						bottomLineCol = borderCol;
+					} else if (isHovered) {
+						bgCol         = RGB (241, 245, 249);   // #F1F5F9
+						borderCol     = RGB (148, 163, 184);   // #94A3B8
+						bottomLineCol = borderCol;
+					} else if (isFocus) {
+						bgCol         = RGB (255, 255, 255);   // #FFFFFF
+						borderCol     = RGB (0, 103, 192);     // #0067C0 Fluent Blue border
+						bottomLineCol = borderCol;
+					} else {
+						bgCol         = RGB (255, 255, 255);   // #FFFFFF Crisp Card
+						borderCol     = RGB (209, 213, 219);   // #D1D5DB Subtle Border
+						bottomLineCol = RGB (190, 195, 203);   // Subtle 3D depth
+					}
+					textCol = RGB (31, 41, 55);                // #1F2937 Clean Dark Slate
+				}
+
+				// Draw modern rounded rectangle with GDI+ for perfectly uniform borders on all 4 sides
+				_GuiWin_ensureGdiplus ();
+				{
+					Gdiplus::Graphics g (memDC);
+					g.SetSmoothingMode (Gdiplus::SmoothingModeAntiAlias);
+					g.SetPixelOffsetMode (Gdiplus::PixelOffsetModeHighQuality);
+
+					float strokeW = isFocus ? 1.5f : 1.0f;
+					float x = strokeW / 2.0f;
+					float y = strokeW / 2.0f;
+					float w = (float) rc.right - strokeW;
+					float h = (float) rc.bottom - strokeW;
+					float r = 5.0f;
+					if (r * 2.0f > h) r = h / 2.0f;
+					if (r * 2.0f > w) r = w / 2.0f;
+
+					Gdiplus::GraphicsPath path;
+					path.AddArc (x, y, r * 2.0f, r * 2.0f, 180.0f, 90.0f);
+					path.AddArc (x + w - r * 2.0f, y, r * 2.0f, r * 2.0f, 270.0f, 90.0f);
+					path.AddArc (x + w - r * 2.0f, y + h - r * 2.0f, r * 2.0f, r * 2.0f, 0.0f, 90.0f);
+					path.AddArc (x, y + h - r * 2.0f, r * 2.0f, r * 2.0f, 90.0f, 90.0f);
+					path.CloseFigure ();
+
+					Gdiplus::SolidBrush bgBrush (Gdiplus::Color (255, GetRValue (bgCol), GetGValue (bgCol), GetBValue (bgCol)));
+					Gdiplus::Pen borderPen (Gdiplus::Color (255, GetRValue (borderCol), GetGValue (borderCol), GetBValue (borderCol)), strokeW);
+
+					g.FillPath (& bgBrush, & path);
+					g.DrawPath (& borderPen, & path);
+				}
+
+				// Draw Button Text & Icon
+				WCHAR textBuf [512];
+				int textLen = GetWindowTextW (hwnd, textBuf, 512);
+				if (textLen > 0) {
+					HFONT hFont = (isDefault ? theWinGuiBoldLabelFont () : theWinGuiNormalLabelFont ());
+					HFONT oldFont = (HFONT) SelectObject (memDC, hFont);
+					SetBkMode (memDC, TRANSPARENT);
+					SetTextColor (memDC, textCol);
+
+					RECT textRc = rc;
+					int boxW = rc.right - rc.left;
+					const bool isCompact = (boxW <= 48);
+					// Inset slightly to prevent text clipping
+					InflateRect (& textRc, isCompact ? -2 : -3, 0);
+					if (isPressed)
+						OffsetRect (& textRc, 0, 1);
+
+					const wchar_t *iconGlyph = getButtonIconGlyph (textBuf);
+					if (iconGlyph && ! (dwRefData & GuiButton_MULTILINE)) {
+						const int iconW = isCompact ? 11 : 13;
+						const int gap = isCompact ? 2 : (boxW <= 64 ? 4 : 6);
+						SIZE szText;
+						GetTextExtentPoint32W (memDC, textBuf, textLen, & szText);
+						int totalW = iconW + gap + szText.cx;
+						int innerBoxW = textRc.right - textRc.left;
+						int startX = textRc.left + (innerBoxW - totalW) / 2;
+						if (startX < textRc.left + 1)
+							startX = textRc.left + 1;
+
+						// 1. Draw Icon
+						HFONT hIconFont = theWinGuiIconFont (isCompact ? -10 : -12);
+						SelectObject (memDC, hIconFont);
+						RECT rcIcon = { startX, textRc.top, startX + iconW, textRc.bottom };
+						DrawTextW (memDC, iconGlyph, -1, & rcIcon, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+						// 2. Draw Text
+						SelectObject (memDC, hFont);
+						RECT rcLabel = { startX + iconW + gap, textRc.top, textRc.right - 1, textRc.bottom };
+						DrawTextW (memDC, textBuf, -1, & rcLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+					} else {
+						UINT drawFlags = DT_CENTER | DT_VCENTER;
+						if (dwRefData & GuiButton_MULTILINE)
+							drawFlags |= DT_WORDBREAK;
+						else
+							drawFlags |= DT_SINGLELINE | DT_NOPREFIX;
+
+						DrawTextW (memDC, textBuf, -1, & textRc, drawFlags);
+					}
+
+					SelectObject (memDC, oldFont);
+				}
+
+				BitBlt (hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
+
+				SelectObject (memDC, oldBmp);
+				DeleteObject (memBmp);
+				DeleteDC (memDC);
+				EndPaint (hwnd, & ps);
+				return 0;
+			}
+
+			case WM_NCDESTROY: {
+				RemovePropW (hwnd, L"PraatHover");
+				RemoveWindowSubclass (hwnd, _ModernButtonSubclassProc, uIdSubclass);
+				break;
+			}
+			default: break;
+		}
+		return DefSubclassProc (hwnd, uMsg, wParam, lParam);
+	}
+
+	void _GuiWin_subclassModernButton (HWND hwnd, uint32 flags) {
+		if (hwnd)
+			SetWindowSubclass (hwnd, _ModernButtonSubclassProc, 1, (DWORD_PTR) flags);
+	}
 #elif cocoa
 	@implementation GuiCocoaButton {
 		GuiButton d_userData;
@@ -178,6 +520,7 @@ GuiButton GuiButton_create (GuiForm parent, int left, int right, int top, int bo
 		);
 		SetWindowLongPtr (my d_widget -> window, GWLP_USERDATA, (LONG_PTR) my d_widget);
 		SetWindowFont (my d_widget -> window, flags & GuiButton_DEFAULT ? theWinGuiBoldLabelFont () : theWinGuiNormalLabelFont (), false);
+		_GuiWin_subclassModernButton (my d_widget -> window, flags);
 		my v_positionInForm (my d_widget, left, right, top, bottom, parent);
 		if (flags & GuiButton_DEFAULT || flags & GuiButton_ATTRACTIVE)
 			parent -> d_widget -> shell -> defaultButton = parent -> d_widget -> defaultButton = my d_widget;
