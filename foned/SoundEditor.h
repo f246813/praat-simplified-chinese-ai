@@ -35,7 +35,10 @@ Thing_define (SoundEditor, FunctionEditor) {
 	void v_createMenuItems_help (EditorMenu menu)
 		override;
 	void v_createMenus () override;
-	void v_createExtraToolbarButtons (int &x, int buttonWidth, int buttonSpacing) override;
+	int v_extraTopToolbarHeight () override {
+		return Gui_PUSHBUTTON_HEIGHT + 2 * FunctionEditor_TOP_TOOLBAR_MARGIN;
+	}
+	void v_createExtraTopToolbarButtons (int &x, int buttonWidth, int buttonSpacing, int y) override;
 	bool v_hasAiToolbar () override { return true; }
 	void v_distributeAreas () override {
 		if (our soundAnalysisArea() -> hasContentToShow ()) {

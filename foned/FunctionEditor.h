@@ -29,6 +29,7 @@ struct FunctionEditor_picture {
 };
 
 constexpr integer FunctionEditor_MAXIMUM_NUMBER_OF_FUNCTION_AREAS = 5;
+constexpr int FunctionEditor_TOP_TOOLBAR_MARGIN = 4;
 
 Thing_define (FunctionEditor, Editor) {
 	/*
@@ -175,6 +176,8 @@ Thing_define (FunctionEditor, Editor) {
 	void v_createChildren ()
 		override;
 	virtual void v_createExtraToolbarButtons (int & /* x */, int /* buttonWidth */, int /* buttonSpacing */) { }
+	virtual int v_extraTopToolbarHeight () { return 0; }
+	virtual void v_createExtraTopToolbarButtons (int & /* x */, int /* buttonWidth */, int /* buttonSpacing */, int /* y */) { }
 	void v_createMenuItems_help (EditorMenu)
 		override;
 	void v_updateMenuItems ()

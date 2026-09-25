@@ -81,8 +81,8 @@ void structSoundEditor :: v_createMenus () {
 	EditorMenu_addCommand (editMenu, U"VOT...", GuiMenu_HIDDEN, menu_cb_SoundEditor_VOT);
 }
 
-void structSoundEditor :: v_createExtraToolbarButtons (int &x, int buttonWidth, int buttonSpacing) {
-	GuiButton_createShown (our windowForm, x, x + buttonWidth, -4 - Gui_PUSHBUTTON_HEIGHT, -4,
+void structSoundEditor :: v_createExtraTopToolbarButtons (int &x, int buttonWidth, int buttonSpacing, int y) {
+	GuiButton_createShown (our windowForm, x, x + buttonWidth, y, y + Gui_PUSHBUTTON_HEIGHT,
 		U"VOT", gui_button_cb_vot, this, 0);
 	x += buttonWidth + buttonSpacing;
 }

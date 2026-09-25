@@ -28,6 +28,9 @@ FONED_MESON = PROJECT / "foned/meson.build"
 SOUND_ANALYSIS_AREA_SOURCE = PROJECT / "foned/SoundAnalysisArea.cpp"
 SOUND_ACTION_SOURCE = PROJECT / "fon/praat_Sound.cpp"
 SOUND_EDITOR_SOURCE = PROJECT / "foned/SoundEditor.cpp"
+SOUND_EDITOR_HEADER = PROJECT / "foned/SoundEditor.h"
+FUNCTION_EDITOR_SOURCE = PROJECT / "foned/FunctionEditor.cpp"
+FUNCTION_EDITOR_HEADER = PROJECT / "foned/FunctionEditor.h"
 PRAAT_TEST_SOURCE = PROJECT / "fon/Praat_tests.cpp"
 PRAAT_TEST_ENUMS = PROJECT / "fon/Praat_tests_enums.h"
 EDITOR_SOURCE = PROJECT / "foned/SegmentAcousticEditor.cpp"
@@ -179,6 +182,41 @@ def verify_vot_action_contract() -> None:
     )
     if editor_compact.count(required_toolbar_dispatch) != 1 or 'U"VOT", gui_button_cb_vot' not in editor_compact:
         raise AssertionError("SoundEditor VOT toolbar button must dispatch the hidden VOT command")
+
+    function_editor_header = FUNCTION_EDITOR_HEADER.read_text(encoding="utf-8")
+    function_editor_source = FUNCTION_EDITOR_SOURCE.read_text(encoding="utf-8")
+    sound_editor_header = SOUND_EDITOR_HEADER.read_text(encoding="utf-8")
+    if "virtual int v_extraTopToolbarHeight () { return 0; }" not in function_editor_header:
+        raise AssertionError("FunctionEditor top toolbar must reserve zero height by default")
+    function_editor_header_compact = re.sub(r"\s+", " ", function_editor_header)
+    if (
+        "virtual void v_createExtraTopToolbarButtons (int & /* x */, int /* buttonWidth */, int /* buttonSpacing */, int /* y */) { }"
+        not in function_editor_header_compact
+    ):
+        raise AssertionError("FunctionEditor must provide a no-op top toolbar hook for unrelated editors")
+    if "our v_extraTopToolbarHeight ()" not in function_editor_source:
+        raise AssertionError("FunctionEditor must reserve subclass top toolbar height")
+    if (
+        "aiToolbarTop + FunctionEditor_TOP_TOOLBAR_MARGIN" not in function_editor_source
+        or "our v_createExtraTopToolbarButtons (" not in function_editor_source
+    ):
+        raise AssertionError("FunctionEditor must place the extra toolbar below the menu bar")
+    if "contentTop = aiToolbarTop + extraTopToolbarHeight" not in function_editor_source:
+        raise AssertionError("FunctionEditor drawing area must begin below the reserved toolbar row")
+    if (
+        "int v_extraTopToolbarHeight () override" not in sound_editor_header
+        or "Gui_PUSHBUTTON_HEIGHT + 2 * FunctionEditor_TOP_TOOLBAR_MARGIN" not in sound_editor_header
+    ):
+        raise AssertionError("SoundEditor must enable the otherwise-zero top toolbar row")
+    if "v_createExtraTopToolbarButtons (int &x, int buttonWidth, int buttonSpacing, int y) override" not in sound_editor_header:
+        raise AssertionError("SoundEditor must create its VOT action in the top toolbar hook")
+    if (
+        "GuiButton_createShown (our windowForm, x, x + buttonWidth, y, y + Gui_PUSHBUTTON_HEIGHT,"
+        not in editor_compact
+        or 'U"VOT", gui_button_cb_vot' not in editor_compact
+        or "-4 - Gui_PUSHBUTTON_HEIGHT, -4" in editor_compact
+    ):
+        raise AssertionError("VOT must be in its own top row, not the bottom zoom toolbar")
 
     if "AnalysisResult_toInfoSummary" not in CORE_ANALYSIS_HEADER.read_text(encoding="utf-8"):
         raise AssertionError("VOT Info summary formatter is not part of the core contract")

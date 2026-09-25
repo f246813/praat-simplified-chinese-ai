@@ -1913,7 +1913,15 @@ static void gui_drawingarea_cb_mouse (FunctionEditor me, GuiDrawingArea_MouseEve
 void structFunctionEditor :: v_createChildren () {
 	int x = BUTTON_X;
 	const int aiToolbarTop = Machine_getMenuBarBottom ();
-	const int contentTop = aiToolbarTop;
+	const int extraTopToolbarHeight = our v_extraTopToolbarHeight ();
+	const int contentTop = aiToolbarTop + extraTopToolbarHeight;
+	if (extraTopToolbarHeight > 0) {
+		int topToolbarX = BUTTON_X;
+		our v_createExtraTopToolbarButtons (
+			topToolbarX, BUTTON_WIDTH, BUTTON_SPACING,
+			aiToolbarTop + FunctionEditor_TOP_TOOLBAR_MARGIN
+		);
+	}
 
 	/*
 		Create zoom buttons.
