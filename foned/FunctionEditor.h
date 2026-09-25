@@ -174,6 +174,7 @@ Thing_define (FunctionEditor, Editor) {
 		override;
 	void v_createChildren ()
 		override;
+	virtual void v_createExtraToolbarButtons (int & /* x */, int /* buttonWidth */, int /* buttonSpacing */) { }
 	void v_createMenuItems_help (EditorMenu)
 		override;
 	void v_updateMenuItems ()

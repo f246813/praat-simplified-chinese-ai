@@ -138,34 +138,6 @@ static std::optional<std::u32string> selectedObjectFilePath (integer objectPosit
 
 /***** SHARED SEGMENT ANALYSIS *****/
 
-FORM (INFO_ONE__Sound_VOT_INFO, U"VOT analysis", U"VOT...") {
-	REAL_OR_UNDEFINED (startTime, U"Start time (s); undefined means Sound start", U"undefined")
-	REAL_OR_UNDEFINED (endTime, U"End time (s); undefined means Sound end", U"undefined")
-	REAL_OR_UNDEFINED (burstTime, U"Burst/release time (s); undefined for a candidate", U"undefined")
-	REAL_OR_UNDEFINED (voicingTime, U"Voicing onset time (s); undefined for a candidate", U"undefined")
-	REAL (burstThresholdDb, U"Minimum burst rise (dB)", U"6.0")
-	REAL (pitchFloorHz, U"Pitch floor (Hz)", U"75.0")
-	OK
-DO
-	FIND_ONE_WITH_IOBJECT (Sound)
-	try {
-		const double actualStartTime = isundef (startTime) ? my xmin : startTime;
-		const double actualEndTime = isundef (endTime) ? my xmax : endTime;
-		VOTCandidateSettings settings;
-		settings.burstThresholdDb = burstThresholdDb;
-		settings.pitchFloorHz = pitchFloorHz;
-		const AnalysisResult result = praat_Sound_analyseVOT (me, actualStartTime, actualEndTime,
-			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings,
-			SourceKind::sound, FULL_NAME, ID, selectedObjectFilePath (IOBJECT));
-		autoMelderString summary;
-		AnalysisResult_toInfoSummary (result, & summary);
-		Melder_information (summary.string);
-	} catch (const std::exception &error) {
-		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
-	}
-END_NO_NEW_DATA
-}
-
 FORM (WRITE_ONE__Sound_VOT_TSV, U"VOT analysis", U"Write VOT analysis to file...") {
 	REAL_OR_UNDEFINED (startTime, U"Start time (s); undefined means Sound start", U"undefined")
 	REAL_OR_UNDEFINED (endTime, U"End time (s); undefined means Sound end", U"undefined")
@@ -186,33 +158,6 @@ DO
 		praat_Sound_writeVOTAnalysisToFile (me, actualStartTime, actualEndTime,
 			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, resultFileName,
 			SourceKind::sound, FULL_NAME, ID, selectedObjectFilePath (IOBJECT));
-	} catch (const std::exception &error) {
-		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
-	}
-END_NO_NEW_DATA
-}
-
-FORM (INFO_ONE__LongSound_VOT_INFO, U"VOT analysis", U"VOT...") {
-	REAL_OR_UNDEFINED (startTime, U"Start time (s); undefined means LongSound start", U"undefined")
-	REAL_OR_UNDEFINED (endTime, U"End time (s); undefined means LongSound end", U"undefined")
-	REAL_OR_UNDEFINED (burstTime, U"Burst/release time (s); undefined for a candidate", U"undefined")
-	REAL_OR_UNDEFINED (voicingTime, U"Voicing onset time (s); undefined for a candidate", U"undefined")
-	REAL (burstThresholdDb, U"Minimum burst rise (dB)", U"6.0")
-	REAL (pitchFloorHz, U"Pitch floor (Hz)", U"75.0")
-	OK
-DO
-	FIND_ONE_WITH_IOBJECT (LongSound)
-	try {
-		const double actualStartTime = isundef (startTime) ? my xmin : startTime;
-		const double actualEndTime = isundef (endTime) ? my xmax : endTime;
-		VOTCandidateSettings settings;
-		settings.burstThresholdDb = burstThresholdDb;
-		settings.pitchFloorHz = pitchFloorHz;
-		const AnalysisResult result = praat_LongSound_analyseVOT (me, actualStartTime, actualEndTime,
-			optionalVotBoundary (burstTime), optionalVotBoundary (voicingTime), settings, ID);
-		autoMelderString summary;
-		AnalysisResult_toInfoSummary (result, & summary);
-		Melder_information (summary.string);
 	} catch (const std::exception &error) {
 		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
 	}
@@ -2572,9 +2517,7 @@ void praat_Sound_init () {
 				HELP__AnnotationTutorial);
 		praat_addAction1 (classLongSound, 0, U"-- to text grid --", nullptr, 1, nullptr);
 		praat_addAction1 (classLongSound, 0, U"To TextGrid...", nullptr, 1, NEW_LongSound_to_TextGrid);
-	praat_addAction1 (classLongSound, 0, U"VOT -", nullptr, 0, nullptr);
-		praat_addAction1 (classLongSound, 0, U"VOT...", nullptr, 1, INFO_ONE__LongSound_VOT_INFO);
-		praat_addAction1 (classLongSound, 0, U"Write VOT analysis to file...", nullptr,
+	praat_addAction1 (classLongSound, 0, U"Write VOT analysis to file...", nullptr,
 				GuiMenu_DEPTH_1 | GuiMenu_HIDDEN, WRITE_ONE__LongSound_VOT_TSV);
 	praat_addAction1 (classLongSound, 0, U"Convert to Sound", nullptr, 0, nullptr);
 	praat_addAction1 (classLongSound, 0, U"Extract part...", nullptr, 0, NEW_LongSound_extractPart);
@@ -2776,9 +2719,7 @@ void praat_Sound_init () {
 				CONVERT_EACH_TO_ONE__Sound_to_TextTier);
 		praat_addAction1 (classSound, 0, U"To IntervalTier", nullptr, GuiMenu_DEPTH_1 | GuiMenu_HIDDEN,
 				CONVERT_EACH_TO_ONE__Sound_to_IntervalTier);
-	praat_addAction1 (classSound, 0, U"VOT -", nullptr, 0, nullptr);
-		praat_addAction1 (classSound, 0, U"VOT...", nullptr, 1, INFO_ONE__Sound_VOT_INFO);
-		praat_addAction1 (classSound, 0, U"Write VOT analysis to file...", nullptr,
+	praat_addAction1 (classSound, 0, U"Write VOT analysis to file...", nullptr,
 				GuiMenu_DEPTH_1 | GuiMenu_HIDDEN, WRITE_ONE__Sound_VOT_TSV);
 	praat_addAction1 (classSound, 0, U"Analyse periodicity -", nullptr, 0, nullptr);
 		praat_addAction1 (classSound, 0, U"How to choose a pitch analysis method", nullptr, 1,

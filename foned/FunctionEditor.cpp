@@ -1932,12 +1932,14 @@ void structFunctionEditor :: v_createChildren () {
 	x += BUTTON_WIDTH + BUTTON_SPACING;
 	GuiButton_createShown (our windowForm, x, x + BUTTON_WIDTH, -4 - Gui_PUSHBUTTON_HEIGHT, -4,
 		U"bak", gui_button_cb_zoomBack, this, 0);
+	x += BUTTON_WIDTH + BUTTON_SPACING;
+	our v_createExtraToolbarButtons (x, BUTTON_WIDTH, BUTTON_SPACING);
 
 	/*
 		Create scroll bar.
 	*/
 	our scrollBar = GuiScrollBar_createShown (our windowForm,
-		x += BUTTON_WIDTH + BUTTON_SPACING, -80 - BUTTON_SPACING, -4 - Gui_PUSHBUTTON_HEIGHT, 0,
+		x, -80 - BUTTON_SPACING, -4 - Gui_PUSHBUTTON_HEIGHT, 0,
 		1, maximumScrollBarValue, 1, maximumScrollBarValue - 1, 1, 1,
 		gui_cb_scroll, this, GuiScrollBar_HORIZONTAL);
 
