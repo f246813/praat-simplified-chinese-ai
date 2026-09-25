@@ -78,7 +78,7 @@ static void gui_button_cb_vot (SoundEditor me, GuiButtonEvent /* event */) {
 
 void structSoundEditor :: v_createMenus () {
 	SoundEditor_Parent :: v_createMenus ();
-	Editor_addCommand (this, U"Query", U"VOT...", GuiMenu_HIDDEN, menu_cb_SoundEditor_VOT);
+	EditorMenu_addCommand (editMenu, U"VOT...", GuiMenu_HIDDEN, menu_cb_SoundEditor_VOT);
 }
 
 void structSoundEditor :: v_createExtraToolbarButtons (int &x, int buttonWidth, int buttonSpacing) {

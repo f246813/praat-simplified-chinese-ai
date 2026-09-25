@@ -27,6 +27,7 @@ FONED_MAKEFILE = PROJECT / "foned/Makefile"
 FONED_MESON = PROJECT / "foned/meson.build"
 SOUND_ANALYSIS_AREA_SOURCE = PROJECT / "foned/SoundAnalysisArea.cpp"
 SOUND_ACTION_SOURCE = PROJECT / "fon/praat_Sound.cpp"
+SOUND_EDITOR_SOURCE = PROJECT / "foned/SoundEditor.cpp"
 PRAAT_TEST_SOURCE = PROJECT / "fon/Praat_tests.cpp"
 PRAAT_TEST_ENUMS = PROJECT / "fon/Praat_tests_enums.h"
 EDITOR_SOURCE = PROJECT / "foned/SegmentAcousticEditor.cpp"
@@ -154,20 +155,6 @@ def verify_vot_action_contract() -> None:
     source = SOUND_ACTION_SOURCE.read_text(encoding="utf-8")
     compact = re.sub(r"\s+", " ", source)
     for object_class in ("Sound", "LongSound"):
-        group = f'praat_addAction1 (class{object_class}, 0, U"VOT -", nullptr, 0, nullptr);'
-        if compact.count(group) != 1:
-            raise AssertionError(f"{object_class} must have exactly one VOT object-menu group")
-
-    for object_class, callback in (
-        ("Sound", "INFO_ONE__Sound_VOT_INFO"),
-        ("LongSound", "INFO_ONE__LongSound_VOT_INFO"),
-    ):
-        visible = (
-            f'praat_addAction1 (class{object_class}, 0, U"VOT...", nullptr, '
-            f'1, {callback});'
-        )
-        if compact.count(visible) != 1:
-            raise AssertionError(f"{object_class} must register exactly one visible VOT Info action")
         hidden = (
             f'praat_addAction1 (class{object_class}, 0, U"Write VOT analysis to file...", nullptr, '
             f'GuiMenu_DEPTH_1 | GuiMenu_HIDDEN, WRITE_ONE__{object_class}_VOT_TSV);'
@@ -175,22 +162,24 @@ def verify_vot_action_contract() -> None:
         if compact.count(hidden) != 1:
             raise AssertionError(f"{object_class} must register exactly one hidden AI TSV action")
 
-        form_start = source.find(f"FORM ({callback}")
-        if form_start < 0:
-            raise AssertionError(f"{object_class} visible VOT form is missing")
-        form_end = source.find("END_NO_NEW_DATA", form_start)
-        form = source[form_start:form_end]
-        if "OUTFILE" in form:
-            raise AssertionError(f"{object_class} visible VOT form still asks for an output path")
-        if "Melder_information" not in form:
-            raise AssertionError(f"{object_class} visible VOT action does not show an Info result")
+    if 'U"VOT..."' in compact:
+        raise AssertionError("the VOT form must be exposed from the SoundEditor toolbar, not the Objects menu")
 
-    editor_source = SOUND_ANALYSIS_AREA_SOURCE.read_text(encoding="utf-8")
-    if "VOT..." in editor_source or "Write VOT analysis to file..." in editor_source:
-        raise AssertionError("VOT actions must be registered on Sound/LongSound objects, not the editor")
+    editor_source = SOUND_EDITOR_SOURCE.read_text(encoding="utf-8")
+    editor_compact = re.sub(r"\s+", " ", editor_source)
+    required_editor_registration = (
+        'EditorMenu_addCommand (editMenu, U"VOT...", GuiMenu_HIDDEN, menu_cb_SoundEditor_VOT);'
+    )
+    if editor_compact.count(required_editor_registration) != 1:
+        raise AssertionError("SoundEditor must register one hidden VOT command on its existing Edit menu")
+    if 'Editor_addCommand (this, U"Query", U"VOT..."' in editor_compact:
+        raise AssertionError("SoundEditor must not register VOT on a nonexistent Query menu")
+    required_toolbar_dispatch = (
+        'Editor_doMenuCommand (me, U"VOT...", 0, nullptr, nullptr, nullptr);'
+    )
+    if editor_compact.count(required_toolbar_dispatch) != 1 or 'U"VOT", gui_button_cb_vot' not in editor_compact:
+        raise AssertionError("SoundEditor VOT toolbar button must dispatch the hidden VOT command")
 
-    if "AnalysisResult_toInfoSummary" not in source:
-        raise AssertionError("Sound actions do not use the VOT Info summary formatter")
     if "AnalysisResult_toInfoSummary" not in CORE_ANALYSIS_HEADER.read_text(encoding="utf-8"):
         raise AssertionError("VOT Info summary formatter is not part of the core contract")
     if "CHECK_SEGMENT_VOT_INFO_SUMMARY" not in PRAAT_TEST_ENUMS.read_text(encoding="utf-8"):

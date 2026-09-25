@@ -305,9 +305,9 @@ foned/FunctionEditor.cpp:2107    PraatAiControl_noteEditorSelection (…)
 
 ## 7. VOT 分析（2026-09）
 
-共享 VOT 分析核心位于 `fon/SegmentAcousticAnalysis.h/.cpp`。Sound 和 LongSound 对象菜单各有
-一个 **VOT** 动作：有人工爆破/浊音边界时在 Info 中显示确认的 VOT；否则显示自动候选，并明确
-标为需要人工复核。LongSound 会保留原始绝对时间。
+共享 VOT 分析核心位于 `fon/SegmentAcousticAnalysis.h/.cpp`。Sound 和 LongSound 共用
+SoundEditor 工具栏中的 **VOT** 按钮：有人工爆破/浊音边界时在 Info 中显示确认的 VOT；否则显示自动
+候选，并明确标为需要人工复核。LongSound 会保留原始绝对时间。
 
 AI 的 `vot` 工具调用同一 C++ 分析核心，并通过隐藏的 `Write VOT analysis to file...` 动作将
 结果写入唯一临时 TSV，再由 Python 读取。该 TSV 仅用于内部桥接，没有用户可见的导出入口。
@@ -324,10 +324,10 @@ $env:MSYSTEM = 'CLANG64'
 # 然后从 MSYS2 CLANG64 shell 构建：make PRAAT_COMPILER=clang -j16
 ```
 
-`verify_segment_analysis_templates.py` 会运行 VOT C++ 回归和生成的 AI 模板，并检查 Sound/LongSound
-动作注册：每类对象各有一个可见 Info 动作和一个仅供 AI 使用的隐藏 TSV 动作。GUI 验收可在对象
-列表选中 Sound 或 LongSound，打开 Objects → VOT，确认 Info 中显示测量值或带人工复核提示的
-候选结果；AI 侧的临时 TSV 由工具自动管理，不需用户导出。
+`verify_segment_analysis_templates.py` 会运行 VOT C++ 回归和生成的 AI 模板，并检查 SoundEditor 的隐藏
+VOT 命令注册在现有 Edit 菜单，工具栏按钮能分发该命令，以及 Sound/LongSound 各自保留仅供 AI 使用的
+隐藏 TSV 动作。GUI 验收用 Sound 的 View & Edit 和 LongSound 的 View 分别打开共享编辑器，触发工具栏 VOT 按钮，确认
+Info 中显示测量值或带人工复核提示的候选结果；AI 侧的临时 TSV 由工具自动管理，不需用户导出。
 
 科学验收仍需带人工边界标注的真实普通话样本，核对爆破与浊音起始边界及候选准确性；合成 VOT
 只能验证工程链路，不能替代真实录音复核或证明测量有效性。
