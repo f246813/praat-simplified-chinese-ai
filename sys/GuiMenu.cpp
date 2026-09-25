@@ -505,6 +505,40 @@ GuiMenu GuiMenu_createInWindow (GuiWindow window, conststring32 title, uint32 fl
 	return me.releaseToAmbiguousOwner();
 }
 
+int GuiMenu_getTitleX (GuiMenu me) {
+	#if gtk
+		GtkAllocation allocation;
+		gtk_widget_get_allocation (GTK_WIDGET (my d_gtkMenuTitle), & allocation);
+		return allocation.x;
+	#elif motif
+		Position x = 0;
+		XtVaGetValues (my d_xmMenuTitle, XmNx, & x, nullptr);
+		return x;
+	#elif cocoa
+		return (int) [(NSView *) my d_cocoaMenuButton frame]. origin. x;
+	#else
+		(void) me;
+		return 0;
+	#endif
+}
+
+int GuiMenu_getTitleWidth (GuiMenu me) {
+	#if gtk
+		GtkAllocation allocation;
+		gtk_widget_get_allocation (GTK_WIDGET (my d_gtkMenuTitle), & allocation);
+		return allocation.width;
+	#elif motif
+		Dimension width = 0;
+		XtVaGetValues (my d_xmMenuTitle, XmNwidth, & width, nullptr);
+		return width;
+	#elif cocoa
+		return (int) [(NSView *) my d_cocoaMenuButton frame]. size. width;
+	#else
+		(void) me;
+		return 0;
+	#endif
+}
+
 GuiMenu GuiMenu_createInMenu (GuiMenu supermenu, conststring32 title, uint32 flags) {
 	autoGuiMenu me = Thing_new (GuiMenu);
 	my d_shell = supermenu -> d_shell;

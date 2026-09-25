@@ -220,6 +220,26 @@ void GuiControl_move (GuiControl me, int x, int y) {
 	#elif motif
 		XtVaSetValues (my d_widget, XmNx, (Position) x, XmNy, (Position) y, nullptr);   // 64-bit-compatible
 	#elif cocoa
+		NSView *widgetView = (NSView *) my d_widget;
+		[widgetView   setFrameOrigin: NSMakePoint (x, y)];
+	#endif
+}
+
+void GuiControl_moveX (GuiControl me, int x) {
+	#if gtk
+		GuiObject parent = gtk_widget_get_parent (GTK_WIDGET (my d_widget));
+		if (GTK_IS_FIXED (parent)) {
+			gint y;
+			gtk_fixed_get_child_position (GTK_FIXED (parent), GTK_WIDGET (my d_widget), nullptr, & y);
+			gtk_fixed_move (GTK_FIXED (parent), GTK_WIDGET (my d_widget), x, y);
+		}
+	#elif motif
+		XtVaSetValues (my d_widget, XmNx, (Position) x, nullptr);
+	#elif cocoa
+		NSView *widgetView = (NSView *) my d_widget;
+		NSRect frame = [widgetView frame];
+		frame. origin. x = x;
+		[widgetView   setFrame: frame];
 	#endif
 }
 

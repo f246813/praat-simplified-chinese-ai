@@ -142,7 +142,8 @@ EditorMenu Editor_addMenu (Editor me, conststring32 menuTitle, uint32 flags) {
 	return my menus. addItem_move (thee.move());
 }
 
-/*GuiObject EditorMenu_getMenuWidget (EditorMenu me) { return my menuWidget; }*/
+int EditorMenu_getTitleX (EditorMenu me) { return GuiMenu_getTitleX (my menuWidget); }
+int EditorMenu_getTitleWidth (EditorMenu me) { return GuiMenu_getTitleWidth (my menuWidget); }
 
 GuiMenuItem Editor_addCommand (Editor me, conststring32 menuTitle, conststring32 itemTitle, uint32 flags, EditorCommandCallback commandCallback)
 {
@@ -173,6 +174,9 @@ static EditorMenu findMenu (Editor me, conststring32 menuTitle) {
 			return menu;
 	}
 	return nullptr;
+}
+EditorMenu Editor_getMenu (Editor me, conststring32 menuTitle) {
+	return findMenu (me, menuTitle);
 }
 static GuiMenuItem EditorMenu_addCommandScript (EditorMenu me, conststring32 itemTitle, uint32 flags, conststring32 script) {
 	autoEditorCommand cmd = Thing_new (EditorCommand);

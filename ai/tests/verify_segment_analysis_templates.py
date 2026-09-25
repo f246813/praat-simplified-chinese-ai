@@ -217,6 +217,21 @@ def verify_vot_action_contract() -> None:
         or "-4 - Gui_PUSHBUTTON_HEIGHT, -4" in editor_compact
     ):
         raise AssertionError("VOT must be in its own top row, not the bottom zoom toolbar")
+    if "GuiButton votToolbarButton;" not in sound_editor_header:
+        raise AssertionError("SoundEditor must retain its VOT toolbar button for positioning after menu creation")
+    if "bool votToolbarPositioned = false;" not in sound_editor_header:
+        raise AssertionError("SoundEditor must retry menu-relative positioning after initial GUI layout")
+    if (
+        "Editor_getMenu (this, U\"Pulses\")" not in editor_compact
+        or "Editor_getMenu (this, U\"Alignment\")" not in editor_compact
+        or "EditorMenu_getTitleX" not in editor_compact
+        or "EditorMenu_getTitleWidth" not in editor_compact
+        or "positionVotToolbarButtonBetweenMenus ();" not in editor_compact
+        or "(pulsesRight + alignmentLeft - buttonWidth) / 2" not in editor_compact
+        or "GuiControl_moveX (our votToolbarButton, buttonX);" not in editor_compact
+        or "if (! our votToolbarPositioned)" not in re.sub(r"\s+", " ", sound_editor_header)
+    ):
+        raise AssertionError("VOT must be positioned between the actual Pulses and Alignment menu titles")
 
     if "AnalysisResult_toInfoSummary" not in CORE_ANALYSIS_HEADER.read_text(encoding="utf-8"):
         raise AssertionError("VOT Info summary formatter is not part of the core contract")
