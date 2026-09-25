@@ -25,9 +25,6 @@
 Thing_define (SoundEditor, FunctionEditor) {
 	DEFINE_FunctionArea (1, SoundArea, soundArea)
 	DEFINE_FunctionArea (2, SoundAnalysisArea, soundAnalysisArea)
-	GuiButton votToolbarButton;
-	bool votToolbarPositioned = false;
-	bool positionVotToolbarButtonBetweenMenus ();
 
 	void v1_dataChanged (Editor sender) override {
 		SoundEditor_Parent :: v1_dataChanged (sender);
@@ -38,10 +35,7 @@ Thing_define (SoundEditor, FunctionEditor) {
 	void v_createMenuItems_help (EditorMenu menu)
 		override;
 	void v_createMenus () override;
-	int v_extraTopToolbarHeight () override {
-		return Gui_PUSHBUTTON_HEIGHT + 2 * FunctionEditor_TOP_TOOLBAR_MARGIN;
-	}
-	void v_createExtraTopToolbarButtons (int &x, int buttonWidth, int buttonSpacing, int y) override;
+	void v_createMenusAfterFunctionAreas () override;
 	bool v_hasAiToolbar () override { return true; }
 	void v_distributeAreas () override {
 		if (our soundAnalysisArea() -> hasContentToShow ()) {
@@ -53,8 +47,6 @@ Thing_define (SoundEditor, FunctionEditor) {
 		}
 	}
 	void v_draw () override {
-		if (! our votToolbarPositioned)
-			our votToolbarPositioned = our positionVotToolbarButtonBetweenMenus ();
 		FunctionArea_prepareCanvas (our soundArea().get());
 		if (our soundAnalysisArea() -> instancePref_pulses_show())
 			our soundAnalysisArea() -> v_draw_analysis_pulses ();

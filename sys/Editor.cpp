@@ -142,9 +142,6 @@ EditorMenu Editor_addMenu (Editor me, conststring32 menuTitle, uint32 flags) {
 	return my menus. addItem_move (thee.move());
 }
 
-int EditorMenu_getTitleX (EditorMenu me) { return GuiMenu_getTitleX (my menuWidget); }
-int EditorMenu_getTitleWidth (EditorMenu me) { return GuiMenu_getTitleWidth (my menuWidget); }
-
 GuiMenuItem Editor_addCommand (Editor me, conststring32 menuTitle, conststring32 itemTitle, uint32 flags, EditorCommandCallback commandCallback)
 {
 	try {

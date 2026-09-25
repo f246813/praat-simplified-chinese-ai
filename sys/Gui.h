@@ -414,7 +414,6 @@ int GuiControl_getY (GuiControl me);
 int GuiControl_getWidth  (GuiControl me);
 int GuiControl_getHeight (GuiControl me);
 void GuiControl_move (GuiControl me, int x, int y);
-void GuiControl_moveX (GuiControl me, int x);
 void GuiControl_setSize (GuiControl me, int width, int height);
 
 Thing_define (GuiForm, GuiControl) {
@@ -797,8 +796,6 @@ GuiMenu GuiMenu_createInForm (GuiForm form, int left, int right, int top, int bo
 
 void GuiMenu_empty (GuiMenu me);
 void GuiMenu_setTitle (GuiMenu me, conststring32 title /* cattable */);
-int GuiMenu_getTitleX (GuiMenu me);
-int GuiMenu_getTitleWidth (GuiMenu me);
 
 /********** GuiMenuItem **********/
 

@@ -113,8 +113,6 @@ GuiMenuItem EditorCommand_getItemWidget (EditorCommand me);
 
 EditorMenu Editor_addMenu (Editor me, conststring32 menuTitle, uint32 flags);
 GuiObject EditorMenu_getMenuWidget (EditorMenu me);
-int EditorMenu_getTitleX (EditorMenu me);
-int EditorMenu_getTitleWidth (EditorMenu me);
 EditorMenu Editor_getMenu (Editor me, conststring32 menuTitle);
 
 GuiMenuItem Editor_addCommand (Editor me, conststring32 menuTitle, conststring32 itemTitle, uint32 flags, EditorCommandCallback commandCallback);

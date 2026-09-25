@@ -72,36 +72,18 @@ static void menu_cb_SoundEditor_VOT (SoundEditor me, EDITOR_ARGS) {
 	EDITOR_END
 }
 
-static void gui_button_cb_vot (SoundEditor me, GuiButtonEvent /* event */) {
+static void menu_cb_SoundEditor_VOTMenu (SoundEditor me, EDITOR_ARGS) {
 	Editor_doMenuCommand (me, U"VOT...", 0, nullptr, nullptr, nullptr);
 }
 
-bool structSoundEditor :: positionVotToolbarButtonBetweenMenus () {
-	EditorMenu pulsesMenu = Editor_getMenu (this, U"Pulses");
-	EditorMenu alignmentMenu = Editor_getMenu (this, U"Alignment");
-	if (pulsesMenu && alignmentMenu && our votToolbarButton) {
-		const int pulsesRight = EditorMenu_getTitleX (pulsesMenu) + EditorMenu_getTitleWidth (pulsesMenu);
-		const int alignmentLeft = EditorMenu_getTitleX (alignmentMenu);
-		const int buttonWidth = GuiControl_getWidth (our votToolbarButton);
-		if (EditorMenu_getTitleWidth (pulsesMenu) <= 1 || EditorMenu_getTitleWidth (alignmentMenu) <= 1)
-			return false;
-		const int buttonX = (pulsesRight + alignmentLeft - buttonWidth) / 2;
-		GuiControl_moveX (our votToolbarButton, buttonX);
-		return true;
-	}
-	return false;
+void structSoundEditor :: v_createMenusAfterFunctionAreas () {
+	EditorMenu votMenu = Editor_addMenu (this, U"VOT", 0);
+	EditorMenu_addCommand (votMenu, U"VOT...", 0, menu_cb_SoundEditor_VOTMenu);
 }
 
 void structSoundEditor :: v_createMenus () {
 	SoundEditor_Parent :: v_createMenus ();
 	EditorMenu_addCommand (editMenu, U"VOT...", GuiMenu_HIDDEN, menu_cb_SoundEditor_VOT);
-	our votToolbarPositioned = our positionVotToolbarButtonBetweenMenus ();
-}
-
-void structSoundEditor :: v_createExtraTopToolbarButtons (int &x, int buttonWidth, int buttonSpacing, int y) {
-	our votToolbarButton = GuiButton_createShown (our windowForm, x, x + buttonWidth, y, y + Gui_PUSHBUTTON_HEIGHT,
-		U"VOT", gui_button_cb_vot, this, 0);
-	x += buttonWidth + buttonSpacing;
 }
 
 void structSoundEditor :: v_createMenuItems_help (EditorMenu menu) {
