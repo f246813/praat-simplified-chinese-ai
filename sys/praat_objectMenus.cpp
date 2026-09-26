@@ -30,7 +30,6 @@
 #include "praat_python.h"
 #include "PythonScriptEditor.h"
 #include "PreferencesDialog.h"
-#include "PraatAiControl.h"
 
 #define EDITOR  theCurrentPraatObjects -> list [IOBJECT]. editors
 
@@ -1109,10 +1108,6 @@ void praat_addMenus (GuiWindow window) {
 			applicationHelpMenu = GuiMenu_createInWindow (nullptr, U"Help", 0);
 		#endif
 		helpMenu = GuiMenu_createInWindow (window, U"Help", 0);
-		#if motif
-			if (window)
-				PraatAiControl_addModelMenu (window);
-		#endif
 	}
 	
 	MelderString_append (& itemTitle_about, U"About ", Melder_upperCaseAppName());

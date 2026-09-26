@@ -579,6 +579,14 @@ GuiMenu GuiMenu_createInForm (GuiForm form, int left, int right, int top, int bo
 	conststring32 translatedTitle = praat_translate (title);
 	static MelderString neatTitle;
 	MelderString_copy (& neatTitle, translatedTitle);
+	#if motif
+	if (neatTitle. length >= 1 && neatTitle.string [neatTitle. length - 1] == U'-') {
+		neatTitle. length --;
+		while (neatTitle. length > 0 && neatTitle.string [neatTitle. length - 1] == U' ')
+			neatTitle. length --;
+		neatTitle.string [neatTitle. length] = U'\0';
+	}
+	#else
 	if (neatTitle. length >= 1 && neatTitle.string [neatTitle. length - 1] == U'-') {
 		constexpr conststring32 narrowSpacesForPreciseAlignment =
 				UNITEXT_NARROW_NO_BREAK_SPACE  UNITEXT_NARROW_NO_BREAK_SPACE  U"   ";
@@ -593,6 +601,7 @@ GuiMenu GuiMenu_createInForm (GuiForm form, int left, int right, int top, int bo
 		*/
 		MelderString_append (& neatTitle, UNITEXT_GREATER_THAN_SIGN);
 	}
+	#endif
 	#if gtk
 		my d_cascadeButton -> d_widget = gtk_button_new_with_label (Melder_peek32to8 (neatTitle.string));
 		my d_cascadeButton -> v_positionInForm (my d_cascadeButton -> d_widget, left, right, top, bottom, form);
@@ -621,7 +630,12 @@ GuiMenu GuiMenu_createInForm (GuiForm form, int left, int right, int top, int bo
 		my d_xmMenuBar = XmCreateMenuBar (form -> d_widget, "dynamicSubmenuBar", 0, 0);
 		form -> v_positionInForm (my d_xmMenuBar, left, right, top, bottom, form);
 		my d_cascadeButton -> d_widget = XmCreateCascadeButton (my d_xmMenuBar, Melder_peek32to8 (neatTitle.string), nullptr, 0);
-		form -> v_positionInForm (my d_cascadeButton -> d_widget, 0, right - left - 4, 0, bottom - top, form);
+		int cascadeButtonWidth = right - left;
+		#if defined (_WIN32)
+			if (form -> d_parent && Thing_isa (form -> d_parent, classGuiScrolledWindow))
+				cascadeButtonWidth = GuiControl_getWidth (form);
+		#endif
+		form -> v_positionInForm (my d_cascadeButton -> d_widget, 0, cascadeButtonWidth, 0, bottom - top, form);
 		my d_widget = XmCreatePulldownMenu (my d_xmMenuBar, Melder_peek32to8 (neatTitle.string), nullptr, 0);
 		XtVaSetValues (my d_cascadeButton -> d_widget, XmNsubMenuId, my d_widget, nullptr);
 		XtManageChild (my d_cascadeButton -> d_widget);

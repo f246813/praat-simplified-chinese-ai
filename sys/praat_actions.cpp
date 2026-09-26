@@ -22,14 +22,23 @@
 #include "machine.h"
 #include "GuiP.h"
 
-#define BUTTON_LEFT  -240
-#define BUTTON_RIGHT -5
+#if defined (_WIN32)
+	/* The scrolling viewport is already aligned to the right-hand action column. */
+	#define BUTTON_LEFT  0
+	#define BUTTON_RIGHT 0
+#else
+	#define BUTTON_LEFT  -240
+	#define BUTTON_RIGHT -5
+#endif
 
 static OrderedOf <structPraat_Command> theActions;
 void praat_actions_exit_optimizeByLeaking () { theActions. _ownItems = false; }
 static GuiMenu praat_writeMenu;
 static GuiMenuItem praat_writeMenuSeparator;
 static GuiForm praat_form;
+#if defined (_WIN32)
+	static GuiScrolledWindow praat_actionScrollWindow;
+#endif
 static bool actionsInvisible = false;
 
 static void fixSelectionSpecification (ClassInfo *class1, integer *n1, ClassInfo *class2, integer *n2, ClassInfo *class3, integer *n3) {
@@ -720,7 +729,11 @@ void praat_actions_show () {
 		actionsInvisible = false;
 		GuiMenu currentSubmenu1 = nullptr, currentSubmenu2 = nullptr;
 		bool writeMenuGoingToSeparate = false;
-		int y = Machine_getMenuBarBottom () + 10;
+		#if defined (_WIN32)
+			int y = 0;
+		#else
+			int y = Machine_getMenuBarBottom () + 10;
+		#endif
 		for (integer i = 1; i <= theActions.size; i ++) {   // add buttons or make existing buttons sensitive (executable)
 			Praat_Command me = theActions.at [i];
 			if (my depth == 0) {
@@ -793,6 +806,13 @@ void praat_actions_show () {
 				GuiThing_show (my button);
 			}
 		}
+		#if defined (_WIN32)
+			/*
+			 * Keep the work window taller than its viewport when necessary;
+			 * the fixed bottom buttons remain outside the scrolling area.
+			 */
+			GuiControl_setSize (praat_form, GuiControl_getWidth (praat_form), std::max (1, y));
+		#endif
 	}
 }
 
@@ -808,7 +828,14 @@ void praat_actions_createWriteMenu (GuiWindow window) {
 void praat_actions_createDynamicMenu (GuiWindow window) {
 	if (theCurrentPraatApplication -> batch)
 		return;
+	#if defined (_WIN32)
+		/* Reserve the menu bar above and fixed command buttons below. */
+		praat_actionScrollWindow = GuiScrolledWindow_createShown (window,
+			-240, -5, Machine_getMenuBarBottom () + 10, -120, 0, 1, 0);
+		praat_form = GuiForm_createInScrolledWindow (praat_actionScrollWindow);
+	#else
 	praat_form = window;
+	#endif
 }
 
 void praat_saveAddedActions (MelderString *buffer) {

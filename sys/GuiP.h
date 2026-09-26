@@ -95,7 +95,11 @@ class GuiControlBlockValueChangedCallbacks {
 		/* Motif */
 
 		union {
-			struct { GuiObject horizontalBar, verticalBar, clipWindow, workWindow; } scrolledWindow;
+			struct {
+				GuiObject horizontalBar, verticalBar, clipWindow, workWindow;
+				int horizontalScrollbarPersistence, verticalScrollbarPersistence;
+				bool updatingScrollbarLayout;
+			} scrolledWindow;
 			struct { bool active, isDialog, canFullScreen;
 				uinteger lowAccelerators [8]; XtCallbackProc goAwayCallback; XtPointer goAwayClosure; } shell;
 			struct { unsigned char acceleratorChar; int acceleratorModifiers; } pushButton;

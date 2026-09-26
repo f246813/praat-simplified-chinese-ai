@@ -203,6 +203,45 @@ class MultiStepTests(unittest.TestCase):
         self.assertEqual(len(execute.scripts), 2)
         self.assertEqual(len(outcome.results), 2)
 
+    def test_failed_step_is_separate_and_cannot_be_reported_as_complete(self) -> None:
+        client = FakeClient(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "pitch", "arguments": '{"time": 0.25}'},
+                        },
+                        {
+                            "id": "c2",
+                            "type": "function",
+                            "function": {"name": "pitch", "arguments": '{"time": 0.75}'},
+                        },
+                    ],
+                },
+                answer("已完成全部比较，两个时点都测完了。"),
+            ]
+        )
+        failed_output = "脚本没跑完（Praat 报错）：Unknown function"
+        execute = Recorder(
+            [
+                (True, ["基频（0.250 秒处）= 220.000 Hz"], ""),
+                (False, [failed_output], "Unknown function «nosuchcommand»."),
+            ]
+        )
+
+        outcome = run(client, execute)
+
+        self.assertEqual(outcome.results, ["基频（0.250 秒处）= 220.000 Hz"])
+        self.assertNotIn(failed_output, outcome.results)
+        self.assertIn(failed_output, outcome.failure)
+        self.assertIn("部分完成", outcome.reply)
+        self.assertIn("仍有步骤失败", outcome.reply)
+        self.assertNotIn("已完成全部比较", outcome.reply)
+
 
 class ObservationTests(unittest.TestCase):
     """A4：工具报错（或执行失败）当成观察结果回灌，模型可以改参数重试。"""
@@ -264,9 +303,10 @@ class ObservationTests(unittest.TestCase):
         outcome = run(client, execute)
 
         self.assertIn("nosuchcommand", outcome.failure)
-        self.assertEqual(
-            outcome.results,
-            ["脚本没跑完（Praat 报错，后面的消息不会被它挡住）：Unknown function"],
+        self.assertEqual(outcome.results, [])
+        self.assertIn(
+            "脚本没跑完（Praat 报错，后面的消息不会被它挡住）：Unknown function",
+            outcome.failure,
         )
         self.assertEqual([step.ok for step in outcome.steps], [False])
 

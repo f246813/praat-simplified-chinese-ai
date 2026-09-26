@@ -22,18 +22,45 @@
 #include "LongSoundArea.h"
 #include "SoundAnalysisArea.h"
 
+#include <optional>
+#include <string>
+
 Thing_define (SoundEditor, FunctionEditor) {
 	DEFINE_FunctionArea (1, SoundArea, soundArea)
 	DEFINE_FunctionArea (2, SoundAnalysisArea, soundAnalysisArea)
+	bool votStateHasSelection { false };
+	double votStateSelectionStart { 0.0 };
+	double votStateSelectionEnd { 0.0 };
+	std::optional<double> votAnalysisStartTime;
+	std::optional<double> votAnalysisEndTime;
+	std::optional<double> votFixedContextStartTime;
+	std::optional<double> votFixedContextEndTime;
+	std::optional<double> votBurstTime;
+	std::optional<double> votVoicingTime;
+	std::optional<double> votValueMs;
+	std::u32string votFailureReason;
+	std::u32string votProgressText;
+	std::u32string votResultStatus;
+	std::string votCurrentJobId;
+	integer votRequestGeneration { 0 };
+	integer votMode { 1 };
+	integer votTargetPhoneIndex { 0 };
+	std::u32string votLanguage;
+	std::u32string votTranscript;
+	std::u32string votPhonemes;
+	UiForm votForm { nullptr };
+	double votBurstThresholdDb { 6.0 };
+	double votPitchFloorHz { 75.0 };
+	bool votCalculationAttempted { false };
+	bool votValueIsCandidate { false };
+	bool votManualConfirmed { false };
+	bool votNeedsRecalculation { true };
+	bool votUpdatingForm { false };
 
-	void v1_dataChanged (Editor sender) override {
-		SoundEditor_Parent :: v1_dataChanged (sender);
-		Thing_cast (SampledXY, soundOrLongSound, our data());
-		our soundArea() -> functionChanged (soundOrLongSound);
-		our soundAnalysisArea() -> functionChanged (soundOrLongSound);
-	}
+	void v1_dataChanged (Editor sender) override;
 	void v_createMenuItems_help (EditorMenu menu)
 		override;
+	void v_updateText () override;
 	void v_createMenus () override;
 	void v_createMenusAfterFunctionAreas () override;
 	bool v_hasAiToolbar () override { return true; }

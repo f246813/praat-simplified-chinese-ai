@@ -4,7 +4,7 @@
 约定和坑的权威版本仍然是 [guide.md](../guide.md) §8，这里只写「接手时先看什么、
 哪些东西不能碰坏、下一步」。
 
-（本文件 2026-09-23 重写过一次：只保留仍然成立的旧内容，§1 是 9/22 那一轮的交接。）
+（本文件 2026-09-23 重写过一次：只保留仍然成立的旧内容，§1 是 9/22 那一轮的交接。9月24日编辑过一次待办事项）
 
 ## 0. 现状与先跑一遍
 
@@ -298,15 +298,13 @@ foned/FunctionEditor.cpp:2107    PraatAiControl_noteEditorSelection (…)
 2. 收尾 `praat_translate` 里几条中英混排的界面词条。
 3. 想继续扩选区链路的话，还剩两个候选：`spectrogram`（只对选区做频谱图，会多出一个
    特定时长的对象）、`textgrid_insert_boundary`（见 §2 的取舍）。
-4. 高 DPI（120% / 150%）下自绘控件的**观感**复验：本机只有 96 DPI，`scale_factor()`
-   的单测覆盖 1.0/1.25/1.5，但没人真的在缩放机器上看过。
-5. `verify_*.py` 手动脚本越来越多（19 个），要合并的话记得同步 `ai/README.zh-CN.md`
+4. `verify_*.py` 手动脚本越来越多（19 个），要合并的话记得同步 `ai/README.zh-CN.md`
    里的引用（`verify_chat_live.py` 与 `verify_chat_window_ui.py --ask` 有重叠）。
 
 ## 7. VOT 分析（2026-09）
 
 共享 VOT 分析核心位于 `fon/SegmentAcousticAnalysis.h/.cpp`。Sound 和 LongSound 共用
-SoundEditor 工具栏中的 **VOT** 按钮：有人工爆破/浊音边界时在 Info 中显示确认的 VOT；否则显示自动
+SoundEditor 菜单栏中位于“脉冲”后、“对齐”前的 **VOT** 顶级菜单：有人工爆破/浊音边界时在 Info 中显示确认的 VOT；否则显示自动
 候选，并明确标为需要人工复核。LongSound 会保留原始绝对时间。
 
 AI 的 `vot` 工具调用同一 C++ 分析核心，并通过隐藏的 `Write VOT analysis to file...` 动作将
@@ -325,9 +323,61 @@ $env:MSYSTEM = 'CLANG64'
 ```
 
 `verify_segment_analysis_templates.py` 会运行 VOT C++ 回归和生成的 AI 模板，并检查 SoundEditor 的隐藏
-VOT 命令注册在现有 Edit 菜单，工具栏按钮能分发该命令，以及 Sound/LongSound 各自保留仅供 AI 使用的
-隐藏 TSV 动作。GUI 验收用 Sound 的 View & Edit 和 LongSound 的 View 分别打开共享编辑器，触发工具栏 VOT 按钮，确认
+VOT 命令注册在现有 Edit 菜单、VOT 顶级菜单创建在 Pulses 与 Alignment 之间且分发该隐藏命令，以及 Sound/LongSound 各自保留仅供 AI 使用的
+隐藏 TSV 动作。GUI 验收用 Sound 的 View & Edit 和 LongSound 的 View 分别打开共享编辑器，触发菜单栏 VOT 项，确认
 Info 中显示测量值或带人工复核提示的候选结果；AI 侧的临时 TSV 由工具自动管理，不需用户导出。
 
 科学验收仍需带人工边界标注的真实普通话样本，核对爆破与浊音起始边界及候选准确性；合成 VOT
 只能验证工程链路，不能替代真实录音复核或证明测量有效性。
+
+### 7.1 工具栏回归审计（2026-09-25）
+
+昨晚 VOT/C++ 功能开始前的本地基线是 public/modern，提交
+2f699d8a5382a3965adf364c9e6561a1bcc90291（2026-09-24 14:19 +0800）。它仅用于历史对照；
+不要为了复现而重置含有用户未提交修改的主工作区。主要比较路径是该基线 → 40f2918e2
+（增加 VOT 分析）→ b20d54cee（将 VOT 动作移入编辑器工具栏）。
+
+工具栏分支在 foned/SoundEditor.cpp 的 SoundEditor::v_createMenus 中对不存在的 Query 菜单调用
+Editor_addCommand。编辑器父类创建的是 Edit 菜单；注册失败抛出 MelderError，随后窗口创建报
+“Sound window not created”，使 View & Edit 无法打开。工具栏按钮按命令标题分发，修正保留隐藏
+命令及回调，将其注册到现有 Edit 菜单。修正已合入 modern（cd33f94c4），
+clang 构建、VOT/AI 桥接验证和 Python 回归均已执行。LongSound 使用同一个 SoundEditor 类。
+
+验证器现改为检查 SoundEditor 隐藏命令注册、工具栏分发，以及 Sound/LongSound 各自保留的
+内部隐藏 TSV 桥接动作；VOT-only 设计文档也已同步为工具栏入口。
+
+验收修复时须显式运行 GUI 脚本（batch runner 会跳过 GUI 用例），确认 Sound 通过 View & Edit、LongSound
+通过 View 分别能打开共享的 SoundEditor（编辑器类型为 SoundEditor、对象类型为 LongSound）；本轮未能在 GUI 会话中人工点验工具栏。还需确认显示波形/频谱图、重复开关及
+触发工具栏 VOT；覆盖选区默认值、取消、正/零/负结果、缺失边界、阈值、
+候选需人工复核，以及中英文界面。用真实人工标注普通话样本评估科学准确性。已存在的 texio 相对路径
+失败和 Unicode 输出断言失败应单独记录，不能直接归因于菜单修复。
+
+主目录 Praat.exe 已使用合并后的源码重建；SHA-256 为
+7A54C6280D948EC9142993EA93E202718790632C4802BC030267F5C8810ABE6F。原版保留在
+D:\Praat-work\Praat-modern-before-vot-toolbar-20260925.exe，其 SHA-256 是
+90D883ABD01CD3EC32697EF4DA5EDAA9839157DA9FDE75121DF08D71D1270D20。
+逐步修复与验收清单及本轮验证状态见 docs/superpowers/plans/2026-09-25-vot-editor-toolbar-regression.md。
+
+### 7.2 顶部 VOT 工具栏布局修复（2026-09-25）
+
+此前虽然已有 VOT 按钮和隐藏命令分发，但 `SoundEditor` 将按钮注册到底部缩放栏，且绘图区没有为独立顶部行留空间。提交 `fb9f3d299` 在 `FunctionEditor` 加入默认高度为零的顶部工具栏扩展点；共享 `SoundEditor` 为按钮高度及上下边距预留位置，并把绘图区起点下移。Sound 和 LongSound 共用此布局；VOT 已从底部缩放栏移出，隐藏 `Edit` 命令、点击分发和分析核心保持原样。后续提交 `f1069b815` 又将按钮水平位置调整到实际“脉冲”和“对齐”菜单之间，按菜单运行时坐标定位。`verify_segment_analysis_templates.py` 检查默认高度、SoundEditor 专属启用、顶部行位置、菜单间定位和绘图区保留高度。
+
+修复已快进合入 `modern`，主工作区源码提交为 `fb9f3d2998c803ac224364687122b374107befcc`。主目录以 `make PRAAT_COMPILER=clang -j16` 重建 `Praat.exe`，构建退出码为 0；SHA-256 为 `D5AE66989169B1739B09DE3BE0EDBCFCE25552922DB86B09F5B7CD64DAF97112`。重建前的程序保存在 `D:\Praat-work\Praat-before-top-vot-toolbar-20260925.exe`，SHA-256 为 `B693A6E4BECAE0A5DCDA1881C2F7EE2D7429FE675911D74491C184D882FDF131`。
+
+主工作区项目虚拟环境的 Python 回归 544/544 通过，`verify_chat_templates.py` 为 100/100，`verify_segment_analysis_templates.py` 通过，`git diff --check` 通过。实际启动过主目录 `Praat.exe`；但当前桌面自动化会话返回 `apps: []`，原生窗口控制不可用，因此未能查看 Sound/LongSound 顶部位置、高 DPI 与缩放窗口可见性，也未能点击检查选区默认值、取消和 Info 结果。以上 GUI 验收仍待在可操作的 Praat 桌面会话中完成。
+
+### 7.3 VOT 工具栏水平位置修正（2026-09-25）
+
+提交 `f1069b815` 已快进合入 `modern`。SoundEditor 在脉冲与对齐菜单创建后读取菜单标题的 GUI 坐标，将 VOT 按钮对准两菜单之间；首次布局尚未分配菜单宽度时，会在第一次绘制时重试。移动只改变水平坐标，保留顶部工具栏行高及绘图区留白。Windows clang 构建成功；新可执行文件 SHA-256 为 `EEED625E0A3BEDF45793FC5A65B2785B6C44187210B51A6F57699ACEC8CFC3F4`，暂存于 `D:\Praat-work\Praat-after-vot-menu-position-20260925.exe`。主目录现有 `Praat.exe` 的 SHA-256 仍是 `D5AE66989169B1739B09DE3BE0EDBCFCE25552922DB86B09F5B7CD64DAF97112`，因为进程 PID 5832 正在运行并锁定文件；替换前备份为 `D:\Praat-work\Praat-before-vot-menu-position-20260925.exe`。不要结束该进程以免丢失对象状态，关闭 Praat 后再将暂存版替换到主目录。
+
+本轮主工作区 Python 回归 544/544、`verify_chat_templates.py` 100/100、`verify_segment_analysis_templates.py` 和 `git diff --check` 均通过。桌面自动化仍返回 `apps: []`，所以无法对当前窗口截图、检查 Sound/LongSound 菜单间位置、高 DPI/缩放可见性或点击 VOT 表单；这些 GUI 验收仍待可操作的 Praat 会话。
+
+### 7.4 VOT 顶级菜单栏位置修复（2026-09-25）
+
+用户复核发现 7.3 的实现仍未满足目标：`Editor_getMenu (this, U"Alignment")` 只查询 Editor 自己维护的菜单集合，而 FunctionEditor 通过 `GuiMenu_createInWindow` 直接创建 Alignment，因此查找恒为空；同时，移动下方 VOT 按钮的横坐标不能把它放入菜单栏。此判断已由源代码调用链确认。
+
+修复改为创建真正的顶级 `VOT` 菜单。`FunctionEditor::v_createMenus` 在所有功能区菜单之后调用新的虚拟扩展点，SoundEditor 在此创建 `VOT` 菜单；此时 SoundAnalysisArea 已创建 Pulses，随后 FunctionEditor 才创建 Alignment，因此原生菜单顺序是 Pulses、VOT、Alignment。可见的 `VOT...` 菜单项通过 `Editor_doMenuCommand` 分发到现有隐藏 Edit 命令，继续调用相同分析表单与核心。VOT 专用下方工具行、绘图区偏移、坐标查询及 `GuiControl_moveX` 均已移除。该共享 SoundEditor 同时服务 Sound 和 LongSound。
+
+修复提交 `b44c24f62` 已直接进入 `modern`。在 MSYS2 CLANG64 中执行 `make PRAAT_COMPILER=clang -j16` 成功，主目录 `Praat.exe` 的 SHA-256 为 `E3955447A6E5E8A2EC70A2E44505219CF1CBEAA1AB24E2A8C8B32407E07CDFEA`；被替换版本备份于 `D:\Praat-work\Praat-before-vot-menu-position-20260925.exe`，SHA-256 为 `D5AE66989169B1739B09DE3BE0EDBCFCE25552922DB86B09F5B7CD64DAF97112`。
+
+新版主目录程序的 `verify_segment_analysis_templates.py` 通过，Python 单测 544/544、`verify_chat_templates.py` 100/100、`git diff --check` 均通过。实际启动的新版 `Praat.exe` 响应正常，窗口为 “Praat Objects”。桌面截图接口两次返回 `SetIsBorderRequired` / `0x80004002`，所以未能打开并目视检查 Sound 与 LongSound 菜单顺序，也未能进行高 DPI、窗口缩放和表单点击验收；不能把这些 GUI 项报告为通过。新版程序当前保持打开，停留在 Objects 窗口。

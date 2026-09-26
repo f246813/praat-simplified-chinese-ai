@@ -4,13 +4,17 @@ from pathlib import Path
 
 import numpy as np
 
-from praat_ai.config import MfaAlignmentConfig
+from praat_ai.config import (
+    MfaAlignmentConfig,
+    Wav2Vec2AlignmentConfig,
+)
 from praat_ai.forced_alignment import (
     AlignmentBackend,
     AlignmentError,
     AlignmentResult,
     CompositeAligner,
     MfaAligner,
+    Wav2Vec2Aligner,
     _ctc_forced_align,
     parse_mfa_textgrid,
 )
@@ -223,6 +227,43 @@ class ForcedAlignmentTests(unittest.TestCase):
         self.assertEqual(evidence.results[0].phones[0].confidence, 0.85)
         self.assertEqual(evidence.results[0].phones[0].source, "mfa")
         self.assertEqual(evidence.results[0].phones, result.phones)
+
+    def test_vot_alignment_rejects_configured_model_language_mismatch(self) -> None:
+        cases = [
+            (
+                MfaAligner(
+                    MfaAlignmentConfig(
+                        enabled=True,
+                        acoustic_model="english_us_arpa.zip",
+                        language="en",
+                    )
+                ),
+                "mfa",
+            ),
+            (
+                Wav2Vec2Aligner(
+                    Wav2Vec2AlignmentConfig(
+                        enabled=True,
+                        model="fixture-model",
+                        languages=["en"],
+                    )
+                ),
+                "wav2vec2",
+            ),
+        ]
+        for backend, name in cases:
+            with self.subTest(backend=name):
+                backend.available = lambda: True
+                evidence = self._align_for_vot(
+                    CompositeAligner([backend]),
+                    "unused.wav",
+                    [PhoneSpec("a")],
+                    "Japanese",
+                )
+                self.assertEqual(evidence.results, [])
+                self.assertEqual(len(evidence.backend_errors), 1)
+                self.assertTrue(evidence.backend_errors[0].startswith(f"{name}:"))
+                self.assertIn("language mismatch", evidence.backend_errors[0])
 
 
 if __name__ == "__main__":

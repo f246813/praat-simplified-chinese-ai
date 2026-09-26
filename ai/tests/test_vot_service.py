@@ -165,6 +165,32 @@ class VotServiceTests(unittest.TestCase):
         self.assertEqual(snapshot.sample_rate_hz, 44100.5)
         self.assertEqual(snapshot.seconds_to_absolute_sample(timeline_time), sample_index)
 
+    def test_request_hash_ignores_execution_id_but_keeps_analysis_inputs(self) -> None:
+        vot = load_vot_api()
+        first = self.make_request(vot, request_id="editor-job-1")
+        same_inputs = self.make_request(vot, request_id="ai-job-9")
+        changed_target = self.make_request(
+            vot, request_id="ai-job-9", target_range=(10501, 11000)
+        )
+
+        self.assertEqual(first.request_hash, same_inputs.request_hash)
+        self.assertNotEqual(first.request_hash, changed_target.request_hash)
+
+    def test_request_hash_normalizes_integer_and_float_parameters(self) -> None:
+        vot = load_vot_api()
+        integer_parameters = self.make_request(
+            vot, parameters={"threshold_db": 6, "bands_hz": [2000, 8000]}
+        )
+        float_parameters = self.make_request(
+            vot, parameters={"threshold_db": 6.0, "bands_hz": [2000.0, 8000.0]}
+        )
+
+        self.assertEqual(integer_parameters.request_hash, float_parameters.request_hash)
+        self.assertEqual(
+            integer_parameters.to_dict()["parameters"],
+            float_parameters.to_dict()["parameters"],
+        )
+
     def test_missing_alignment_metadata_requires_input(self) -> None:
         vot = load_vot_api()
         request = self.make_request(vot, language="", transcript="", phonemes=())
@@ -324,6 +350,8 @@ class VotServiceTests(unittest.TestCase):
         self.assertEqual(analyzer.calls, 1)
         self.assertEqual(result.burst_sample_index, 10610)
         self.assertEqual(result.onset_sample_index, 10620)
+        self.assertEqual(result.model_ids, ())
+        self.assertEqual(dict(result.model_versions), {})
 
     def test_manual_positive_zero_and_negative_vot_use_sample_formula(self) -> None:
         vot = load_vot_api()

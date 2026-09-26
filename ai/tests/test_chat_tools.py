@@ -28,6 +28,13 @@ SELECTED_CONTEXT = (
     "2\tSound\tSound tone2\t0\t\t\n"
 )
 
+# Sound 编辑器保留圈选，但 Praat 对象列表当前选中的是 Harmonicity。
+SOUND_SELECTION_HARMONICITY_SELECTED = (
+    "id\tclass\tname\tselected\tsel_start\tsel_end\n"
+    "1\tSound\tSound tone\t0\t0.250000\t0.500000\n"
+    "2\tHarmonicity\tHarmonicity tone\t1\t\t\n"
+)
+
 
 class ObjectContextTests(unittest.TestCase):
     def test_context_is_parsed(self) -> None:
@@ -676,6 +683,7 @@ class NewToolTests(unittest.TestCase):
         self.assertEqual(script.count("第 1 共振峰平均"), 1)
         self.assertEqual(script.count("第 2 共振峰平均"), 1)
 
+
     def test_harmonicity_statistics_uses_harmonicity_analysis(self) -> None:
         script = tools.render("harmonicity_statistics", {}, self.context)
         self.assertIn("To Harmonicity (cc): 0.01, 75, 0.1, 1", script)
@@ -702,6 +710,74 @@ class NewToolTests(unittest.TestCase):
         script = tools.render("pitch_statistics", {}, self.context)
         self.assertIn('Get time of maximum: tmin, tmax, "Hertz", "Parabolic"', script)
         self.assertIn("最高点出现在", script)
+
+
+class FormantSourceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        base = Path(self.directory.name)
+        self.context = tools.ToolContext(
+            tools.parse_object_context(SOUND_SELECTION_HARMONICITY_SELECTED),
+            base / "chat_result.tsv",
+            base / "chat_state.txt",
+        )
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def test_selected_harmonicity_falls_back_to_the_only_sound_and_keeps_its_selection(self) -> None:
+        for name, arguments, expected_time in (
+            ("formant_statistics", {"formant": 1}, "tmin = 0.250000"),
+            ("formant_frequency", {"formant": 1}, "time = 0.375000"),
+        ):
+            with self.subTest(tool=name):
+                script = tools.render(name, arguments, self.context)
+                self.assertIn("selectObject: 1", script)
+                self.assertIn("To Formant (burg):", script)
+                self.assertIn(expected_time, script)
+                if name == "formant_statistics":
+                    self.assertIn("tmax = 0.500000", script)
+
+    def test_explicit_harmonicity_id_is_rejected_instead_of_replaced_by_sound(self) -> None:
+        for name in ("formant_statistics", "formant_frequency", "formant_bandwidth"):
+            with self.subTest(tool=name):
+                with self.assertRaises(tools.ToolError) as caught:
+                    tools.render(name, {"object": 2, "formant": 1}, self.context)
+                self.assertIn("对象 2 是 Harmonicity", str(caught.exception))
+                self.assertIn("Sound 或 Formant", str(caught.exception))
+
+    def test_selected_harmonicity_with_multiple_candidates_requires_an_object_id(self) -> None:
+        text = SOUND_SELECTION_HARMONICITY_SELECTED.replace(
+            "2\tHarmonicity\tHarmonicity tone\t1\t\t\n",
+            "2\tSound\tSound second\t0\t\t\n"
+            "3\tHarmonicity\tHarmonicity tone\t1\t\t\n",
+        )
+        context = tools.ToolContext(
+            tools.parse_object_context(text),
+            self.context.result_path,
+            self.context.state_path,
+        )
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("formant_statistics", {}, context)
+        self.assertIn("请用对象 id 指定", str(caught.exception))
+        self.assertIn("1: Sound tone", str(caught.exception))
+        self.assertIn("2: Sound second", str(caught.exception))
+
+    def test_existing_formant_is_used_without_burg_conversion(self) -> None:
+        text = (
+            "id\tclass\tname\tselected\n"
+            "1\tSound\tSound tone\t0\n"
+            "2\tFormant\tFormant tone\t0\n"
+            "3\tHarmonicity\tHarmonicity tone\t1\n"
+        )
+        context = tools.ToolContext(
+            tools.parse_object_context(text),
+            self.context.result_path,
+            self.context.state_path,
+        )
+        script = tools.render("formant_statistics", {"object": 2}, context)
+        self.assertIn("selectObject: 2", script)
+        self.assertNotIn("To Formant (burg):", script)
 
 
 class TextGridToolTests(unittest.TestCase):
@@ -810,7 +886,7 @@ class TextGridToolTests(unittest.TestCase):
 
 
 class VotToolTests(unittest.TestCase):
-    """VOT 必须按给定的两个时刻算，不能拿别的测量值顶替。"""
+    """VOT is dispatched through the shared local request service."""
 
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
@@ -829,34 +905,65 @@ class VotToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.directory.cleanup()
 
-    def test_zero_times_are_passed_as_explicit_boundaries(self) -> None:
-        """Zero is a valid boundary value and must not select candidate estimation."""
+    def test_sample_index_accepts_roundoff_at_audio_domain_boundary(self) -> None:
+        first_sample_time = 1.1337868480731927e-05
+        sample_period = 2.2675736961451248e-05
 
-        script = tools.render(
-            "vot",
-            {"burst": 0, "voicing": 0, "object": 1},
-            self.sound_context,
+        sample = tools._vot_sample_index(
+            0.0,
+            first_sample_time=first_sample_time,
+            sample_period_sec=sample_period,
+            sample_count=44100,
         )
-        self.assertIn("Write VOT analysis to file", script)
-        self.assertIn("0.000000, 0.000000", script)
-        self.assertIn("VOT 测量（使用给定边界）", script)
-        self.assertNotIn("undefined, undefined", script)
+
+        self.assertEqual(sample, 0)
+
+    def test_vot_audio_query_preserves_half_sample_boundary_precision(self) -> None:
+        environment = _CapturingPraatEnvironment(Path(self.directory.name))
+
+        ok, _, _ = tools.LOCAL_TOOLS["vot"].run(
+            {"object": 1, "mode": "acoustic_only", "from": 0.25, "to": 0.5},
+            self.sound_context,
+            environment,
+        )
+
+        self.assertFalse(ok)
+        self.assertTrue(environment.scripts)
+        self.assertIn("fixed$ (firstSampleTime, 20)", environment.scripts[0])
+        self.assertNotIn("secondSampleTime", environment.scripts[0])
+
+    def test_zero_times_are_passed_as_explicit_boundaries(self) -> None:
+        schema = tools.tool_parameters("vot")
+        self.assertIn("vot", tools.LOCAL_TOOLS)
+        self.assertEqual(
+            schema["properties"]["mode"]["enum"],
+            ["model_assisted", "acoustic_only", "manual"],
+        )
 
     def test_only_one_time_is_still_an_error(self) -> None:
         with self.assertRaises(tools.ToolError):
-            tools.render("vot", {"burst": 0.3}, self.sound_context)
+            tools.LOCAL_TOOLS["vot"].run(
+                {"burst": 0.3, "object": 1},
+                self.sound_context,
+                _UnusedPraatEnvironment(Path(self.directory.name)),
+            )
 
     def test_non_numeric_time_is_rejected_in_chinese(self) -> None:
         with self.assertRaises(tools.ToolError) as raised:
-            tools.render("vot", {"burst": "爆破", "voicing": 0.4}, self.sound_context)
+            tools.LOCAL_TOOLS["vot"].run(
+                {"burst": "爆破", "voicing": 0.4, "object": 1},
+                self.sound_context,
+                _UnusedPraatEnvironment(Path(self.directory.name)),
+            )
         self.assertIn("必须是数字", str(raised.exception))
 
     def test_textgrid_path_adds_boundaries_and_reports_ms(self) -> None:
-        script = tools.render(
-            "vot",
-            {"burst": 0.30, "voicing": 0.42},
-            self.grid_context,
+        environment = _UnusedPraatEnvironment(Path(self.directory.name))
+        ok, rows, _ = tools.LOCAL_TOOLS["vot"].run(
+            {"burst": 0.30, "voicing": 0.42}, self.grid_context, environment
         )
+        script = rows[0]
+        self.assertTrue(ok)
         self.assertIn("t1 = 0.300000", script)
         self.assertIn("t2 = 0.420000", script)
         self.assertIn("vot = t2 - t1", script)
@@ -867,96 +974,60 @@ class VotToolTests(unittest.TestCase):
         self.assertIn("并在该层补上了边界", script)
 
     def test_sound_path_uses_shared_cpp_analysis_action(self) -> None:
-        script = tools.render(
-            "vot",
-            {"burst": 0.30, "voicing": 0.42},
-            self.sound_context,
+        self.assertNotIn("vot", tools.TOOL_MAP)
+        vot_schema = next(
+            item for item in tools.tool_schemas()
+            if item["function"]["name"] == "vot"
         )
-        self.assertIn("Write VOT analysis to file", script)
-        self.assertIn("0.300000, 0.420000", script)
-        self.assertIn("readFile$", script)
-        self.assertIn("appendFile:", script)
-        self.assertNotIn("Insert boundary", script)
-        self.assertNotIn("To Pitch (ac)", script)
+        self.assertIn("model_assisted", vot_schema["function"]["parameters"]["properties"]["mode"]["enum"])
+        self.assertEqual(tools.LOCAL_TOOLS["vot"].parameters, tools.tool_parameters("vot"))
 
     def test_missing_or_bad_times_are_rejected(self) -> None:
-        # 两个时刻都不给 = 自动估计模式；只给一个才是参数错误。
-        auto = tools.render("vot", {}, self.sound_context)
-        self.assertIn("自动", auto)
+        with self.assertRaisesRegex(tools.ToolError, "不会退回整段音频"):
+            tools.LOCAL_TOOLS["vot"].run(
+                {"object": 1},
+                tools.ToolContext(
+                    tools.parse_object_context("id\tclass\tname\tselected\n1\tSound\ttone\t1\n"),
+                    self.sound_context.result_path,
+                    self.sound_context.state_path,
+                ),
+                _UnusedPraatEnvironment(Path(self.directory.name)),
+            )
         with self.assertRaises(tools.ToolError) as caught:
-            tools.render("vot", {"burst": 0.3}, self.grid_context)
+            tools.LOCAL_TOOLS["vot"].run(
+                {"burst": 0.3}, self.grid_context,
+                _UnusedPraatEnvironment(Path(self.directory.name)),
+            )
         self.assertIn("voicing", str(caught.exception))
-        negative = tools.render(
-            "vot", {"burst": 0.4, "voicing": 0.3}, self.sound_context
-        )
-        self.assertIn("0.400000, 0.300000", negative)
-
-    def test_onset_alias_works(self) -> None:
-        script = tools.render(
-            "vot",
-            {"burst": 0.1, "onset": 0.25},
-            self.sound_context,
-        )
-        self.assertIn("0.100000, 0.250000", script)
-
-    def test_auto_mode_detects_within_the_given_range(self) -> None:
-        script = tools.render(
-            "vot",
-            {"from": 0.25, "to": 0.5},
-            self.sound_context,
-        )
-        self.assertIn("tmin = 0.250000", script)
-        self.assertIn("tmax = 0.500000", script)
-        self.assertIn("Write VOT analysis to file", script)
-        self.assertIn("undefined, undefined", script)
-        self.assertIn("6.000000, 75.000000", script)
-        self.assertIn("VOT 候选（C++ 自动估计，需人工确认）", script)
-        self.assertNotIn("Filter (pass Hann band)", script)
-
-    def test_editor_selection_note_survives_the_model_echoing_it(self) -> None:
-        # 模型把圈选原样抄进 from/to 时，回话里仍要写清楚这段范围是圈出来的。
-        context = tools.ToolContext(
-            tools.parse_object_context(SELECTED_CONTEXT),
-            self.sound_context.result_path,
-            self.sound_context.state_path,
-        )
-        script = tools.render("vot", {"from": 0.25, "to": 0.5}, context)
-        self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
-        self.assertNotIn("未指定范围", script)
-
-    def test_auto_mode_delegates_wide_range_quality_to_cpp_core(self) -> None:
-        # C++ core emits the second-run quality row when the range spans multiple phones.
-        script = tools.render("vot", {"from": 0.25, "to": 1.0}, self.sound_context)
-        self.assertIn("Write VOT analysis to file", script)
-        self.assertIn("readFile$", script)
-
-    def test_auto_mode_uses_the_range_dragged_in_the_editor(self) -> None:
-        context = tools.ToolContext(
-            tools.parse_object_context(SELECTED_CONTEXT),
-            self.sound_context.result_path,
-            self.sound_context.state_path,
-        )
-        script = tools.render("vot", {}, context)
-        self.assertIn("tmin = 0.250000", script)
-        self.assertIn("tmax = 0.500000", script)
-        self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
-        self.assertNotIn("未指定范围", script)
-
-    def test_explicit_range_beats_the_editor_selection(self) -> None:
-        context = tools.ToolContext(
-            tools.parse_object_context(SELECTED_CONTEXT),
-            self.sound_context.result_path,
-            self.sound_context.state_path,
-        )
-        script = tools.render("vot", {"from": 0.6, "to": 0.8}, context)
-        self.assertIn("tmin = 0.600000", script)
-        self.assertIn("tmax = 0.800000", script)
-        self.assertNotIn("按编辑器圈选", script)
+        self.assertIn("voicing", str(caught.exception))
 
     def test_auto_mode_needs_a_sound_not_a_textgrid(self) -> None:
         with self.assertRaises(tools.ToolError) as caught:
-            tools.render("vot", {"from": 0.1, "to": 0.3}, self.grid_context)
-        self.assertIn("Sound", str(caught.exception))
+            tools.LOCAL_TOOLS["vot"].run(
+                {"from": 0.1, "to": 0.3}, self.grid_context,
+                _UnusedPraatEnvironment(Path(self.directory.name)),
+            )
+        self.assertIn("人工提供", str(caught.exception))
+
+
+class _UnusedPraatEnvironment:
+    def __init__(self, runtime: Path):
+        self.runtime_directory = runtime
+        self.praat_executable = "Praat.exe"
+        self.cancelled = None
+
+    def execute(self, script: str) -> tuple[bool, list[str], str]:
+        return True, [script], ""
+
+
+class _CapturingPraatEnvironment(_UnusedPraatEnvironment):
+    def __init__(self, runtime: Path):
+        super().__init__(runtime)
+        self.scripts: list[str] = []
+
+    def execute(self, script: str) -> tuple[bool, list[str], str]:
+        self.scripts.append(script)
+        return True, [], ""
 
 
 class EditorSelectionRangeTests(unittest.TestCase):

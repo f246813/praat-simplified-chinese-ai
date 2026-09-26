@@ -1,4 +1,4 @@
-"""Run generated VOT templates in Praat and verify the shared C++ TSV contract."""
+"""Verify the native VOT contract and run Sound/LongSound detector regressions."""
 
 from __future__ import annotations
 
@@ -23,25 +23,21 @@ CORE_ANALYSIS_HEADER = PROJECT / "fon/SegmentAcousticAnalysis.h"
 CORE_ANALYSIS_SOURCE = PROJECT / "fon/SegmentAcousticAnalysis.cpp"
 CORE_TEST_SOURCE = PROJECT / "fon/Praat_tests.cpp"
 CORE_TEST_ENUMS = PROJECT / "fon/Praat_tests_enums.h"
+TRANSLATION_SOURCE = PROJECT / "tools/generate_translation_map.py"
 FONED_MAKEFILE = PROJECT / "foned/Makefile"
 FONED_MESON = PROJECT / "foned/meson.build"
 SOUND_ANALYSIS_AREA_SOURCE = PROJECT / "foned/SoundAnalysisArea.cpp"
 SOUND_ACTION_SOURCE = PROJECT / "fon/praat_Sound.cpp"
 SOUND_EDITOR_SOURCE = PROJECT / "foned/SoundEditor.cpp"
 SOUND_EDITOR_HEADER = PROJECT / "foned/SoundEditor.h"
+PRAAT_AI_CONTROL_SOURCE = PROJECT / "sys/PraatAiControl.cpp"
+AI_TOOL_SOURCE = PROJECT / "ai/praat_ai/tools.py"
 FUNCTION_EDITOR_SOURCE = PROJECT / "foned/FunctionEditor.cpp"
 FUNCTION_EDITOR_HEADER = PROJECT / "foned/FunctionEditor.h"
 PRAAT_TEST_SOURCE = PROJECT / "fon/Praat_tests.cpp"
 PRAAT_TEST_ENUMS = PROJECT / "fon/Praat_tests_enums.h"
 EDITOR_SOURCE = PROJECT / "foned/SegmentAcousticEditor.cpp"
 EDITOR_HEADER = PROJECT / "foned/SegmentAcousticEditor.h"
-VOT_SOUND = (
-    'Create Sound from formula: "vot-fixture", 1, 0, 0.6, 44100, '
-    '~ if x < 0.30 then 0 else if x < 0.33 then 0.3 * randomGauss (0, 1) '
-    'else 0.5 * sin (2 * pi * 220 * x) fi fi'
-)
-
-
 def run_praat(script: Path, label: str) -> str:
     if not PRAAT.is_file():
         raise RuntimeError(f"Praat executable is missing: {PRAAT}")
@@ -83,23 +79,6 @@ def assert_metric(rows: dict[str, list[str]], metric_id: str, *, unit: str) -> l
     if row[0] != "1" or row[11] != "VOT" or row[21] != unit:
         raise AssertionError(f"wrong schema, analysis kind, or unit: {row!r}")
     return row
-
-
-def verify_generated_template(root: Path, name: str, arguments: dict[str, object]) -> dict[str, list[str]]:
-    context = tools.ToolContext(
-        tools.parse_object_context("id\tclass\tname\tselected\n1\tSound\tvot-fixture\t1\n"),
-        root / f"{name}-chat-result.tsv",
-        root / f"{name}-chat-state.txt",
-    )
-    template = tools.render("vot", {"object": 1, **arguments}, context)
-    if "Write VOT analysis to file" not in template or "readFile$" not in template:
-        raise AssertionError(f"{name}: the template did not call and read the C++ result action")
-    if "Filter (pass Hann band)" in template or "To Pitch (ac)" in template:
-        raise AssertionError(f"{name}: Python still duplicates the acoustic estimator")
-    script = root / f"{name}.praat"
-    script.write_text(VOT_SOUND + "\n" + template, encoding="utf-8")
-    run_praat(script, name)
-    return read_rows(context.result_path.with_suffix(".vot.tsv"))
 
 
 def verify_comparison_editor_removed() -> None:
@@ -224,8 +203,243 @@ def verify_vot_action_contract() -> None:
         raise AssertionError("VOT Info summary regression is missing")
 
 
+def verify_vot_editor_form_contract() -> None:
+    editor = re.sub(r"\s+", " ", SOUND_EDITOR_SOURCE.read_text(encoding="utf-8"))
+    required_form_strings = (
+        'U"Start time (s)"',
+        'U"End time (s)"',
+        'U"Burst/release time (s)"',
+        'U"Voicing onset time (s)"',
+        'U"Minimum burst rise (dB)"',
+        'U"模型辅助自动"',
+        'U"纯声学候选"',
+        'U"人工确认"',
+        'U"完整语句音素（空格分隔）"',
+        'U"固定上下文开始时间（s）"',
+        'U"固定上下文结束时间（s）"',
+        'U"语言代码"',
+        'U"目标音素序号（从 0 开始）"',
+        'U"人工确认模式需要同时填写爆破释放时刻和起声时刻。"',
+    )
+    missing = [item for item in required_form_strings if item not in editor]
+    if missing:
+        raise AssertionError(f"VOT form is missing unified request inputs: {missing!r}")
+    if 'BOOLEAN (manualConfirmed' in editor:
+        raise AssertionError("VOT mode and manual confirmation must use the shared three-mode request")
+    if "PraatAiControl_submitVOTJob" not in editor or "startVotEditorJob" not in editor:
+        raise AssertionError("The editor must submit requests through PraatAiControl's shared VOT service")
+
+    translations = TRANSLATION_SOURCE.read_text(encoding="utf-8")
+    required_translations = {
+        '"VOT analysis"': '"VOT 分析"',
+        '"Burst/release time (s)"': '"爆破释放时刻（秒）"',
+        '"Voicing onset time (s)"': '"起声时刻（秒）"',
+        '"Minimum burst rise (dB)"': '"爆破增幅阈值（dB）"',
+        '"Automatically estimated candidate"': '"自动计算的候选值"',
+        '"requires manual review"': '"需要人工复核"',
+    }
+    missing_translations = [
+        f"{english} -> {chinese}" for english, chinese in required_translations.items()
+        if f"{english}: {chinese}" not in translations
+    ]
+    if missing_translations:
+        raise AssertionError(f"VOT translations are missing from the canonical map: {missing_translations!r}")
+
+
+def verify_vot_result_repopulation_contract() -> None:
+    editor = re.sub(r"\s+", " ", SOUND_EDITOR_SOURCE.read_text(encoding="utf-8"))
+    header = re.sub(r"\s+", " ", SOUND_EDITOR_HEADER.read_text(encoding="utf-8"))
+    required_editor_items = (
+        'MUTABLE_COMMENT (votValueText, U"VOT 值（ms）：尚未计算")',
+        'MUTABLE_COMMENT (progressText, U"分析进度：尚未开始")',
+        'PraatAiControl_pollVOTJob',
+        'applyVotResultJson',
+        '"burst_sample_index"',
+        '"onset_sample_index"',
+        '"vot_ms"',
+        '"failure_reason"',
+        'vot_gui_text_cb_changed',
+        'my votStateSelectionStart',
+        'my votStateSelectionEnd',
+        'my votNeedsRecalculation',
+        'my votFailureReason',
+        'my votManualConfirmed',
+    )
+    missing = [item for item in required_editor_items if item not in editor]
+    if missing:
+        raise AssertionError(f"VOT calculation results are not fully retained or repopulated: {missing!r}")
+    if "const bool sameSelection = my votStateHasSelection &&" not in editor or "if (! sameSelection)" not in editor:
+        raise AssertionError("VOT state must be retained for the same selection and cleared for a new one")
+    required_editor_state = (
+        "votStateHasSelection",
+        "votStateSelectionStart",
+        "votStateSelectionEnd",
+        "votAnalysisStartTime",
+        "votAnalysisEndTime",
+        "votBurstTime",
+        "votVoicingTime",
+        "votValueMs",
+        "votCalculationAttempted",
+        "votValueIsCandidate",
+        "votNeedsRecalculation",
+        "votFailureReason",
+        "votManualConfirmed",
+        "votBurstThresholdDb",
+        "votPitchFloorHz",
+    )
+    missing_state = [item for item in required_editor_state if item not in header]
+    if missing_state:
+        raise AssertionError(f"SoundEditor does not retain per-editor VOT form state: {missing_state!r}")
+
+    core_header = CORE_ANALYSIS_HEADER.read_text(encoding="utf-8")
+    for item in (
+        "struct VOTDisplayData",
+        "AnalysisResult_toVOTDisplayData",
+        "VOTBoundaryMode mode",
+    ):
+        if item not in core_header:
+            raise AssertionError(f"Unified VOT display data contract is missing: {item}")
+
+    core_tests = PRAAT_TEST_SOURCE.read_text(encoding="utf-8")
+    for item in (
+        'AnalysisResult_toVOTDisplayData (candidate, VOTBoundaryMode::estimateCandidates)',
+        'AnalysisResult_toVOTDisplayData (partialCandidate,',
+        'AnalysisResult_toVOTDisplayData (manualNegative, VOTBoundaryMode::manual)',
+        'partialDisplay.failureReason == U"No stable voiced onset."',
+        'missingBothDisplay.failureReason == U"No burst was detected.; No stable voiced onset."',
+        'manualDisplay.valueMs.value() < 0.0',
+    ):
+        if item not in core_tests:
+            raise AssertionError(f"VOT result-conversion regression is missing: {item}")
+
+
+def verify_vot_open_calculation_contract() -> None:
+    source = SOUND_EDITOR_SOURCE.read_text(encoding="utf-8")
+    header = SOUND_EDITOR_HEADER.read_text(encoding="utf-8")
+    match = re.search(r"static void menu_cb_SoundEditor_VOT \(.*?\n\}\n\nstatic void menu_cb_SoundEditor_VOTMenu", source, re.S)
+    if not match:
+        raise AssertionError("Could not isolate the VOT editor callback")
+    callback = re.sub(r"\s+", " ", match.group(0))
+    if "if (! hasSelection)" not in callback or "请先选择目标片段" not in callback:
+        raise AssertionError("The editor VOT entrypoint must require a selected target")
+    if "data -> xmin" in callback or "data -> xmax" in callback:
+        raise AssertionError("VOT must never substitute the full recording for an absent target")
+    if "runVotAnalysis" in source or "praat_Sound_analyseVOT (" in callback:
+        raise AssertionError("The editor must not retain a separate synchronous VOT algorithm path")
+    apply = callback.split("EDITOR_DO", 1)[1]
+    control = PRAAT_AI_CONTROL_SOURCE.read_text(encoding="utf-8")
+    for item in ("startVotEditorJob (me,", "editorSampleIndexAtTime", "my votMode = mode"):
+        if item not in source:
+            raise AssertionError(f"Shared VOT request input or snapshot behavior is missing: {item}")
+    for item in (
+        "praat_LongSound_writeVOTAudioSnapshot",
+        "praat_Sound_writeVOTAudioSnapshot",
+        "PraatAiControl_submitVOTJob",
+		"target_range",
+		"alignment_context_range",
+		"manual_boundaries",
+    ):
+        if item not in control:
+            raise AssertionError(f"Native VOT request snapshot contract is missing: {item}")
+    if "startVotEditorJob (me," not in apply:
+        raise AssertionError("Clicking Apply must submit the editor's request")
+    if "PraatAiControl_submitVOTJob" not in source:
+        raise AssertionError("Editor and AI must use the same request submission API")
+    if "std::thread" not in source or "Gui_addWorkProc" not in source:
+        raise AssertionError("Alignment must run asynchronously and update the VOT dialog on the UI thread")
+    if "my votRequestGeneration != generation" not in source or \
+            "my votCurrentJobId != jobId" not in source:
+        raise AssertionError("Late VOT worker results must be discarded when a newer request is active")
+    if "markVotResultStale" not in source or "PraatAiControl_cancelVOTJob" not in source:
+        raise AssertionError("Audio and selection changes must cancel and stale pending VOT results")
+    if "model_assisted" not in source or "acoustic_only" not in source or "manual" not in source:
+        raise AssertionError("All three supported analysis modes must map into the common request")
+    if "(onsetSample - burstSample) * 1000.0 * audio -> dx" not in source:
+        raise AssertionError("Manual VOT preview must use the signed sample-index formula")
+    if 'str32str (field -> stringValue.get(), U"VOT 值（ms）：")' not in source:
+        raise AssertionError("The VOT result label must be located from its immutable form label")
+    if "VOT_FORM_BURST_FIELD_INDEX = 3" not in source or \
+            "VOT_FORM_VOICING_FIELD_INDEX = 4" not in source:
+        raise AssertionError("VOT boundary fields must be addressed by their stable form roles")
+    if "static UiField votFormBoundaryField (UiForm form, integer fieldIndex)" not in source:
+        raise AssertionError("VOT boundary field lookup must not depend on translated label text")
+    if "votFormLabelIs" in source or "votFormFieldWithLabel" in source:
+        raise AssertionError("VOT field event routing must not depend on translated labels")
+    vot_form_fields = source.split('EDITOR_FORM (U"VOT analysis"', 1)[1].split("EDITOR_OK", 1)[0]
+    boundary_field_positions = [
+        vot_form_fields.find('U"Start time (s)"'),
+        vot_form_fields.find('U"End time (s)"'),
+        vot_form_fields.find('U"Burst/release time (s)"'),
+        vot_form_fields.find('U"Voicing onset time (s)"'),
+    ]
+    if min(boundary_field_positions) < 0 or boundary_field_positions != sorted(boundary_field_positions):
+        raise AssertionError("VOT form field indices must stay aligned with the four range and boundary fields")
+    if "if (field -> text)" not in source:
+        raise AssertionError("Changed callbacks must cover all editable request fields")
+    if "changedField == votFormBoundaryField (form, VOT_FORM_BURST_FIELD_INDEX)" not in source or \
+            "changedField == votFormBoundaryField (form, VOT_FORM_VOICING_FIELD_INDEX)" not in source:
+        raise AssertionError("Live updates must recognize boundaries by field identity")
+    if "GuiDialog_setOwnerWindow (form -> d_dialogForm, static_cast <GuiWindow> (my windowForm))" not in source:
+        raise AssertionError("The VOT form must stay above its SoundEditor while selecting audio")
+    dialog_api = (PROJECT / "sys/GuiDialog.cpp").read_text(encoding="utf-8")
+    dialog_header = (PROJECT / "sys/Gui.h").read_text(encoding="utf-8")
+    if "GuiDialog_setOwnerWindow" not in dialog_header or \
+            "SetWindowLongPtr (dialogWindow, GWLP_HWNDPARENT" not in dialog_api:
+        raise AssertionError("VOT dialog ownership must be enforced on Windows")
+    if "void v_updateText () override;" not in header or "void structSoundEditor :: v_updateText ()" not in source:
+        raise AssertionError("Selection changes must invalidate the open VOT result")
+    if "void structSoundEditor :: v1_dataChanged (Editor sender)" not in source:
+        raise AssertionError("Audio changes must invalidate the open VOT result")
+    for item in (
+        "GuiText_setChangedCallback (field -> text, vot_gui_text_cb_changed, form)",
+        "if (my votMode == 3 && changedBoundary)",
+        "updateManualVotFromForm (form, me)",
+        "setVotFormBoundaries (my votForm, me)",
+    ):
+        if item not in source:
+            raise AssertionError(f"VOT live update hook is missing: {item}")
+
+
+def verify_ai_vot_tool_contract() -> None:
+    tool = tools.LOCAL_TOOLS.get("vot")
+    if tool is None or not callable(getattr(tool, "run", None)):
+        raise AssertionError("AI VOT must be registered as an executable local tool")
+    if "vot" in tools.TOOL_MAP:
+        raise AssertionError("AI VOT still routes through a generated script template")
+    source = AI_TOOL_SOURCE.read_text(encoding="utf-8")
+    required = (
+        "VOTAnalysisService",
+        "TSVVOTAcousticAnalyzer",
+        "Write VOT audio snapshot:",
+        "Analyse VOT audio snapshot:",
+        "_request_from_payload",
+        "use_cache=False",
+    )
+    missing = [item for item in required if item not in source]
+    if missing:
+        raise AssertionError(f"AI VOT no longer submits the shared request and native analyzer: {missing!r}")
+
+
+def verify_vot_editor_context_contract() -> None:
+    editor = re.sub(r"\s+", " ", SOUND_EDITOR_SOURCE.read_text(encoding="utf-8"))
+    control = re.sub(r"\s+", " ", PRAAT_AI_CONTROL_SOURCE.read_text(encoding="utf-8"))
+    if editor.count("PraatAiControl_noteEditorSelection (me, my data()") < 3:
+        raise AssertionError("SoundEditor must publish its fixed VOT context on open, edit, and submit")
+    if "PraatAiControl_clearEditorVOTContext (me, my data())" not in editor:
+        raise AssertionError("Audio edits must clear the old fixed VOT context")
+    if "context_start\\tcontext_end" not in control or "std::setprecision (17)" not in control:
+        raise AssertionError("AI object context must preserve fixed VOT context at full time precision")
+    if "std::optional<double> contextStart = {}" not in (PROJECT / "sys/PraatAiControl.h").read_text(encoding="utf-8"):
+        raise AssertionError("PraatAiControl does not expose the optional fixed VOT context")
+
+
 def main() -> None:
     verify_vot_action_contract()
+    verify_vot_editor_form_contract()
+    verify_vot_result_repopulation_contract()
+    verify_vot_open_calculation_contract()
+    verify_ai_vot_tool_contract()
+    verify_vot_editor_context_contract()
     core_output_dir = Path.home()
     core_prefix = f"praat-segment-acoustic-core-{uuid.uuid4().hex}"
     core_files = [core_output_dir / f"{core_prefix}-{name}.tsv" for name in ("zero", "negative", "candidates", "longsound")]
@@ -274,32 +488,13 @@ def main() -> None:
             if missing_candidate[20] or missing_candidate[22] not in {"unavailable", "ambiguous", "target_incomplete"} or not missing_candidate[23]:
                 raise AssertionError(f"missing candidate lacks an unavailable reason: {missing_candidate!r}")
 
-            generated_zero = verify_generated_template(root, "template-zero", {"burst": 0.0, "voicing": 0.0})
-            zero = assert_metric(generated_zero, "vot_ms", unit="ms")
-            if float(zero[20]) != 0.0 or zero[22] != "measured":
-                raise AssertionError(f"AI template lost explicit zero: {zero!r}")
-
-            generated_negative = verify_generated_template(
-                root, "template-negative", {"burst": 0.30, "voicing": 0.28}
-            )
-            negative = assert_metric(generated_negative, "vot_ms", unit="ms")
-            if abs(float(negative[20]) + 20.0) > 1e-8 or negative[22] != "measured":
-                raise AssertionError(f"AI template lost negative VOT: {negative!r}")
-
-            generated_auto = verify_generated_template(root, "template-candidates", {})
-            burst = assert_metric(generated_auto, "burst_time_candidate", unit="s")
-            vot = assert_metric(generated_auto, "vot_candidate_ms", unit="ms")
-            if burst[22] not in {"warning", "unavailable", "ambiguous", "target_incomplete"} or vot[22] not in {"warning", "unavailable", "ambiguous", "target_incomplete"}:
-                raise AssertionError(f"candidate values are not marked for review: {burst!r}, {vot!r}")
-            if (burst[22] in {"unavailable", "ambiguous", "target_incomplete"} and (burst[20] or not burst[23])) or (vot[22] in {"unavailable", "ambiguous", "target_incomplete"} and (vot[20] or not vot[23])):
-                raise AssertionError(f"unavailable candidate has no reason: {burst!r}, {vot!r}")
         finally:
             for path in core_files:
                 path.unlink(missing_ok=True)
             legacy_temp_path.unlink(missing_ok=True)
             core_wave.unlink(missing_ok=True)
 
-    print("SEGMENT_ANALYSIS_TEMPLATE_PASS: VOT contract and AI template bridge")
+    print("SEGMENT_ANALYSIS_NATIVE_PASS: VOT contract and AI local-tool bridge")
 
 
 if __name__ == "__main__":

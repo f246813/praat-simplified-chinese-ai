@@ -154,7 +154,10 @@ pwsh -NoProfile -File ai/Download-MFA-Models.ps1
 
 当前实现为每次学习者录音动态创建 MFA 词典条目，因此可以直接使用给定的
 IPA 音素序列，不要求先准备整段文本的词典。实际语言仍需要对应的 MFA 声学
-模型，wav2vec2 模型也需要包含目标音素的 tokenizer。
+模型，wav2vec2 模型也需要包含目标音素的 tokenizer。模型辅助 VOT 还要求显式声明
+模型语言：MFA 填写 `alignment.mfa.language`（如 `ja`），wav2vec2 填写
+`alignment.wav2vec2.languages`（如 `["ja"]`；明确支持多语言时可填 `["*"]`）。
+旧配置未声明语言时，VOT 会返回具体配置原因，不会使用该模型的对齐区间。
 
 ## 说明
 

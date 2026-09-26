@@ -2,6 +2,8 @@
 
 import types
 import unittest
+from queue import Queue
+from unittest.mock import patch
 
 import tkinter as tk
 
@@ -125,6 +127,33 @@ class ChatMessageBlockTests(unittest.TestCase):
             self.window.transcript.tag_cget("failure_block", "background"),
             self.window.theme.color("dangerSoft"),
         )
+
+    def test_partial_measurements_and_failed_steps_use_separate_message_blocks(self) -> None:
+        outcome = chat.TurnOutcome(
+            reply="部分完成：下面只列出成功步骤的测量结果；仍有步骤失败，不能视为全部比较已完成。",
+            results=["F1 = 742 Hz"],
+            used_tools=True,
+            failure="工具 formant_statistics 执行失败：对象类型不匹配。",
+        )
+        self.window.messages = Queue()
+        with (
+            patch.object(chat, "praat_executable", return_value="Praat.exe"),
+            patch.object(chat, "praat_process_ids", return_value=[123]),
+            patch.object(chat, "praat_process_running_from", return_value=True),
+            patch.object(chat, "praat_instance_warning_from", return_value=""),
+            patch.object(chat, "refresh_object_context", return_value=(True, "")),
+            patch.object(self.window, "run_user_turn", return_value=outcome),
+        ):
+            self.window.process_message("比较 F1 和 F2")
+
+        messages = []
+        while not self.window.messages.empty():
+            messages.append(self.window.messages.get_nowait())
+        by_role = {role: body for role, body in messages if role in {"assistant", "result", "failure"}}
+        self.assertIn("部分完成", by_role["assistant"])
+        self.assertIn("F1 = 742 Hz", by_role["result"])
+        self.assertNotIn("对象类型不匹配", by_role["result"])
+        self.assertIn("对象类型不匹配", by_role["failure"])
 
     def test_message_block_colours_follow_the_theme(self) -> None:
         theme = self.window.theme

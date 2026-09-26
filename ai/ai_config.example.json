@@ -81,12 +81,14 @@
       "conda_environment": "aligner",
       "dictionary_path": "",
       "acoustic_model": "",
+      "language": "",
       "beam": 10,
       "retry_beam": 40
     },
     "wav2vec2": {
       "enabled": false,
       "model": "",
+      "languages": [],
       "device": "cuda",
       "blank_token_id": 0,
       "sample_rate": 16000,

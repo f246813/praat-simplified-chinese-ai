@@ -118,9 +118,10 @@ std::optional<std::pair<integer, integer>> votSnapshotJsonIntegerPair (conststri
 	return std::pair { values [0], values [1] };
 }
 
-autoSound makeVOTSnapshotPart (constSound source, integer startSample, integer endSample) {
+	autoSound makeVOTSnapshotPart (constSound source, integer startSample, integer endSample) {
 	Melder_require (startSample >= 0 && startSample < endSample && endSample <= source -> nx,
-		U"VOT snapshot range must be an increasing zero-based half-open sample range inside the audio object.");
+		U"VOT snapshot range [", startSample, U", ", endSample,
+		U") must be increasing and inside the zero-based sample range [0, ", source -> nx, U").");
 	const integer count = endSample - startSample;
 	const double firstSampleTime = source -> x1 + startSample * source -> dx;
 	const double xmin = firstSampleTime - 0.5 * source -> dx;

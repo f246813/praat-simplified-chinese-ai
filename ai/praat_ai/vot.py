@@ -54,6 +54,23 @@ def _thaw(value: Any) -> Any:
     return value
 
 
+def _normalize_parameter_numbers(value: Any) -> Any:
+    """Use one JSON representation for equivalent integer and float settings."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _normalize_parameter_numbers(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return tuple(_normalize_parameter_numbers(item) for item in value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value)
+    return value
+
+
 def _is_sample_index(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -154,7 +171,11 @@ class VOTAnalysisRequest:
         )
         object.__setattr__(self, "phonemes", tuple(str(phone) for phone in self.phonemes))
         object.__setattr__(self, "model_ids", tuple(str(item) for item in self.model_ids))
-        object.__setattr__(self, "parameters", _freeze(self.parameters))
+        object.__setattr__(
+            self,
+            "parameters",
+            _freeze(_normalize_parameter_numbers(self.parameters)),
+        )
         object.__setattr__(self, "model_versions", _freeze(self.model_versions))
         if self.manual_boundaries is not None:
             object.__setattr__(self, "manual_boundaries", tuple(self.manual_boundaries))
@@ -185,8 +206,12 @@ class VOTAnalysisRequest:
 
     @property
     def request_hash(self) -> str:
+        # request_id identifies one execution, not its analytical inputs. Keeping
+        # it out makes equivalent editor and AI requests compare identically.
+        canonical_request = self.to_dict()
+        canonical_request.pop("request_id", None)
         encoded = json.dumps(
-            self.to_dict(),
+            canonical_request,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -702,6 +727,8 @@ class VOTAnalysisService:
             marker in lowered for marker in ("mismatch", "unsupported", "not support")
         ):
             return f"language_mismatch: {details}"
+        if "language metadata is not configured" in lowered:
+            return f"language_not_configured: {details}"
         return f"alignment_failed: {details}"
 
     def _select_target_phone(
@@ -800,6 +827,20 @@ class VOTAnalysisService:
         candidate_pairs: tuple[Mapping[str, Any], ...] = (),
     ) -> VOTAnalysisResult:
         snapshot = request.audio_snapshot
+        used_models: list[str] = []
+        if alignment_evidence is not None:
+            for alignment in alignment_evidence.results:
+                for configured in request.model_ids:
+                    if alignment.source == configured or alignment.source.startswith(
+                        configured + ":"
+                    ):
+                        if configured not in used_models:
+                            used_models.append(configured)
+        used_versions = {
+            model: request.model_versions[model]
+            for model in used_models
+            if model in request.model_versions
+        }
         return VOTAnalysisResult(
             request_id=request.request_id,
             request_hash=request.request_hash,
@@ -827,8 +868,8 @@ class VOTAnalysisService:
             detector_path=detector_path,
             fallback_reason=fallback_reason,
             parameters=_freeze(parameters or request.parameters),
-            model_ids=request.model_ids,
-            model_versions=request.model_versions,
+            model_ids=tuple(used_models),
+            model_versions=used_versions,
             algorithm_version=algorithm_version,
             candidate_pairs=tuple(_freeze(item) for item in candidate_pairs),
         )

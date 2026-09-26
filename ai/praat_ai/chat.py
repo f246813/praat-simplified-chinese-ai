@@ -513,6 +513,20 @@ def _summary_of(outcome: TurnOutcome) -> str:
     )
 
 
+def _failure_summary(outcome: TurnOutcome, model_reply: str = "") -> str:
+    """失败步骤存在时，用确定性的局部状态覆盖模型可能给出的完整性结论。"""
+
+    if outcome.results:
+        return (
+            "部分完成：下面只列出成功步骤的测量结果；仍有步骤失败，"
+            "不能视为全部比较已完成。"
+        )
+    status = "执行未完成：没有获得有效测量结果。"
+    if model_reply:
+        status += "\n" + model_reply
+    return status
+
+
 def _action_signature(action: Mapping[str, Any]) -> str:
     """动作签名（工具名 + 参数），用来认出重复调用。"""
 
@@ -675,6 +689,8 @@ def _run_agent_turn(
 
     outcome = TurnOutcome()
     executed: dict[str, str] = {}
+    unresolved_failures: list[str] = []
+    recoverable_failures: dict[str, list[str]] = {}
     steps_done = 0
     stopped_early = False
     cancelled = False
@@ -692,7 +708,11 @@ def _run_agent_turn(
                 ask = getattr(planner, "ask_for_text", None)
                 if ask is not None:
                     reply = ask()
-            outcome.reply = reply or _summary_of(outcome)
+            outcome.reply = (
+                _failure_summary(outcome, reply)
+                if outcome.failure
+                else reply or _summary_of(outcome)
+            )
             return outcome
         for action in actions:
             if cancel is not None and cancel.is_set():
@@ -756,11 +776,22 @@ def _run_agent_turn(
             outcome.used_tools = True
             if step.ok:
                 outcome.results.extend(step.results)
+                # 参数校验类失败不会执行脚本；同一工具随后成功，说明模型已纠正参数，
+                # 不应把已恢复的尝试报成最终未完成。
+                recoverable_failures.pop(step.tool, None)
             else:
-                outcome.failure = step.observation
-                # 失败也可能带回结果行：脚本在 Praat 里报错时，Praat 会把错误原文
-                # 写进结果文件（不再弹模态框），那一行要显示给用户看。
-                outcome.results.extend(step.results)
+                details = [step.observation, *step.results]
+                detail = "\n".join(part for part in details if part)
+                if not step.script and not step.results:
+                    recoverable_failures.setdefault(step.tool, []).append(detail)
+                else:
+                    unresolved_failures.append(detail)
+            recoverable_details = [
+                entry
+                for failures in recoverable_failures.values()
+                for entry in failures
+            ]
+            outcome.failure = "\n".join(recoverable_details + unresolved_failures)
             if step.note:
                 outcome.notes.append(step.note)
             planner.observe(action, step.observation)
@@ -770,9 +801,20 @@ def _run_agent_turn(
             break
     if cancelled:
         outcome.notes.append("已取消：后面的步骤没有再执行。")
-        outcome.reply = "已取消这次操作（已经执行完的那几步结果还在下面）。"
+        outcome.reply = (
+            _failure_summary(outcome)
+            if outcome.failure
+            else "已取消这次操作（已经执行完的那几步结果还在下面）。"
+        )
         return outcome
-    outcome.reply = planner.wrap_up() or _summary_of(outcome)
+    outcome.reply = (
+        _failure_summary(
+            outcome,
+            "" if outcome.results else planner.wrap_up(),
+        )
+        if outcome.failure
+        else planner.wrap_up() or _summary_of(outcome)
+    )
     return outcome
 
 
@@ -2232,10 +2274,29 @@ class ChatWindow:
                 self.messages.put(("assistant", body))
                 self.messages.put(("result", "结果：\n" + "\n".join(outcome.results)))
                 if outcome.failure:
-                    # 前面几步成功、后面某一步没做成：结果照给，另起一句说明。
-                    self.messages.put(("hint", outcome.failure))
+                    self.messages.put(
+                        ("failure", "以下步骤未完成：\n" + outcome.failure)
+                    )
                 self.history.append({"role": "user", "content": text})
-                self.history.append({"role": "assistant", "content": body})
+                history_body = body
+                if outcome.failure:
+                    history_body += "\n失败步骤：\n" + outcome.failure
+                self.history.append({"role": "assistant", "content": history_body})
+                return
+
+            if outcome.failure:
+                self.messages.put(("assistant", outcome.reply))
+                failure = "以下步骤未完成：\n" + outcome.failure
+                if outcome.last_script:
+                    failure += f"\n\n本次脚本：\n{tools.describe_script(outcome.last_script)}"
+                self.messages.put(("failure", failure))
+                self.history.append({"role": "user", "content": text})
+                self.history.append(
+                    {
+                        "role": "assistant",
+                        "content": outcome.reply + "\n" + failure,
+                    }
+                )
                 return
 
             message = (

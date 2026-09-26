@@ -126,6 +126,7 @@ class MfaAlignmentConfig:
     conda_environment: str = ""
     dictionary_path: str = ""
     acoustic_model: str = ""
+    language: str = ""
     beam: int = 10
     retry_beam: int = 40
 
@@ -134,6 +135,7 @@ class MfaAlignmentConfig:
 class Wav2Vec2AlignmentConfig:
     enabled: bool = False
     model: str = ""
+    languages: list[str] = field(default_factory=list)
     device: str = "cuda"
     blank_token_id: int = 0
     sample_rate: int = 16000
