@@ -42,14 +42,216 @@
 
 #include "praat_Sound.h"
 #include "melder_audio.h"
+#include "melder_audiofiles.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <exception>
+#include <limits>
+#include <string>
 
 static std::optional<double> optionalVotBoundary (double value) {
 	return isundef (value) ? std::optional<double> {} : std::optional<double> { value };
 }
+
+namespace {
+
+std::optional<double> votSnapshotJsonNumber (conststring32 json, conststring32 key) {
+	if (! json || ! key)
+		return {};
+	const std::u32string needle = std::u32string (U"\"") + key + U"\"";
+	const char32 *found = str32str (json, needle.c_str());
+	if (! found)
+		return {};
+	while (*found && *found != U':')
+		found ++;
+	if (! *found)
+		return {};
+	found ++;
+	while (*found == U' ' || *found == U'\t' || *found == U'\r' || *found == U'\n')
+		found ++;
+	std::array<char32, 128> number {};
+	integer length = 0;
+	while (*found && length + 1 < (integer) number.size() &&
+			*found != U',' && *found != U'}' && *found != U']' && *found != U' ' && *found != U'\t' &&
+			*found != U'\r' && *found != U'\n')
+		number [length ++] = *found ++;
+	if (length == 0)
+		return {};
+	const double value = Melder_atof (number.data());
+	return std::isfinite (value) ? std::optional<double> { value } : std::optional<double> {};
+}
+
+std::optional<std::pair<integer, integer>> votSnapshotJsonIntegerPair (conststring32 json, conststring32 key) {
+	if (! json || ! key)
+		return {};
+	const std::u32string needle = std::u32string (U"\"") + key + U"\"";
+	const char32 *found = str32str (json, needle.c_str());
+	if (! found)
+		return {};
+	while (*found && *found != U'[')
+		found ++;
+	if (! *found)
+		return {};
+	found ++;
+	std::array<integer, 2> values {};
+	for (integer index = 0; index < 2; index ++) {
+		while (*found == U' ' || *found == U'\t' || *found == U'\r' || *found == U'\n' || *found == U',')
+			found ++;
+		std::array<char32, 128> number {};
+		integer length = 0;
+		while (*found && length + 1 < (integer) number.size() &&
+				(*found == U'-' || (*found >= U'0' && *found <= U'9')))
+			number [length ++] = *found ++;
+		if (length == 0)
+			return {};
+		const double parsed = Melder_atof (number.data());
+		if (! std::isfinite (parsed) || std::floor (parsed) != parsed ||
+				parsed < (double) std::numeric_limits<integer>::lowest() ||
+				parsed > (double) std::numeric_limits<integer>::max())
+			return {};
+		values [index] = (integer) parsed;
+	}
+	return std::pair { values [0], values [1] };
+}
+
+autoSound makeVOTSnapshotPart (constSound source, integer startSample, integer endSample) {
+	Melder_require (startSample >= 0 && startSample < endSample && endSample <= source -> nx,
+		U"VOT snapshot range must be an increasing zero-based half-open sample range inside the audio object.");
+	const integer count = endSample - startSample;
+	const double firstSampleTime = source -> x1 + startSample * source -> dx;
+	const double xmin = firstSampleTime - 0.5 * source -> dx;
+	autoSound result = Sound_create (source -> ny, xmin, xmin + count * source -> dx,
+		count, source -> dx, firstSampleTime);
+	for (integer channel = 1; channel <= source -> ny; channel ++)
+		for (integer sample = 1; sample <= count; sample ++)
+			result -> z [channel] [sample] = source -> z [channel] [startSample + sample];
+	return result;
+}
+
+void writeVOTLittleEndian (std::uint32_t value, FILE *file) {
+	std::array<unsigned char, 4> bytes {};
+	for (integer byte = 0; byte < 4; byte ++)
+		bytes [byte] = (unsigned char) (value >> (8 * byte));
+	Melder_require (std::fwrite (bytes.data(), 1, bytes.size(), file) == bytes.size(),
+		U"Could not write the VOT alignment WAV header or samples.");
+}
+
+void writeVOTLittleEndian (std::uint16_t value, FILE *file) {
+	const std::array<unsigned char, 2> bytes {
+		(unsigned char) value, (unsigned char) (value >> 8)
+	};
+	Melder_require (std::fwrite (bytes.data(), 1, bytes.size(), file) == bytes.size(),
+		U"Could not write the VOT alignment WAV header or samples.");
+}
+
+void writeVOTAlignmentWav (Sound snapshot, conststring32 wavFileName) {
+	const std::uint64_t dataBytes = (std::uint64_t) snapshot -> nx * snapshot -> ny * sizeof (float);
+	Melder_require (dataBytes <= std::numeric_limits<std::uint32_t>::max() - 36 &&
+		snapshot -> ny <= std::numeric_limits<std::uint16_t>::max(),
+		U"VOT alignment WAV exceeds the supported RIFF dimensions.");
+	const integer sampleRate = Melder_iround (1.0 / snapshot -> dx);
+	Melder_require (sampleRate > 0 && (std::uint64_t) sampleRate * snapshot -> ny * sizeof (float) <=
+		std::numeric_limits<std::uint32_t>::max(), U"VOT alignment WAV has an unsupported sample rate.");
+	structMelderFile wavPath {};
+	Melder_pathToFile (wavFileName, & wavPath);
+	autofile wav = Melder_fopen (& wavPath, "wb");
+	Melder_require ((bool) wav, U"Could not create the VOT alignment WAV snapshot.");
+	Melder_require (std::fwrite ("RIFF", 1, 4, wav) == 4, U"Could not write the VOT alignment WAV header.");
+	writeVOTLittleEndian ((std::uint32_t) (36 + dataBytes), wav);
+	Melder_require (std::fwrite ("WAVEfmt ", 1, 8, wav) == 8, U"Could not write the VOT alignment WAV header.");
+	writeVOTLittleEndian ((std::uint32_t) 16, wav);
+	writeVOTLittleEndian ((std::uint16_t) 3, wav);   // IEEE float samples
+	writeVOTLittleEndian ((std::uint16_t) snapshot -> ny, wav);
+	writeVOTLittleEndian ((std::uint32_t) sampleRate, wav);
+	writeVOTLittleEndian ((std::uint32_t) (sampleRate * snapshot -> ny * sizeof (float)), wav);
+	writeVOTLittleEndian ((std::uint16_t) (snapshot -> ny * sizeof (float)), wav);
+	writeVOTLittleEndian ((std::uint16_t) (8 * sizeof (float)), wav);
+	Melder_require (std::fwrite ("data", 1, 4, wav) == 4, U"Could not write the VOT alignment WAV data header.");
+	writeVOTLittleEndian ((std::uint32_t) dataBytes, wav);
+	for (integer sample = 1; sample <= snapshot -> nx; sample ++) {
+		for (integer channel = 1; channel <= snapshot -> ny; channel ++) {
+			const float value = (float) snapshot -> z [channel] [sample];
+			std::uint32_t bits = 0;
+			std::memcpy (& bits, & value, sizeof value);
+			writeVOTLittleEndian (bits, wav);
+		}
+	}
+	Melder_require (std::fflush (wav) == 0, U"Could not finish writing the VOT alignment WAV snapshot.");
+	wav = nullptr;
+}
+
+void writeVOTAudioSnapshotFiles (Sound snapshot, integer objectId, integer startSample,
+		SourceKind sourceKind, conststring32 manifestFileName, conststring32 pcmFileName, conststring32 wavFileName)
+{
+	Melder_require (manifestFileName && manifestFileName [0] && pcmFileName && pcmFileName [0] &&
+		wavFileName && wavFileName [0], U"VOT snapshot requires manifest, PCM, and WAV output paths.");
+	structMelderFile pcmFilePath {}, manifestFilePath {};
+	Melder_pathToFile (pcmFileName, & pcmFilePath);
+	autofile pcmFile = Melder_fopen (& pcmFilePath, "wb");
+	Melder_require ((bool) pcmFile, U"Could not create the VOT float64 PCM snapshot.");
+	for (integer sample = 1; sample <= snapshot -> nx; sample ++) {
+		for (integer channel = 1; channel <= snapshot -> ny; channel ++) {
+			const double value = snapshot -> z [channel] [sample];
+			std::uint64_t bits = 0;
+			std::memcpy (& bits, & value, sizeof value);
+			std::array<unsigned char, 8> bytes {};
+			for (integer byte = 0; byte < 8; byte ++)
+				bytes [byte] = (unsigned char) (bits >> (8 * byte));
+			Melder_require (std::fwrite (bytes.data(), 1, bytes.size(), pcmFile) == bytes.size(),
+				U"Could not write every sample to the VOT float64 PCM snapshot.");
+		}
+	}
+	pcmFile = nullptr;
+
+	writeVOTAlignmentWav (snapshot, wavFileName);
+
+	Melder_pathToFile (manifestFileName, & manifestFilePath);
+	autoMelderString manifestText;
+	MelderString_append (& manifestText,
+		U"{\n  \"schema_version\": 1,\n  \"object_id\": ", objectId,
+		U",\n  \"source_kind\": \"", sourceKind == SourceKind::sound ? U"Sound" : U"LongSound",
+		U"\",\n  \"sample_rate_hz\": ", Melder_double (1.0 / snapshot -> dx),
+		U",\n  \"channels\": ", snapshot -> ny,
+		U",\n  \"sample_count\": ", snapshot -> nx,
+		U",\n  \"snapshot_start_sample\": ", startSample,
+		U",\n  \"time_origin_seconds\": ", Melder_double (snapshot -> x1), U"\n}\n");
+	MelderFile_writeText_e (& manifestFilePath, manifestText.string, kMelder_textOutputEncoding::UTF8);
+}
+
+std::optional<double> votSnapshotManifestNumber (conststring32 manifest, conststring32 key) {
+	return votSnapshotJsonNumber (manifest, key);
+}
+
+std::u32string votSnapshotManifestString (conststring32 manifest, conststring32 key) {
+	if (! manifest || ! key)
+		return {};
+	const std::u32string needle = std::u32string (U"\"") + key + U"\"";
+	const char32 *found = str32str (manifest, needle.c_str());
+	if (! found)
+		return {};
+	while (*found && *found != U':')
+		found ++;
+	while (*found && *found != U'\"')
+		found ++;
+	if (*found)
+		found ++;
+	std::u32string value;
+	while (*found && *found != U'\"')
+		value.push_back (*found ++);
+	return value;
+}
+
+double votSnapshotTimeForSample (integer absoluteSample, integer snapshotStartSample,
+		double timeOrigin, double sampleRate)
+{
+	return timeOrigin + (absoluteSample - snapshotStartSample) / sampleRate;
+}
+
+} // namespace
 
 AnalysisResult praat_Sound_analyseVOT (Sound sound, double startTime, double endTime,
 		std::optional<double> burstTime, std::optional<double> voicingTime,
@@ -129,6 +331,149 @@ void praat_LongSound_writeVOTAnalysisToFile (LongSound longSound, double startTi
 	writeVOTAnalysisResult (result, resultFileName);
 }
 
+void praat_Sound_writeVOTAudioSnapshot (Sound sound, integer objectId,
+		integer snapshotStartSample, integer snapshotEndSample, conststring32 manifestFileName,
+		conststring32 pcmFileName, conststring32 wavFileName)
+{
+	autoSound snapshot = makeVOTSnapshotPart (sound, snapshotStartSample, snapshotEndSample);
+	writeVOTAudioSnapshotFiles (snapshot.get(), objectId, snapshotStartSample, SourceKind::sound,
+		manifestFileName, pcmFileName, wavFileName);
+}
+
+void praat_LongSound_writeVOTAudioSnapshot (LongSound longSound, integer objectId,
+		integer snapshotStartSample, integer snapshotEndSample, conststring32 manifestFileName,
+		conststring32 pcmFileName, conststring32 wavFileName)
+{
+	Melder_require (snapshotStartSample >= 0 && snapshotStartSample < snapshotEndSample &&
+		snapshotEndSample <= longSound -> nx,
+		U"VOT snapshot range must be an increasing zero-based half-open sample range inside the LongSound.");
+	const integer count = snapshotEndSample - snapshotStartSample;
+	const double firstSampleTime = longSound -> x1 + snapshotStartSample * longSound -> dx;
+	const double xmin = firstSampleTime - 0.5 * longSound -> dx;
+	autoSound snapshot = Sound_create (longSound -> numberOfChannels, xmin, xmin + count * longSound -> dx,
+		count, longSound -> dx, firstSampleTime);
+	LongSound_readAudioToFloat (longSound, snapshot -> z.get(), snapshotStartSample + 1);
+	writeVOTAudioSnapshotFiles (snapshot.get(), objectId, snapshotStartSample, SourceKind::longSound,
+		manifestFileName, pcmFileName, wavFileName);
+}
+
+void praat_VOT_analyseSnapshotAndWriteResult (conststring32 manifestFileName, conststring32 pcmFileName,
+		integer targetStartSample, integer targetEndSample, integer contextStartSample,
+		integer contextEndSample, integer alignedStartSample, integer alignedEndSample,
+		conststring32 parametersJson, conststring32 resultFileName)
+{
+	Melder_require (manifestFileName && manifestFileName [0] && pcmFileName && pcmFileName [0] &&
+		resultFileName && resultFileName [0], U"VOT snapshot analysis requires manifest, PCM, and result paths.");
+	structMelderFile manifestPath {};
+	Melder_pathToFile (manifestFileName, & manifestPath);
+	autostring32 manifest = MelderFile_readText (& manifestPath);
+	const auto snapshotStartValue = votSnapshotManifestNumber (manifest.get(), U"snapshot_start_sample");
+	const auto sampleCountValue = votSnapshotManifestNumber (manifest.get(), U"sample_count");
+	const auto sampleRateValue = votSnapshotManifestNumber (manifest.get(), U"sample_rate_hz");
+	const auto timeOriginValue = votSnapshotManifestNumber (manifest.get(), U"time_origin_seconds");
+	const auto objectIdValue = votSnapshotManifestNumber (manifest.get(), U"object_id");
+	const auto channelsValue = votSnapshotManifestNumber (manifest.get(), U"channels");
+	const std::u32string sourceKindText = votSnapshotManifestString (manifest.get(), U"source_kind");
+	Melder_require (snapshotStartValue && sampleCountValue && sampleRateValue && timeOriginValue &&
+		objectIdValue && channelsValue && (sourceKindText == U"Sound" || sourceKindText == U"LongSound"),
+		U"VOT snapshot manifest is missing required identity or audio fields.");
+	const integer snapshotStartSample = (integer) snapshotStartValue.value();
+	const integer sampleCount = (integer) sampleCountValue.value();
+	const integer channels = (integer) channelsValue.value();
+	const integer snapshotEndSample = snapshotStartSample + sampleCount;
+	const double sampleRate = sampleRateValue.value();
+	const double timeOrigin = timeOriginValue.value();
+	Melder_require (snapshotStartSample >= 0 && sampleCount > 0 && channels > 0 &&
+		std::isfinite (sampleRate) && sampleRate > 0.0 && std::isfinite (timeOrigin),
+		U"VOT snapshot manifest has invalid audio dimensions or time origin.");
+	const auto validRange = [snapshotStartSample, snapshotEndSample] (integer start, integer end) {
+		return start >= snapshotStartSample && start < end && end <= snapshotEndSample;
+	};
+	Melder_require (validRange (targetStartSample, targetEndSample) &&
+		validRange (contextStartSample, contextEndSample) &&
+		targetStartSample >= contextStartSample && targetEndSample <= contextEndSample,
+		U"VOT target and acoustic-context sample ranges must be increasing and inside the snapshot.");
+	const bool hasAlignedStart = alignedStartSample >= 0;
+	const bool hasAlignedEnd = alignedEndSample >= 0;
+	Melder_require (hasAlignedStart == hasAlignedEnd && (! hasAlignedStart ||
+		(validRange (alignedStartSample, alignedEndSample) && alignedStartSample >= contextStartSample &&
+		alignedEndSample <= contextEndSample)),
+		U"VOT aligned-phone sample range must be a complete range inside the acoustic context.");
+
+	const double samplePeriod = 1.0 / sampleRate;
+	const double soundXmin = timeOrigin - 0.5 * samplePeriod;
+	autoSound sound = Sound_create (channels, soundXmin, soundXmin + sampleCount * samplePeriod,
+		sampleCount, samplePeriod, timeOrigin);
+	structMelderFile pcmPath {};
+	Melder_pathToFile (pcmFileName, & pcmPath);
+	autofile pcmFile = Melder_fopen (& pcmPath, "rb");
+	Melder_require ((bool) pcmFile, U"Could not open the VOT float64 PCM snapshot.");
+	for (integer sample = 1; sample <= sampleCount; sample ++) {
+		for (integer channel = 1; channel <= channels; channel ++) {
+			std::array<unsigned char, 8> bytes {};
+			Melder_require (std::fread (bytes.data(), 1, bytes.size(), pcmFile) == bytes.size(),
+				U"VOT float64 PCM snapshot ended before every declared sample was read.");
+			std::uint64_t bits = 0;
+			for (integer byte = 0; byte < 8; byte ++)
+				bits |= (std::uint64_t) bytes [byte] << (8 * byte);
+			double value = 0.0;
+			std::memcpy (& value, & bits, sizeof value);
+			Melder_require (std::isfinite (value), U"VOT PCM snapshot contains a non-finite sample.");
+			sound -> z [channel] [sample] = value;
+		}
+	}
+	Melder_require (std::fgetc (pcmFile) == EOF, U"VOT float64 PCM snapshot contains samples beyond its manifest.");
+
+	const auto sourceSampleTime = [snapshotStartSample, timeOrigin, sampleRate] (integer sample) {
+		return votSnapshotTimeForSample (sample, snapshotStartSample, timeOrigin, sampleRate);
+	};
+	const auto lastSampleTime = [&] (integer exclusiveEnd) {
+		return sourceSampleTime (exclusiveEnd - 1);
+	};
+	SegmentInput input;
+	input.samples = sound.get();
+	input.metadata.startTime = sourceSampleTime (targetStartSample);
+	input.metadata.endTime = lastSampleTime (targetEndSample);
+	input.metadata.source.kind = sourceKindText == U"Sound" ? SourceKind::sound : SourceKind::longSound;
+	input.metadata.source.objectId = (integer) objectIdValue.value();
+	input.metadata.source.channels = channels;
+	input.metadata.source.sampleRate = sampleRate;
+	input.votScope = VOTDetectionScope {
+		sourceSampleTime (contextStartSample), lastSampleTime (contextEndSample),
+		sourceSampleTime (targetStartSample), lastSampleTime (targetEndSample),
+		hasAlignedStart ? std::optional<double> { sourceSampleTime (alignedStartSample) } : std::optional<double> {},
+		hasAlignedEnd ? std::optional<double> { lastSampleTime (alignedEndSample) } : std::optional<double> {}
+	};
+
+	VOTCandidateSettings settings;
+	const auto number = [parametersJson] (conststring32 snakeName, conststring32 camelName,
+		double fallback) {
+		const auto snake = votSnapshotJsonNumber (parametersJson, snakeName);
+		const auto camel = votSnapshotJsonNumber (parametersJson, camelName);
+		return snake.value_or (camel.value_or (fallback));
+	};
+	settings.burstThresholdDb = number (U"burst_threshold_db", U"burstThresholdDb", settings.burstThresholdDb);
+	settings.pitchFloorHz = number (U"pitch_floor_hz", U"pitchFloorHz", settings.pitchFloorHz);
+	settings.pitchCeilingHz = number (U"pitch_ceiling_hz", U"pitchCeilingHz", settings.pitchCeilingHz);
+	settings.minimumHnrDb = number (U"minimum_hnr_db", U"minimumHnrDb", settings.minimumHnrDb);
+	const auto manualBoundaries = votSnapshotJsonIntegerPair (parametersJson, U"manual_boundaries");
+	std::optional<double> burstTime, voicingTime;
+	if (manualBoundaries) {
+		Melder_require (manualBoundaries -> first >= snapshotStartSample &&
+			manualBoundaries -> first < snapshotEndSample && manualBoundaries -> second >= snapshotStartSample &&
+			manualBoundaries -> second < snapshotEndSample,
+			U"Manual VOT boundaries must lie inside the audio snapshot.");
+		burstTime = sourceSampleTime (manualBoundaries -> first);
+		voicingTime = sourceSampleTime (manualBoundaries -> second);
+	}
+	const VOTBoundaryMode mode = burstTime ? VOTBoundaryMode::manual : VOTBoundaryMode::estimateCandidates;
+	AnalysisResult result = analyseVOT (input, burstTime, voicingTime, mode, settings);
+	result.parameters.values.push_back ({ U"snapshotStartSample", Melder_integer (snapshotStartSample), U"samples" });
+	result.parameters.values.push_back ({ U"snapshotSampleCount", Melder_integer (sampleCount), U"samples" });
+	result.parameters.values.push_back ({ U"snapshotSampleRateHz", Melder_double (sampleRate), U"Hz" });
+	writeVOTAnalysisResult (result, resultFileName);
+}
+
 static std::optional<std::u32string> selectedObjectFilePath (integer objectPosition) {
 	Melder_assert (objectPosition >= 1 && objectPosition <= theCurrentPraatObjects -> n);
 	MelderFile file = & theCurrentPraatObjects -> list [objectPosition]. file;
@@ -186,6 +531,53 @@ DO
 	} catch (const std::exception &error) {
 		Melder_throw (U"VOT analysis failed: ", Melder_peek8to32_u (error.what()));
 	}
+END_NO_NEW_DATA
+}
+
+FORM (WRITE_ONE__Sound_VOT_SNAPSHOT, U"Write VOT audio snapshot", U"Write VOT audio snapshot...") {
+	OUTFILE (manifestFileName, U"Snapshot manifest file", U"vot-snapshot.json")
+	OUTFILE (pcmFileName, U"Snapshot float64 PCM file", U"vot-snapshot.f64le")
+	OUTFILE (wavFileName, U"Snapshot alignment WAV file", U"vot-snapshot.wav")
+	INTEGER (snapshotStartSample, U"Snapshot start sample (zero based)", U"0")
+	INTEGER (snapshotEndSample, U"Snapshot end sample (exclusive)", U"1")
+	OK
+DO
+	FIND_ONE_WITH_IOBJECT (Sound)
+	praat_Sound_writeVOTAudioSnapshot (me, ID, snapshotStartSample, snapshotEndSample,
+		manifestFileName, pcmFileName, wavFileName);
+END_NO_NEW_DATA
+}
+
+FORM (WRITE_ONE__LongSound_VOT_SNAPSHOT, U"Write VOT audio snapshot", U"Write VOT audio snapshot...") {
+	OUTFILE (manifestFileName, U"Snapshot manifest file", U"vot-snapshot.json")
+	OUTFILE (pcmFileName, U"Snapshot float64 PCM file", U"vot-snapshot.f64le")
+	OUTFILE (wavFileName, U"Snapshot alignment WAV file", U"vot-snapshot.wav")
+	INTEGER (snapshotStartSample, U"Snapshot start sample (zero based)", U"0")
+	INTEGER (snapshotEndSample, U"Snapshot end sample (exclusive)", U"1")
+	OK
+DO
+	FIND_ONE_WITH_IOBJECT (LongSound)
+	praat_LongSound_writeVOTAudioSnapshot (me, ID, snapshotStartSample, snapshotEndSample,
+		manifestFileName, pcmFileName, wavFileName);
+END_NO_NEW_DATA
+}
+
+FORM (ANALYSE_VOT_AUDIO_SNAPSHOT, U"Analyse VOT audio snapshot", U"Analyse VOT audio snapshot...") {
+	INFILE (manifestFileName, U"Snapshot manifest file", U"vot-snapshot.json")
+	INFILE (pcmFileName, U"Snapshot float64 PCM file", U"vot-snapshot.f64le")
+	INTEGER (targetStartSample, U"Target start sample (zero based)", U"0")
+	INTEGER (targetEndSample, U"Target end sample (exclusive)", U"1")
+	INTEGER (contextStartSample, U"Acoustic context start sample", U"0")
+	INTEGER (contextEndSample, U"Acoustic context end sample (exclusive)", U"1")
+	INTEGER (alignedStartSample, U"Aligned phone start sample (-1 if absent)", U"-1")
+	INTEGER (alignedEndSample, U"Aligned phone end sample (-1 if absent)", U"-1")
+	SENTENCE (parametersJson, U"VOT parameters as JSON", U"{}")
+	OUTFILE (resultFileName, U"Structured result TSV", U"vot-snapshot-result.tsv")
+	OK
+DO
+	praat_VOT_analyseSnapshotAndWriteResult (manifestFileName, pcmFileName,
+		targetStartSample, targetEndSample, contextStartSample, contextEndSample,
+		alignedStartSample, alignedEndSample, parametersJson, resultFileName);
 END_NO_NEW_DATA
 }
 
@@ -2519,6 +2911,10 @@ void praat_Sound_init () {
 		praat_addAction1 (classLongSound, 0, U"To TextGrid...", nullptr, 1, NEW_LongSound_to_TextGrid);
 	praat_addAction1 (classLongSound, 0, U"Write VOT analysis to file...", nullptr,
 				GuiMenu_DEPTH_1 | GuiMenu_HIDDEN, WRITE_ONE__LongSound_VOT_TSV);
+	praat_addAction1 (classLongSound, 0, U"Write VOT audio snapshot...", nullptr,
+				GuiMenu_HIDDEN, WRITE_ONE__LongSound_VOT_SNAPSHOT);
+	praat_addAction1 (classLongSound, 0, U"Analyse VOT audio snapshot...", nullptr,
+				GuiMenu_HIDDEN, ANALYSE_VOT_AUDIO_SNAPSHOT);
 	praat_addAction1 (classLongSound, 0, U"Convert to Sound", nullptr, 0, nullptr);
 	praat_addAction1 (classLongSound, 0, U"Extract part...", nullptr, 0, NEW_LongSound_extractPart);
 	praat_addAction1 (classLongSound, 0, U"Concatenate?", nullptr, 0,
@@ -2721,6 +3117,10 @@ void praat_Sound_init () {
 				CONVERT_EACH_TO_ONE__Sound_to_IntervalTier);
 	praat_addAction1 (classSound, 0, U"Write VOT analysis to file...", nullptr,
 				GuiMenu_DEPTH_1 | GuiMenu_HIDDEN, WRITE_ONE__Sound_VOT_TSV);
+	praat_addAction1 (classSound, 0, U"Write VOT audio snapshot...", nullptr,
+				GuiMenu_HIDDEN, WRITE_ONE__Sound_VOT_SNAPSHOT);
+	praat_addAction1 (classSound, 0, U"Analyse VOT audio snapshot...", nullptr,
+				GuiMenu_HIDDEN, ANALYSE_VOT_AUDIO_SNAPSHOT);
 	praat_addAction1 (classSound, 0, U"Analyse periodicity -", nullptr, 0, nullptr);
 		praat_addAction1 (classSound, 0, U"How to choose a pitch analysis method", nullptr, 1,
 				HELP__How_to_choose_a_pitch_analysis_method);

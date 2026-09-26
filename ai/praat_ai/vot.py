@@ -75,11 +75,13 @@ class VOTAudioSnapshot:
     object_id: str
     object_version: str
     source_kind: str
-    sample_rate_hz: int
+    sample_rate_hz: float
     channels: int
     sample_count: int
     snapshot_start_sample: int
     time_origin_seconds: float
+    pcm_path: Path | None = field(default=None, compare=False, repr=False)
+    manifest_path: Path | None = field(default=None, compare=False, repr=False)
 
     @property
     def end_sample_exclusive(self) -> int:
@@ -101,9 +103,8 @@ class VOTAudioSnapshot:
             raise ValueError("time must be finite")
         if self.sample_rate_hz <= 0:
             raise ValueError("sample rate must be positive")
-        sample_index = self.snapshot_start_sample + round(
-            (time_seconds - self.time_origin_seconds) * self.sample_rate_hz
-        )
+        sample_offset = (time_seconds - self.time_origin_seconds) * self.sample_rate_hz
+        sample_index = self.snapshot_start_sample + math.floor(sample_offset + 0.5)
         if not self.snapshot_start_sample <= sample_index <= self.end_sample_exclusive:
             raise ValueError("time is outside the audio snapshot")
         return sample_index

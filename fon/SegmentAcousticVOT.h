@@ -25,4 +25,15 @@ void praat_LongSound_writeVOTAnalysisToFile (LongSound longSound, double startTi
 		const VOTCandidateSettings &settings, conststring32 resultFileName,
 		std::optional<integer> objectId = {});
 
+void praat_Sound_writeVOTAudioSnapshot (Sound sound, integer objectId,
+		integer snapshotStartSample, integer snapshotEndSample, conststring32 manifestFileName,
+		conststring32 pcmFileName, conststring32 wavFileName);
+void praat_LongSound_writeVOTAudioSnapshot (LongSound longSound, integer objectId,
+		integer snapshotStartSample, integer snapshotEndSample, conststring32 manifestFileName,
+		conststring32 pcmFileName, conststring32 wavFileName);
+void praat_VOT_analyseSnapshotAndWriteResult (conststring32 manifestFileName, conststring32 pcmFileName,
+		integer targetStartSample, integer targetEndSample, integer contextStartSample,
+		integer contextEndSample, integer alignedStartSample, integer alignedEndSample,
+		conststring32 parametersJson, conststring32 resultFileName);
+
 #endif

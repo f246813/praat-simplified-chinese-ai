@@ -144,6 +144,27 @@ class VotServiceTests(unittest.TestCase):
         self.assertAlmostEqual(seconds, 8.01)
         self.assertEqual(snapshot.seconds_to_absolute_sample(seconds), 10010)
 
+    def test_fractional_sample_rate_keeps_source_sample_round_trip(self) -> None:
+        vot = load_vot_api()
+        snapshot = vot.VOTAudioSnapshot(
+            path=Path("snapshot.wav"),
+            content_hash="sha256:audio-fixture",
+            object_id="object-7",
+            object_version="version-3",
+            source_kind="LongSound",
+            sample_rate_hz=44100.5,
+            channels=1,
+            sample_count=12000,
+            snapshot_start_sample=96000,
+            time_origin_seconds=12.345,
+        )
+
+        sample_index = 101234
+        timeline_time = snapshot.absolute_sample_to_seconds(sample_index)
+
+        self.assertEqual(snapshot.sample_rate_hz, 44100.5)
+        self.assertEqual(snapshot.seconds_to_absolute_sample(timeline_time), sample_index)
+
     def test_missing_alignment_metadata_requires_input(self) -> None:
         vot = load_vot_api()
         request = self.make_request(vot, language="", transcript="", phonemes=())
