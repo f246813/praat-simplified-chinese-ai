@@ -13,7 +13,7 @@ import numpy as np
 
 from .audio import read_wav
 from .config import AlignmentConfig, MfaAlignmentConfig, Wav2Vec2AlignmentConfig
-from .models import AlignedPhone, AlignmentResult, PhoneSpec
+from .models import AlignedPhone, AlignmentResult, PhoneSpec, VOTAlignmentEvidence
 
 
 class AlignmentError(RuntimeError):
@@ -526,6 +526,40 @@ class CompositeAligner:
             results[0].warnings.extend(warnings)
             return results[0]
         return self._merge(results, warnings)
+
+    def align_for_vot(
+        self,
+        audio_path: str | Path,
+        phones: list[PhoneSpec],
+        language: str,
+        transcript: str = "",
+    ) -> VOTAlignmentEvidence:
+        """Collect model evidence without manufacturing or averaging boundaries."""
+        results: list[AlignmentResult] = []
+        backend_errors: list[str] = []
+        for backend in self.backends:
+            try:
+                available = backend.available()
+            except Exception as error:
+                backend_errors.append(
+                    f"{backend.name}: availability check failed: {error}"
+                )
+                continue
+            if not available:
+                backend_errors.append(f"{backend.name}: unavailable")
+                continue
+            try:
+                result = backend.align(audio_path, phones, language, transcript)
+            except Exception as error:
+                backend_errors.append(f"{backend.name}: {error}")
+                continue
+            results.append(result)
+
+        return VOTAlignmentEvidence(
+            results=results,
+            backend_errors=backend_errors,
+            disagreement_threshold_sec=self.agreement_threshold_sec,
+        )
 
     def _merge(
         self,

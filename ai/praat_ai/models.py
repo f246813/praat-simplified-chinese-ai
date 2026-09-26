@@ -155,3 +155,10 @@ class AlignmentResult:
             "confidence": self.confidence,
             "warnings": self.warnings,
         }
+
+
+@dataclass(slots=True)
+class VOTAlignmentEvidence:
+    results: list[AlignmentResult]
+    backend_errors: list[str]
+    disagreement_threshold_sec: float

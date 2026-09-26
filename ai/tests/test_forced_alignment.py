@@ -7,6 +7,7 @@ import numpy as np
 from praat_ai.config import MfaAlignmentConfig
 from praat_ai.forced_alignment import (
     AlignmentBackend,
+    AlignmentError,
     AlignmentResult,
     CompositeAligner,
     MfaAligner,
@@ -47,7 +48,30 @@ class FixedAligner(AlignmentBackend):
         )
 
 
+class UnavailableAligner(AlignmentBackend):
+    name = "mfa"
+
+    def available(self) -> bool:
+        return False
+
+    def align(self, audio_path, phones, language, transcript=""):
+        raise AssertionError("an unavailable backend must not be invoked")
+
+
+class FailingAligner(FixedAligner):
+    def align(self, audio_path, phones, language, transcript=""):
+        raise AlignmentError("backend fixture failure")
+
+
 class ForcedAlignmentTests(unittest.TestCase):
+    def _align_for_vot(self, aligner: CompositeAligner, *args, **kwargs):
+        method = getattr(aligner, "align_for_vot", None)
+        self.assertTrue(
+            callable(method),
+            "CompositeAligner.align_for_vot must preserve raw backend evidence",
+        )
+        return method(*args, **kwargs)
+
     def test_textgrid_parser_reads_phone_tier(self) -> None:
         text = """
         item [1]:
@@ -118,6 +142,87 @@ class ForcedAlignmentTests(unittest.TestCase):
         )
         self.assertIn("mandarin_mfa", command)
         self.assertIn("long_textgrid", command)
+
+    def test_vot_alignment_does_not_use_proportional_fallback(self) -> None:
+        aligner = CompositeAligner([UnavailableAligner()])
+
+        evidence = self._align_for_vot(
+            aligner,
+            "unused.wav",
+            [PhoneSpec("a")],
+            "Japanese",
+        )
+
+        self.assertEqual(evidence.results, [])
+        self.assertEqual(evidence.backend_errors, ["mfa: unavailable"])
+
+    def test_vot_alignment_retains_dual_results_without_averaging(self) -> None:
+        aligner = CompositeAligner(
+            [
+                FixedAligner("mfa", [0.0], 0.9),
+                FixedAligner("wav2vec2", [0.02], 0.8),
+            ],
+            agreement_threshold_sec=0.04,
+        )
+
+        evidence = self._align_for_vot(
+            aligner,
+            "unused.wav",
+            [PhoneSpec("a")],
+            "Japanese",
+        )
+
+        self.assertEqual(len(evidence.results), 2)
+        self.assertEqual(
+            [result.phones[0].start for result in evidence.results],
+            [0.0, 0.02],
+        )
+        self.assertEqual(
+            [result.phones[0].source for result in evidence.results],
+            ["mfa", "wav2vec2"],
+        )
+        self.assertEqual(
+            [result.phones[0].confidence for result in evidence.results],
+            [0.9, 0.8],
+        )
+        self.assertEqual(evidence.disagreement_threshold_sec, 0.04)
+
+    def test_vot_alignment_reports_backend_errors(self) -> None:
+        aligner = CompositeAligner(
+            [FailingAligner("mfa", [0.0], 0.9)]
+        )
+
+        evidence = self._align_for_vot(
+            aligner,
+            "unused.wav",
+            [PhoneSpec("a")],
+            "Japanese",
+        )
+
+        self.assertEqual(evidence.results, [])
+        self.assertEqual(
+            evidence.backend_errors,
+            ["mfa: backend fixture failure"],
+        )
+
+    def test_vot_alignment_preserves_single_backend_boundaries(self) -> None:
+        backend = FixedAligner("mfa", [0.123], 0.85)
+        result = backend.align("unused.wav", [PhoneSpec("a")], "Japanese")
+        aligner = CompositeAligner([backend])
+
+        evidence = self._align_for_vot(
+            aligner,
+            "unused.wav",
+            [PhoneSpec("a")],
+            "Japanese",
+        )
+
+        self.assertEqual(len(evidence.results), 1)
+        self.assertEqual(evidence.results[0].phones[0].start, 0.123)
+        self.assertAlmostEqual(evidence.results[0].phones[0].end, 0.223)
+        self.assertEqual(evidence.results[0].phones[0].confidence, 0.85)
+        self.assertEqual(evidence.results[0].phones[0].source, "mfa")
+        self.assertEqual(evidence.results[0].phones, result.phones)
 
 
 if __name__ == "__main__":
