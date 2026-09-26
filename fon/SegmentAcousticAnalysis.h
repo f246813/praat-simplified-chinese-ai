@@ -39,9 +39,19 @@ struct SegmentMetadata {
 	UserMetadata annotation;
 };
 
+struct VOTDetectionScope {
+	double contextStartTime { 0.0 };
+	double contextEndTime { 0.0 };
+	double targetStartTime { 0.0 };
+	double targetEndTime { 0.0 };
+	std::optional<double> alignedPhoneStartTime;
+	std::optional<double> alignedPhoneEndTime;
+};
+
 struct SegmentInput {
 	constSound samples { nullptr };   // Borrowed; never retained in AnalysisResult.
 	SegmentMetadata metadata;
+	std::optional<VOTDetectionScope> votScope;
 };
 
 struct ParameterValue {
@@ -57,6 +67,8 @@ struct ParameterSnapshot {
 enum class MetricStatus {
 	measured,
 	warning,
+	ambiguous,
+	targetIncomplete,
 	unavailable
 };
 
@@ -86,9 +98,13 @@ struct VOTCandidateSettings {
 	integer burstRiseHoldFrames { 5 };
 	double burstRiseHoldDropDb { 10.0 };
 	double burstOnsetBacktrackDropDb { 8.0 };
+	double burstCandidateSeparationSeconds { 0.04 };
+	double maximumPositiveVotSeconds { 0.15 };
+	double maximumPrevoicingLeadSeconds { 0.08 };
 	double secondVoicingGapSeconds { 0.02 };
 	double hnrSliceSeconds { 0.05 };
 	double hnrMinimumSliceSeconds { 0.03 };
+	double minimumHnrDb { -10.0 };
 };
 
 struct MetricResult {
@@ -106,7 +122,17 @@ struct AnalysisResult {
 	std::vector<MetricResult> metrics;
 };
 
+struct VOTDisplayData {
+	VOTBoundaryMode mode { VOTBoundaryMode::estimateCandidates };
+	std::optional<double> burstTime;
+	std::optional<double> voicingTime;
+	std::optional<double> valueMs;
+	std::u32string failureReason;
+};
+
 double votMilliseconds (double burstTime, double voicingTime);
+const MetricResult *AnalysisResult_findMetric (const AnalysisResult &result, conststring32 id);
+VOTDisplayData AnalysisResult_toVOTDisplayData (const AnalysisResult &result, VOTBoundaryMode mode);
 AnalysisResult analyseVOT (const SegmentInput &input, std::optional<double> burstTime,
 		std::optional<double> voicingTime, VOTBoundaryMode mode,
 		const VOTCandidateSettings &candidateSettings = {});

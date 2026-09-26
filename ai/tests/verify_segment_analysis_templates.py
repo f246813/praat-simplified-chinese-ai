@@ -271,7 +271,7 @@ def main() -> None:
 
             core_candidate = read_rows(core_files[2])
             missing_candidate = assert_metric(core_candidate, "vot_candidate_ms", unit="ms")
-            if missing_candidate[20] or missing_candidate[22] != "unavailable" or not missing_candidate[23]:
+            if missing_candidate[20] or missing_candidate[22] not in {"unavailable", "ambiguous", "target_incomplete"} or not missing_candidate[23]:
                 raise AssertionError(f"missing candidate lacks an unavailable reason: {missing_candidate!r}")
 
             generated_zero = verify_generated_template(root, "template-zero", {"burst": 0.0, "voicing": 0.0})
@@ -289,9 +289,9 @@ def main() -> None:
             generated_auto = verify_generated_template(root, "template-candidates", {})
             burst = assert_metric(generated_auto, "burst_time_candidate", unit="s")
             vot = assert_metric(generated_auto, "vot_candidate_ms", unit="ms")
-            if burst[22] not in {"warning", "unavailable"} or vot[22] not in {"warning", "unavailable"}:
+            if burst[22] not in {"warning", "unavailable", "ambiguous", "target_incomplete"} or vot[22] not in {"warning", "unavailable", "ambiguous", "target_incomplete"}:
                 raise AssertionError(f"candidate values are not marked for review: {burst!r}, {vot!r}")
-            if (burst[22] == "unavailable" and not burst[23]) or (vot[22] == "unavailable" and not vot[23]):
+            if (burst[22] in {"unavailable", "ambiguous", "target_incomplete"} and (burst[20] or not burst[23])) or (vot[22] in {"unavailable", "ambiguous", "target_incomplete"} and (vot[20] or not vot[23])):
                 raise AssertionError(f"unavailable candidate has no reason: {burst!r}, {vot!r}")
         finally:
             for path in core_files:

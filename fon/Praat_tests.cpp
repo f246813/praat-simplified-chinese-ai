@@ -29,6 +29,7 @@
 
 #include "Graphics.h"
 #include "praat.h"
+#include "../sys/praat_translate.h"
 #include "NUM2.h"
 #include "Sound.h"
 #include "SegmentAcousticAnalysis.h"
@@ -86,29 +87,41 @@ enum class SegmentVOTFixture {
 	positive,
 	lowPitch,
 	prevoiced,
-	transientOnly
+	transientOnly,
+	earlyPrevoiced,
+	laterBurstDecoy,
+	multipleTargetBursts,
+	sustainedDecoyVoicing
 };
 
-static autoSound createSegmentVOTFixture (SegmentVOTFixture fixture) {
-	constexpr double sampleRate = 44100.0;
+static autoSound createSegmentVOTFixture (SegmentVOTFixture fixture, double sampleRate = 44100.0) {
 	constexpr double duration = 0.6;
-	constexpr double samplePeriod = 1.0 / sampleRate;
-	constexpr integer numberOfSamples = (integer) (duration * sampleRate);
+	const double samplePeriod = 1.0 / sampleRate;
+	const integer numberOfSamples = (integer) (duration * sampleRate);
 	autoSound result = Sound_create (1, 0.0, duration, numberOfSamples, samplePeriod, samplePeriod / 2.0);
 	const bool prevoiced = fixture == SegmentVOTFixture::prevoiced;
 	const bool transientOnly = fixture == SegmentVOTFixture::transientOnly;
-	const double voiceOnset = fixture == SegmentVOTFixture::lowPitch ? 0.332 : prevoiced ? 0.28 : 0.33;
+	const double voiceOnset = fixture == SegmentVOTFixture::lowPitch ? 0.332 :
+		fixture == SegmentVOTFixture::earlyPrevoiced ? 0.245 : prevoiced ? 0.26 :
+		fixture == SegmentVOTFixture::multipleTargetBursts ? 0.43 : 0.33;
 	const double fundamental = fixture == SegmentVOTFixture::lowPitch ? 80.0 : 220.0;
 	std::mt19937 noiseGenerator (12345);
 	std::normal_distribution<double> burstNoise (0.0, 1.0);
 	for (integer i = 1; i <= numberOfSamples; i ++) {
 		const double time = result -> x1 + (i - 1) * result -> dx;
-		const bool voiced = ! transientOnly && time >= voiceOnset;
+		const bool voiced = ! transientOnly && time >= voiceOnset &&
+			(fixture != SegmentVOTFixture::sustainedDecoyVoicing || time < 0.37 || time >= 0.40);
 		const double vocalFoldSignal = voiced ? 0.4 * sin (2.0 * NUMpi * fundamental * time) : 0.0;
 		const double burstEnd = transientOnly ? 0.301 : 0.33;
 		const bool burst = time >= 0.30 && time < burstEnd;
-		const double burstSignal = burst ? (prevoiced ? 0.15 : 0.3) * burstNoise (noiseGenerator) : 0.0;
-		result -> z [1] [i] = vocalFoldSignal + burstSignal;
+		const bool laterBurst = fixture == SegmentVOTFixture::laterBurstDecoy && time >= 0.45 && time < 0.49;
+		const bool secondTargetBurst = fixture == SegmentVOTFixture::multipleTargetBursts &&
+			time >= 0.38 && time < 0.41;
+		const double burstAmplitude = prevoiced ? 0.15 : 0.3;
+		const double burstSignal = burst ? burstAmplitude * burstNoise (noiseGenerator) : 0.0;
+		const double laterBurstSignal = laterBurst ? 1.2 * burstNoise (noiseGenerator) : 0.0;
+		const double secondTargetBurstSignal = secondTargetBurst ? burstAmplitude * burstNoise (noiseGenerator) : 0.0;
+		result -> z [1] [i] = vocalFoldSignal + burstSignal + laterBurstSignal + secondTargetBurstSignal;
 	}
 	return result;
 }
@@ -117,6 +130,14 @@ static const MetricResult *findSegmentVOTMetric (const AnalysisResult &result, c
 	for (const MetricResult &metric : result.metrics) {
 		if (metric.id == metricId)
 			return & metric;
+	}
+	return nullptr;
+}
+
+static const ParameterValue *findSegmentVOTParameter (const AnalysisResult &result, conststring32 parameterName) {
+	for (const ParameterValue &parameter : result.parameters.values) {
+		if (parameter.name == parameterName)
+			return & parameter;
 	}
 	return nullptr;
 }
@@ -831,6 +852,8 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 				input.metadata.endTime = 0.55;
 				input.metadata.source.sampleRate = 1.0 / samples -> dx;
 				input.metadata.source.channels = samples -> ny;
+				const double alignedStart = fixture == SegmentVOTFixture::prevoiced ? 0.25 : 0.28;
+				input.votScope = VOTDetectionScope { 0.20, 0.55, 0.25, 0.55, alignedStart, 0.32 };
 				return analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates);
 			};
 			const AnalysisResult positive = runFixture (SegmentVOTFixture::positive);
@@ -863,7 +886,7 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 
 			const AnalysisResult prevoiced = runFixture (SegmentVOTFixture::prevoiced);
 			const MetricResult *prevoicedVot = findSegmentVOTMetric (prevoiced, U"vot_candidate_ms");
-			Melder_assert (prevoicedVot && prevoicedVot -> value && segmentVOTWithin (prevoicedVot -> value.value (), -20.0, 6.0));
+			Melder_assert (prevoicedVot && prevoicedVot -> value && segmentVOTWithin (prevoicedVot -> value.value (), -40.0, 6.0));
 			Melder_assert (prevoicedVot -> status == MetricStatus::warning);
 
 			const AnalysisResult transient = runFixture (SegmentVOTFixture::transientOnly);
@@ -876,8 +899,9 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			boundedInput.metadata.startTime = 0.25;
 			boundedInput.metadata.endTime = 0.55;
 			boundedInput.metadata.source.sampleRate = 1.0 / boundedSource -> dx;
+			boundedInput.votScope = VOTDetectionScope { 0.20, 0.55, 0.25, 0.55, 0.28, 0.32 };
 			const AnalysisResult fullSourceRange = analyseVOT (boundedInput, {}, {}, VOTBoundaryMode::estimateCandidates);
-			autoSound extractedSource = Sound_extractPart (boundedSource.get(), 0.25, 0.55,
+			autoSound extractedSource = Sound_extractPart (boundedSource.get(), 0.20, 0.55,
 				kSound_windowShape::RECTANGULAR, 1.0, true);
 			SegmentInput extractedInput = boundedInput;
 			extractedInput.samples = extractedSource.get();
@@ -891,9 +915,80 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (fullVoice && partVoice && fullVoice -> value && partVoice -> value);
 			Melder_assert (segmentVOTWithin (fullVoice -> value.value(), partVoice -> value.value(), 0.002));
 			boundedInput.metadata.endTime = 0.35;
+			boundedInput.votScope -> targetEndTime = 0.35;
+			boundedInput.votScope -> contextEndTime = 0.35;
 			const AnalysisResult shortRange = analyseVOT (boundedInput, {}, {}, VOTBoundaryMode::estimateCandidates);
 			const MetricResult *shortHnr = findSegmentVOTMetric (shortRange, U"hnr_max_db");
 			Melder_assert (shortHnr && ! shortHnr -> value && shortHnr -> status == MetricStatus::unavailable);
+
+			const auto runScopedFixture = [] (SegmentVOTFixture fixture, double targetStart, double targetEnd,
+				double contextStart, double contextEnd, double alignedStart, double alignedEnd,
+				double sampleRate = 44100.0)
+			{
+				autoSound samples = createSegmentVOTFixture (fixture, sampleRate);
+				SegmentInput input;
+				input.samples = samples.get ();
+				input.metadata.startTime = targetStart;
+				input.metadata.endTime = targetEnd;
+				input.metadata.source.sampleRate = 1.0 / samples -> dx;
+				input.metadata.source.channels = samples -> ny;
+				input.votScope = VOTDetectionScope {
+					contextStart, contextEnd, targetStart, targetEnd, alignedStart, alignedEnd
+				};
+				return analyseVOT (input, {}, {}, VOTBoundaryMode::estimateCandidates);
+			};
+
+			const AnalysisResult earlyPrevoicing = runScopedFixture (SegmentVOTFixture::earlyPrevoiced,
+				0.24, 0.38, 0.20, 0.45, 0.24, 0.38);
+			const MetricResult *earlyPrevoicedTime = findSegmentVOTMetric (earlyPrevoicing, U"voicing_time_candidate");
+			const MetricResult *earlyPrevoicedVot = findSegmentVOTMetric (earlyPrevoicing, U"vot_candidate_ms");
+			Melder_assert (earlyPrevoicedTime && earlyPrevoicedTime -> value &&
+				segmentVOTWithin (earlyPrevoicedTime -> value.value (), 0.245, 0.005));
+			Melder_assert (earlyPrevoicedVot && earlyPrevoicedVot -> value &&
+				segmentVOTWithin (earlyPrevoicedVot -> value.value (), -55.0, 6.0));
+
+			const AnalysisResult laterBurst = runScopedFixture (SegmentVOTFixture::laterBurstDecoy,
+				0.25, 0.52, 0.20, 0.55, 0.28, 0.36);
+			const MetricResult *targetBurst = findSegmentVOTMetric (laterBurst, U"burst_time_candidate");
+			const MetricResult *targetVot = findSegmentVOTMetric (laterBurst, U"vot_candidate_ms");
+			Melder_assert (targetBurst && targetBurst -> value && segmentVOTWithin (targetBurst -> value.value (), 0.30, 0.005));
+			Melder_assert (targetVot && targetVot -> value && segmentVOTWithin (targetVot -> value.value (), 30.0, 5.0));
+
+			const AnalysisResult multipleBursts = runScopedFixture (SegmentVOTFixture::multipleTargetBursts,
+				0.25, 0.45, 0.20, 0.48, 0.28, 0.42);
+			const MetricResult *ambiguousVot = findSegmentVOTMetric (multipleBursts, U"vot_candidate_ms");
+			Melder_assert (ambiguousVot && ! ambiguousVot -> value && ambiguousVot -> status == MetricStatus::ambiguous);
+
+			const AnalysisResult incompleteTarget = runScopedFixture (SegmentVOTFixture::positive,
+				0.29, 0.40, 0.20, 0.48, 0.28, 0.36);
+			const MetricResult *incompleteVot = findSegmentVOTMetric (incompleteTarget, U"vot_candidate_ms");
+			Melder_assert (incompleteVot && ! incompleteVot -> value && incompleteVot -> status == MetricStatus::targetIncomplete);
+
+			const AnalysisResult decoyVoicing = runScopedFixture (SegmentVOTFixture::sustainedDecoyVoicing,
+				0.25, 0.48, 0.20, 0.55, 0.28, 0.32);
+			const MetricResult *decoyVot = findSegmentVOTMetric (decoyVoicing, U"vot_candidate_ms");
+			Melder_assert (decoyVot && ! decoyVot -> value && decoyVot -> status == MetricStatus::ambiguous);
+
+			const AnalysisResult stableTargetA = runScopedFixture (SegmentVOTFixture::positive,
+				0.25, 0.40, 0.20, 0.48, 0.28, 0.36);
+			const AnalysisResult stableTargetB = runScopedFixture (SegmentVOTFixture::positive,
+				0.255, 0.405, 0.20, 0.48, 0.28, 0.36);
+			const MetricResult *stableBurstA = findSegmentVOTMetric (stableTargetA, U"burst_time_candidate");
+			const MetricResult *stableBurstB = findSegmentVOTMetric (stableTargetB, U"burst_time_candidate");
+			const MetricResult *stableOnsetA = findSegmentVOTMetric (stableTargetA, U"voicing_time_candidate");
+			const MetricResult *stableOnsetB = findSegmentVOTMetric (stableTargetB, U"voicing_time_candidate");
+			Melder_assert (stableBurstA && stableBurstA -> value && stableBurstB && stableBurstB -> value &&
+				segmentVOTWithin (stableBurstA -> value.value (), stableBurstB -> value.value (), 0.002));
+			Melder_assert (stableOnsetA && stableOnsetA -> value && stableOnsetB && stableOnsetB -> value &&
+				segmentVOTWithin (stableOnsetA -> value.value (), stableOnsetB -> value.value (), 0.002));
+
+			const AnalysisResult fallbackPath = runScopedFixture (SegmentVOTFixture::positive,
+				0.25, 0.40, 0.20, 0.48, 0.28, 0.32, 6000.0);
+			const ParameterValue *fallbackPathParameter = findSegmentVOTParameter (fallbackPath, U"burstDetectionPath");
+			const ParameterValue *fallbackReasonParameter = findSegmentVOTParameter (fallbackPath, U"burstDetectionFallbackReason");
+			Melder_assert (fallbackPathParameter && fallbackPathParameter -> value == U"full-band-fallback");
+			Melder_assert (fallbackReasonParameter && str32str (fallbackReasonParameter -> value.c_str(), U"Nyquist"));
+
 			autoHarmonicity hnrValues = Harmonicity_create (0.0, 0.03, 3, 0.01, 0.005);
 			hnrValues -> z [1] [1] = -12.0;
 			hnrValues -> z [1] [2] = -4.0;
@@ -905,9 +1000,13 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (! maximumDefinedHnr (hnrValues.get()));
 		} break;
 		case kPraatTests::CHECK_SEGMENT_VOT_INFO_SUMMARY: {
+			const int previousLanguage = g_language_choice;
+			g_language_choice = 0;
 			AnalysisResult manual {};
 			manual.parameters.values.push_back ({ U"boundaryMode", U"manualConfirmed", U"" });
 			manual.metrics.push_back ({ U"vot_ms", U"ms", 0.0, MetricStatus::measured, U"" });
+			const MetricResult *manualVot = AnalysisResult_findMetric (manual, U"vot_ms");
+			Melder_assert (manualVot && manualVot -> value && manualVot -> value.value() == 0.0);
 			autoMelderString manualSummary;
 			AnalysisResult_toInfoSummary (manual, & manualSummary);
 			Melder_assert (str32str (manualSummary.string, U"VOT: 0 ms (manual measurement)") != nullptr);
@@ -915,9 +1014,66 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			AnalysisResult candidate {};
 			candidate.parameters.values.push_back ({ U"boundaryMode", U"automaticCandidate", U"" });
 			candidate.metrics.push_back ({ U"vot_candidate_ms", U"ms", 20.0, MetricStatus::warning, U"" });
+			candidate.metrics.push_back ({ U"burst_time_candidate", U"s", 0.315, MetricStatus::warning, U"" });
+			candidate.metrics.push_back ({ U"voicing_time_candidate", U"s", 0.335, MetricStatus::warning, U"" });
+			const MetricResult *candidateVot = AnalysisResult_findMetric (candidate, U"vot_candidate_ms");
+			const MetricResult *candidateBurst = AnalysisResult_findMetric (candidate, U"burst_time_candidate");
+			const MetricResult *candidateVoicing = AnalysisResult_findMetric (candidate, U"voicing_time_candidate");
+			Melder_assert (candidateVot && candidateVot -> value && candidateVot -> value.value() == 20.0);
+			Melder_assert (candidateBurst && candidateBurst -> value && candidateBurst -> value.value() == 0.315);
+			Melder_assert (candidateVoicing && candidateVoicing -> value && candidateVoicing -> value.value() == 0.335);
+			const VOTDisplayData candidateDisplay = AnalysisResult_toVOTDisplayData (candidate, VOTBoundaryMode::estimateCandidates);
+			Melder_assert (candidateDisplay.mode == VOTBoundaryMode::estimateCandidates);
+			Melder_assert (candidateDisplay.burstTime == 0.315 && candidateDisplay.voicingTime == 0.335);
+			Melder_assert (candidateDisplay.valueMs && candidateDisplay.valueMs.value() == votMilliseconds (0.315, 0.335));
+			Melder_assert (candidateDisplay.failureReason.empty());
+
+			AnalysisResult partialCandidate {};
+			partialCandidate.metrics.push_back ({ U"vot_candidate_ms", U"ms", {}, MetricStatus::unavailable,
+				U"Voicing candidate unavailable for the selected range." });
+			partialCandidate.metrics.push_back ({ U"burst_time_candidate", U"s", 0.315, MetricStatus::warning, U"" });
+			partialCandidate.metrics.push_back ({ U"voicing_time_candidate", U"s", {}, MetricStatus::unavailable, U"No stable voiced onset." });
+			const VOTDisplayData partialDisplay = AnalysisResult_toVOTDisplayData (partialCandidate,
+				VOTBoundaryMode::estimateCandidates);
+			Melder_assert (partialDisplay.burstTime && partialDisplay.burstTime.value() == 0.315);
+			Melder_assert (! partialDisplay.voicingTime && ! partialDisplay.valueMs);
+			Melder_assert (partialDisplay.failureReason == U"No stable voiced onset.");
+
+			AnalysisResult missingBothCandidates {};
+			missingBothCandidates.metrics.push_back ({ U"vot_candidate_ms", U"ms", {},
+				MetricStatus::unavailable, U"Automatic VOT candidate is unavailable." });
+			missingBothCandidates.metrics.push_back ({ U"burst_time_candidate", U"s", {},
+				MetricStatus::unavailable, U"No burst was detected." });
+			missingBothCandidates.metrics.push_back ({ U"voicing_time_candidate", U"s", {},
+				MetricStatus::unavailable, U"No stable voiced onset." });
+			const VOTDisplayData missingBothDisplay = AnalysisResult_toVOTDisplayData (missingBothCandidates,
+				VOTBoundaryMode::estimateCandidates);
+			Melder_assert (! missingBothDisplay.burstTime && ! missingBothDisplay.voicingTime && ! missingBothDisplay.valueMs);
+			Melder_assert (missingBothDisplay.failureReason == U"No burst was detected.; No stable voiced onset.");
+
+			AnalysisResult manualNegative {};
+			manualNegative.source.burstTime = 0.30;
+			manualNegative.source.voicingTime = 0.28;
+			manualNegative.metrics.push_back ({ U"vot_ms", U"ms", -20.0, MetricStatus::measured, U"" });
+			const VOTDisplayData manualDisplay = AnalysisResult_toVOTDisplayData (manualNegative, VOTBoundaryMode::manual);
+			Melder_assert (manualDisplay.mode == VOTBoundaryMode::manual);
+			Melder_assert (manualDisplay.burstTime == 0.30 && manualDisplay.voicingTime == 0.28);
+			Melder_assert (manualDisplay.valueMs && manualDisplay.valueMs.value() == votMilliseconds (0.30, 0.28));
+			Melder_assert (manualDisplay.valueMs.value() < 0.0 && manualDisplay.failureReason.empty());
+
 			autoMelderString candidateSummary;
 			AnalysisResult_toInfoSummary (candidate, & candidateSummary);
 			Melder_assert (str32str (candidateSummary.string, U"requires manual review") != nullptr);
+
+			g_language_choice = 1;
+			Melder_assert (str32equ (praat_translate (U"VOT analysis"), U"VOT 分析"));
+			Melder_assert (str32equ (praat_translate (U"Burst/release time (s)"), U"爆破释放时刻（秒）"));
+			Melder_assert (str32equ (praat_translate (U"Voicing onset time (s)"), U"起声时刻（秒）"));
+			Melder_assert (str32equ (praat_translate (U"Minimum burst rise (dB)"), U"爆破增幅阈值（dB）"));
+			AnalysisResult_toInfoSummary (candidate, & candidateSummary);
+			Melder_assert (str32str (candidateSummary.string, U"自动计算的候选值: 20.0 ms") != nullptr);
+			Melder_assert (str32str (candidateSummary.string, U"需要人工复核") != nullptr);
+			g_language_choice = previousLanguage;
 		} break;
 	}
 	MelderInfo_writeLine (Melder_single (t * 1e9 / n), U" nanoseconds per iteration");
