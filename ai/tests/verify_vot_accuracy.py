@@ -23,7 +23,7 @@ from praat_ai.vot_accuracy import score_case, summarize_cases, validate_manifest
 
 
 MODE_NAMES = {"model_assisted": "模型辅助自动", "acoustic_only": "纯声学候选"}
-MODE_VALUES = {"model_assisted": 1, "acoustic_only": 2}
+MODE_LABELS = {"model_assisted": "模型辅助自动", "acoustic_only": "纯声学候选"}
 
 
 def _praat_quote(value: str | Path) -> str:
@@ -119,6 +119,7 @@ def _run_editor_entrypoint(
         pitch_floor = float(parameters.get("pitch_floor_hz", 75.0))
         name = audio_path.stem
         script_path = root / "editor-case.praat"
+        completion_marker = root / "editor-script-returned.txt"
         script_path.write_text(
             f"Read from file: {_praat_quote(audio_path)}\nView & Edit\n",
             encoding="utf-8",
@@ -159,7 +160,7 @@ def _run_editor_entrypoint(
                     "VOT: "
                     f"{_time_for_sample(start_sample, sample_rate)}, "
                     f"{_time_for_sample(end_sample, sample_rate)}, undefined, undefined, "
-                    f"{MODE_VALUES[mode]}, "
+                    f"{_praat_quote(MODE_LABELS[mode])}, "
                     f"{_time_for_sample(int(case.get('context_start_sample', 0)), sample_rate)}, "
                     f"{_time_for_sample(int(case.get('context_end_sample', case['sample_count'])), sample_rate)}, "
                     f"{_praat_quote(case.get('language', 'ja'))}, "
@@ -167,6 +168,7 @@ def _run_editor_entrypoint(
                     f"{_praat_quote(' '.join(case.get('phonemes', [])))}, "
                     f"{int(case.get('target_phone_index', 0))}, {threshold:.17g}, {pitch_floor:.17g}",
                     "endeditor",
+                    f"writeFileLine: {_praat_quote(completion_marker)}, \"VOT script returned\", info$",
                 )
             )
             + "\n",
@@ -198,9 +200,15 @@ def _run_editor_entrypoint(
                     window.title for window in list_windows()
                     if window.process_id == process.pid and window.title
                 ]
+                script_output = (
+                    completion_marker.read_text(encoding="utf-8", errors="replace").strip()
+                    if completion_marker.is_file()
+                    else ""
+                )
                 raise RuntimeError(
                     "SoundEditor VOT command was consumed without creating a job; "
                     "check its form arguments and target executable build; "
+                    f"script_output={script_output!r}; "
                     f"open native windows: {native_windows!r}"
                 )
             time.sleep(0.1)
