@@ -44,6 +44,19 @@ def _time_for_sample_center(sample_index: int, sample_rate_hz: int) -> str:
     return format((sample_index + 0.5) / sample_rate_hz, ".17g")
 
 
+def _read_vot_job_state(path: Path) -> dict[str, Any]:
+    """Retry transient Windows sharing violations while the editor replaces state.json."""
+
+    for attempt in range(6):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.02 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 def _run_ai_entrypoint(case: dict[str, Any], audio_path: Path, praat_exe: Path, root: Path) -> dict[str, Any]:
     os.environ["PRAAT_EXE"] = str(praat_exe)
     from praat_ai import tools
@@ -199,7 +212,7 @@ def _run_editor_entrypoint(
                     f"{_praat_quote(' '.join(case.get('phonemes', [])))}, "
                     f"{int(case.get('target_phone_index', 0))}, {threshold:.17g}, {pitch_floor:.17g}",
                     "endeditor",
-                    f"writeFileLine: {_praat_quote(completion_marker)}, \"VOT script returned\", info$",
+                    f"writeFileLine: {_praat_quote(completion_marker)}, \"VOT script returned\"",
                 )
             )
             + "\n",
@@ -218,7 +231,7 @@ def _run_editor_entrypoint(
                 latest = max(jobs, key=lambda item: item.stat().st_mtime_ns)
                 state_path = latest / "state.json"
                 if state_path.is_file():
-                    state = json.loads(state_path.read_text(encoding="utf-8"))
+                    state = _read_vot_job_state(state_path)
                     if state.get("state") in {"completed", "failed", "cancelled"}:
                         break
             elif (

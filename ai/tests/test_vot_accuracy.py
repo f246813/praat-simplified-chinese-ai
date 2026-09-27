@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+from ai.tests import verify_vot_accuracy as accuracy_harness
 from praat_ai.vot_accuracy import compare_entrypoints, score_case, validate_manifest
 
 
@@ -104,6 +107,20 @@ class VotAccuracyTests(unittest.TestCase):
 
         invalid = {**manifest, "cases": [cases[0], cases[0]]}
         self.assertTrue(any("unique" in error for error in validate_manifest(invalid, require_audio=False)))
+
+
+class VotAccuracyHarnessTests(unittest.TestCase):
+    def test_editor_job_state_reader_retries_a_transient_windows_lock(self):
+        with patch.object(
+            Path,
+            "read_text",
+            side_effect=[PermissionError(13, "file is temporarily locked"), '{"state":"completed"}'],
+        ) as read_text, patch.object(accuracy_harness.time, "sleep") as sleep:
+            state = accuracy_harness._read_vot_job_state(Path("state.json"))
+
+        self.assertEqual(state, {"state": "completed"})
+        self.assertEqual(read_text.call_count, 2)
+        sleep.assert_called_once()
 
 
 if __name__ == "__main__":
