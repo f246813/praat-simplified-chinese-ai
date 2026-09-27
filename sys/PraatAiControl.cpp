@@ -217,7 +217,16 @@ namespace {
 	}
 
 	std::filesystem::path projectDirectoryPath () {
-		const char32 *directory = theAiProjectDirectory [0] ? theAiProjectDirectory : U"ai";
+		/*
+			The application reads preferences more than once during GUI startup.
+			An environment override applied only in initPreferences() is therefore
+			overwritten by the saved AI.projectDirectory value before the first VOT
+			request. Keep the environment override authoritative at the point where
+			paths are resolved.
+		*/
+		conststring32 environmentDirectory = Melder_getenv (U"PRAAT_AI_PROJECT_DIR");
+		const char32 *directory = environmentDirectory && environmentDirectory [0] ?
+			environmentDirectory : (theAiProjectDirectory [0] ? theAiProjectDirectory : U"ai");
 		autostring8 directory8 = Melder_32to8 (directory);
 		const std::filesystem::path configuredDirectory = std::filesystem::u8path (directory8 ? directory8.get() : "ai");
 		if (configuredDirectory.is_absolute())
@@ -483,9 +492,6 @@ void PraatAiControl_initPreferences () {
 	Preferences_addString (U"AI.alignmentMode", theAiAlignmentMode, U"auto");
 	MelderString_copy (& statusFrontendModel, defaultFrontendModel);
 	MelderString_copy (& statusFrontendStatus, U"stopped");
-	conststring32 configuredDirectory = Melder_getenv (U"PRAAT_AI_PROJECT_DIR");
-	if (configuredDirectory && configuredDirectory [0])
-		str32cpy (theAiProjectDirectory, configuredDirectory);
 }
 
 conststring32 PraatAiControl_getAlignmentMode () {
@@ -666,6 +672,24 @@ void PraatAiControl_reportChatScriptFailure (conststring32 message) {
 			failure << raw << "\n";
 		}
 	}
+}
+
+void PraatAiControl_reportVOTEditorDiagnostic (conststring32 message) {
+	/*
+		SoundEditor keeps form/validation failures in its window state instead of
+		propagating them as script errors. An opt-in file lets the native-entrypoint
+		test capture that exact failure without changing normal user-visible behavior.
+	*/
+	conststring32 configuredPath = Melder_getenv (U"PRAAT_AI_VOT_DIAGNOSTIC_FILE");
+	if (! configuredPath || ! configuredPath [0])
+		return;
+	autostring8 path8 = Melder_32to8 (configuredPath);
+	autostring8 message8 = Melder_32to8 (message ? message : U"");
+	if (! path8 || ! message8)
+		return;
+	std::ofstream diagnostic (std::filesystem::u8path (path8.get()), std::ios::binary | std::ios::app);
+	if (diagnostic.is_open())
+		diagnostic << message8.get() << "\n";
 }
 
 void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end,

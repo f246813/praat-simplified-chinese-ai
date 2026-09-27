@@ -83,6 +83,7 @@ def _run_editor_entrypoint(
     shutil.copytree(AI_ROOT / "praat_ai", project_dir / "praat_ai")
     shutil.copy2(AI_ROOT / "run_ai_control.py", project_dir / "run_ai_control.py")
     (project_dir / "runtime").mkdir()
+    diagnostic_path = project_dir / "runtime" / "vot-editor-diagnostic.txt"
     appdata = root / "AppData" / "Roaming"
     appdata.mkdir(parents=True)
     env = os.environ.copy()
@@ -91,6 +92,7 @@ def _run_editor_entrypoint(
             "APPDATA": str(appdata),
             "PRAAT_AI_PROJECT_DIR": str(project_dir),
             "PRAAT_AI_CONFIG_PATH": str(config_path),
+            "PRAAT_AI_VOT_DIAGNOSTIC_FILE": str(diagnostic_path),
             "PYTHONPATH": str(AI_ROOT),
         }
     )
@@ -205,10 +207,15 @@ def _run_editor_entrypoint(
                     if completion_marker.is_file()
                     else ""
                 )
+                native_error = (
+                    diagnostic_path.read_text(encoding="utf-8", errors="replace").strip()
+                    if diagnostic_path.is_file()
+                    else "<native callback did not report a diagnostic>"
+                )
                 raise RuntimeError(
                     "SoundEditor VOT command was consumed without creating a job; "
                     "check its form arguments and target executable build; "
-                    f"script_output={script_output!r}; "
+                    f"script_output={script_output!r}; native_error={native_error!r}; "
                     f"open native windows: {native_windows!r}"
                 )
             time.sleep(0.1)

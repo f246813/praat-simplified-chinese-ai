@@ -32,6 +32,8 @@ void PraatAiControl_refreshChatContext (bool force = false);
 /* app 发来的脚本没跑完：把错误文字写进对话窗口的结果文件，并补上完成标记
    （不弹模态错误框——那个框会挡住后面所有消息，见 cb_userMessage 的说明）。 */
 void PraatAiControl_reportChatScriptFailure (conststring32 message);
+/* Optional test-only report of failures swallowed by the SoundEditor VOT form. */
+void PraatAiControl_reportVOTEditorDiagnostic (conststring32 message);
 void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end,
 	std::optional<double> contextStart = {}, std::optional<double> contextEnd = {});
 void PraatAiControl_clearEditorVOTContext (Thing editor, Thing object);

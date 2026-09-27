@@ -646,12 +646,15 @@ static void menu_cb_SoundEditor_VOT (SoundEditor me, EDITOR_ARGS) {
 		} catch (MelderError) {
 			if (Melder_hasCrash())
 				throw;
+			PraatAiControl_reportVOTEditorDiagnostic (Melder_getError());
 			setVotResultFailure (me, Melder_getError());
 			Melder_clearError();
 			if (_sendingForm_)
 				updateVotFormDisplay (_sendingForm_, me);
 		} catch (const std::exception &error) {
-			setVotResultFailure (me, Melder_peek8to32_u (error.what()));
+			conststring32 reason = Melder_peek8to32_u (error.what());
+			PraatAiControl_reportVOTEditorDiagnostic (reason);
+			setVotResultFailure (me, reason);
 			if (_sendingForm_)
 				updateVotFormDisplay (_sendingForm_, me);
 		}
