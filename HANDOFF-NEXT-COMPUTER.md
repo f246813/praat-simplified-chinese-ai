@@ -3,7 +3,7 @@
 更新日期：2026-09-28
 源码目录：`D:\Praat-work\praat-simplified-chinese`
 分支：`modern`
-此前原生入口修复提交：`8a37d076a`；本轮代码修复：`f6253120d`（随后推送到 `public/modern`）。
+此前原生入口修复提交：`8a37d076a`；此前目标入口整合提交：`f6253120d`；本轮采样索引舍入修复：`3736ca6d4`（已推送到 `public/modern`）。
 推送远端：`public`（`https://github.com/f246813/praat-simplified-chinese-ai.git`）
 
 ## 当前实现
