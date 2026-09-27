@@ -118,7 +118,15 @@ static integer editorSampleIndexAtTime (SampledXY audio, double time) {
 	const double domainTolerance = 8.0 * std::numeric_limits <double> :: epsilon() * timeScale;
 	if (time < domainStart - domainTolerance || time > domainEnd + domainTolerance)
 		return -1;
-	return std::clamp (Melder_iround ((time - audio -> x1) / audio -> dx), (integer) 0, audio -> nx);
+	double sampleOffset = (time - audio -> x1) / audio -> dx;
+	const double offsetScale = std::max ({ std::abs (time), std::abs (audio -> x1),
+		std::abs (sampleOffset * audio -> dx), audio -> dx });
+	const double offsetTolerance = 8.0 * (std::nextafter (offsetScale,
+		std::numeric_limits <double> :: infinity()) - offsetScale) / audio -> dx;
+	const double lowerTie = std::floor (sampleOffset) + 0.5;
+	if (std::abs (sampleOffset - lowerTie) <= offsetTolerance)
+		sampleOffset = lowerTie;
+	return std::clamp (Melder_iround (sampleOffset), (integer) 0, audio -> nx);
 }
 
 static double editorTimeAtSample (SampledXY audio, integer sample) {

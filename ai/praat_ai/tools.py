@@ -2765,6 +2765,21 @@ def _vot_sample_index(
     ):
         raise ToolError("VOT 目标或上下文超出音频对象的时间轴。")
     offset = (time_seconds - first_sample_time) / sample_period_sec
+    # Subtraction and division can move a mathematically exact half-sample
+    # below the tie (for example 220 / 44100 against a half-sample origin).
+    # Snap only within the floating-point resolution of the time inputs so
+    # this keeps the same tie-up rule as SoundEditor without widening it by a
+    # meaningful fraction of a sample.
+    offset_scale = max(
+        abs(time_seconds),
+        abs(first_sample_time),
+        abs(offset * sample_period_sec),
+        sample_period_sec,
+    )
+    offset_tolerance = 8.0 * math.ulp(offset_scale) / sample_period_sec
+    lower_tie = math.floor(offset) + 0.5
+    if abs(offset - lower_tie) <= offset_tolerance:
+        offset = lower_tie
     return min(sample_count, max(0, math.floor(offset + 0.5)))
 
 

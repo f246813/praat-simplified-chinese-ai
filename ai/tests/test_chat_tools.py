@@ -918,6 +918,20 @@ class VotToolTests(unittest.TestCase):
 
         self.assertEqual(sample, 0)
 
+    def test_sample_index_rounds_half_sample_ties_up_despite_float_error(self) -> None:
+        sample_rate = 44100
+        requested_sample = 220
+        time_seconds = requested_sample / sample_rate
+
+        sample = tools._vot_sample_index(
+            time_seconds,
+            first_sample_time=0.5 / sample_rate,
+            sample_period_sec=1.0 / sample_rate,
+            sample_count=28549,
+        )
+
+        self.assertEqual(sample, requested_sample)
+
     def test_vot_audio_query_preserves_half_sample_boundary_precision(self) -> None:
         environment = _CapturingPraatEnvironment(Path(self.directory.name))
 
