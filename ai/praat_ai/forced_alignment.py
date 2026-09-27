@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -291,6 +292,10 @@ class MfaAligner(AlignmentBackend):
                     encoding="utf-8",
                 )
             command = self.build_command(corpus, dictionary, output)
+            mfa_root = root / "mfa-root"
+            mfa_root.mkdir()
+            environment = os.environ.copy()
+            environment["MFA_ROOT_DIR"] = str(mfa_root)
             completed = subprocess.run(
                 command,
                 capture_output=True,
@@ -298,6 +303,7 @@ class MfaAligner(AlignmentBackend):
                 encoding="utf-8",
                 errors="replace",
                 check=False,
+                env=environment,
             )
             if completed.returncode != 0:
                 message = completed.stderr.strip() or completed.stdout.strip()
@@ -634,6 +640,26 @@ class CompositeAligner:
             try:
                 backend.validate_vot_language(language)
                 result = backend.align(audio_path, phones, language, transcript)
+                if isinstance(backend, MfaAligner):
+                    # MFA's parser currently assigns a fixed compatibility score.
+                    # Preserve its intervals and provenance, but do not present
+                    # that constant as calibrated VOT alignment confidence.
+                    result = AlignmentResult(
+                        phones=[
+                            AlignedPhone(
+                                phone_index=phone.phone_index,
+                                ipa=phone.ipa,
+                                start=phone.start,
+                                end=phone.end,
+                                confidence=None,
+                                source=phone.source,
+                            )
+                            for phone in result.phones
+                        ],
+                        source=result.source,
+                        confidence=None,
+                        warnings=list(result.warnings),
+                    )
             except Exception as error:
                 backend_errors.append(f"{backend.name}: {error}")
                 continue

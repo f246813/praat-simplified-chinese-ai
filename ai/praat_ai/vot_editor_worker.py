@@ -27,7 +27,19 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
     )
-    temporary.replace(path)
+    _replace_state_file(temporary, path)
+
+
+def _replace_state_file(temporary: Path, path: Path) -> None:
+    """Retry short-lived Windows sharing violations while Praat polls state."""
+    for attempt in range(20):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.01)
 
 
 def _write_prepared(path: Path, prepared: VOTPreparedAnalysis) -> None:
@@ -66,7 +78,7 @@ def _write_prepared(path: Path, prepared: VOTPreparedAnalysis) -> None:
         ),
         encoding="utf-8",
     )
-    temporary.replace(path)
+    _replace_state_file(temporary, path)
 
 
 def _configured_models() -> tuple[tuple[str, ...], dict[str, str]]:

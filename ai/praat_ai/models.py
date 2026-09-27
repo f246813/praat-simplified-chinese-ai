@@ -134,7 +134,7 @@ class AlignedPhone:
     ipa: str
     start: float
     end: float
-    confidence: float = 1.0
+    confidence: float | None = 1.0
     source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -145,7 +145,7 @@ class AlignedPhone:
 class AlignmentResult:
     phones: list[AlignedPhone]
     source: str
-    confidence: float = 1.0
+    confidence: float | None = 1.0
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:

@@ -237,6 +237,24 @@ class VotServiceTests(unittest.TestCase):
         self.assertIn("phoneme", result.failure_reason.lower())
         self.assertEqual(analyzer.calls, 0)
 
+    def test_model_assisted_vot_rejects_non_stop_target_phone(self) -> None:
+        vot = load_vot_api()
+        request = self.make_request(vot, phonemes=("n",))
+        analyzer = FixedAcousticAnalyzer(self.make_candidate(vot))
+
+        result = vot.VOTAnalysisService(CompositeAligner([FixedAligner()])).analyze(
+            request,
+            analyzer,
+            use_cache=False,
+        )
+
+        self.assertEqual(result.status, vot.VOTStatus.FAILED)
+        self.assertIn("target_phone_not_stop", result.failure_reason)
+        self.assertIsNone(result.burst_sample_index)
+        self.assertIsNone(result.onset_sample_index)
+        self.assertIsNone(result.vot_ms)
+        self.assertEqual(analyzer.calls, 0)
+
     def test_partial_target_selection_is_target_incomplete(self) -> None:
         vot = load_vot_api()
         request = self.make_request(vot, target_range=(10500, 10800))

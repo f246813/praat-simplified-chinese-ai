@@ -1,6 +1,9 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
@@ -146,6 +149,77 @@ class ForcedAlignmentTests(unittest.TestCase):
         )
         self.assertIn("mandarin_mfa", command)
         self.assertIn("long_textgrid", command)
+
+    def test_mfa_invocations_use_separate_temporary_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio = root / "input.wav"
+            import wave
+
+            with wave.open(str(audio), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                handle.writeframes(b"\0\0" * 100)
+
+            aligner = MfaAligner(
+                MfaAlignmentConfig(
+                    enabled=True,
+                    conda_executable=sys.executable,
+                    conda_environment="aligner",
+                    acoustic_model="japanese_mfa.zip",
+                    language="ja",
+                )
+            )
+            temporary_roots: list[str | None] = []
+
+            def fake_mfa(command, **kwargs):
+                environment = kwargs.get("env") or {}
+                temporary_roots.append(environment.get("MFA_ROOT_DIR"))
+                output = Path(command[9])
+                (output / "learner.TextGrid").write_text(
+                    'item [1]:\n class = "IntervalTier"\n name = "phones"\n'
+                    ' intervals: size = 1\n intervals [1]:\n'
+                    '  xmin = 0.0\n  xmax = 0.01\n  text = "n"\n',
+                    encoding="utf-8",
+                )
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("praat_ai.forced_alignment.subprocess.run", side_effect=fake_mfa):
+                for _ in range(2):
+                    aligner.align(audio, [PhoneSpec("n")], "ja")
+
+            self.assertEqual(len(temporary_roots), 2)
+            self.assertTrue(all(temporary_roots))
+            self.assertNotEqual(temporary_roots[0], temporary_roots[1])
+
+    def test_vot_mfa_evidence_does_not_claim_fixed_confidence(self) -> None:
+        backend = MfaAligner(
+            MfaAlignmentConfig(
+                enabled=True,
+                acoustic_model="japanese_mfa.zip",
+                language="ja",
+            )
+        )
+        backend.available = lambda: True
+        backend_result = AlignmentResult(
+            [AlignedPhone(1, "n", 0.08, 0.11, 0.85, "mfa")],
+            "mfa",
+            0.85,
+        )
+
+        with patch.object(backend, "align", return_value=backend_result):
+            evidence = self._align_for_vot(
+                CompositeAligner([backend]),
+                "unused.wav",
+                [PhoneSpec("n")],
+                "ja",
+                "日本",
+            )
+
+        self.assertEqual(evidence.results[0].phones[0].start, 0.08)
+        self.assertIsNone(evidence.results[0].phones[0].confidence)
+        self.assertIsNone(evidence.results[0].confidence)
 
     def test_vot_alignment_does_not_use_proportional_fallback(self) -> None:
         aligner = CompositeAligner([UnavailableAligner()])

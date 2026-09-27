@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -36,6 +37,25 @@ class VOTJobState(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+_VOT_STOP_SYMBOLS = frozenset("pbtdʈɖcɟkgɡqɢʔʡɓɗᶑʄɠʛ")
+_IPA_PREFIX_MARKS = frozenset("ˈˌːˑ͜͡'")
+
+
+def _is_vot_stop_phone(ipa: str) -> bool:
+    normalized = unicodedata.normalize("NFD", ipa.strip())
+    first_segment = next(
+        (
+            symbol
+            for symbol in normalized
+            if symbol not in _IPA_PREFIX_MARKS
+            and not unicodedata.combining(symbol)
+            and not symbol.isspace()
+        ),
+        "",
+    )
+    return first_segment in _VOT_STOP_SYMBOLS
 
 
 def _freeze(value: Any) -> Any:
@@ -226,7 +246,7 @@ class VOTAlignedPhone:
     start_sample: int
     end_sample: int
     source: str
-    confidence: float
+    confidence: float | None
 
     @classmethod
     def from_alignment(
@@ -504,6 +524,16 @@ class VOTAnalysisService:
                 None,
                 selection_statuses[0],
                 selection_reasons[0],
+            )
+
+        if not _is_vot_stop_phone(selected[0].ipa):
+            return VOTPreparedAnalysis(
+                request,
+                evidence,
+                selected[0],
+                VOTStatus.FAILED,
+                "target_phone_not_stop: model-assisted VOT requires a stop-like "
+                f"target, but the aligned phone is /{selected[0].ipa}/",
             )
 
         disagreement = self._model_disagreement(
