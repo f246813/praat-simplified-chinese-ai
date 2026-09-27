@@ -39,8 +39,7 @@ VOT 编辑器和 AI `vot` 工具已接入同一规范请求、后台模型对齐
 
 - `public/modern` 包含功能、评估工具和原生入口修复。`origin` 指向上游，只推到 `public`。
 - 本机还存在多份未跟踪的 `Praat-*.exe` 快照、`PraatZHcn.lnk` 和 `vot-analysis.tsv`；它们没有加入 Git，也没有删除。
-- 本次结束前再次检查时 `G:\` 不存在，因此不能把项目复制到 `G:\praat2 for move`。源码仍在 D 盘，未删除或搬移；不要把此前的部分副本当成完整仓库。
-- 另一台电脑可从 `public` 克隆 `modern` 分支并检出本次更新后的 HEAD；不需要再套用旧的 `tracked-changes.patch`。
+- 用户说明 G 盘已拔除，暂不考虑迁移。源码继续保留在 D 盘；其他电脑可从 `public` 克隆 `modern` 分支并检出本次更新后的 HEAD，不需要再套用旧的 `tracked-changes.patch`。
 
 ## 参考实现
 
