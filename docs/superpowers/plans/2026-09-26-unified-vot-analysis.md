@@ -231,29 +231,29 @@ git commit -m "feat: analyze immutable VOT audio snapshots"
 - Consumes: Task 2 request/result/job models and Task 4 snapshot/acoustic adapter.
 - Produces: `VOTEditorJobCoordinator.submit(request) -> str`, `poll(job_id) -> VOTJobSnapshot`, `complete_acoustics(job_id, acoustic_analyzer) -> VOTJobSnapshot`, and `cancel(job_id) -> bool`; plus `PraatAiControl_submitVOTJob(request_json: str) -> str`, `PraatAiControl_pollVOTJob(job_id: str) -> str` (JSON-serialized `VOTJobSnapshot`), `PraatAiControl_completeVOTJob(job_id: str) -> str` (JSON-serialized `VOTAnalysisResult`), and `PraatAiControl_cancelVOTJob(job_id: str) -> bool`. The model worker stops at `ready_for_acoustics`; polling on the editor event loop then calls `complete_acoustics`, which invokes the registered native C++ action and stores the shared result. SoundEditor retains request generation and applies only a result whose generation, selection samples, audio version, mode and parameters still match.
 
-- [ ] **Step 1: Add failing editor lifecycle contract tests**
+- [x] **Step 1: Add failing editor lifecycle contract tests**
 
 Add `test_vot_editor_job_lifecycle.py` cases for background alignment, progress, main-thread-only acoustic completion, cancellation and stale-response rejection. Add verifier assertions for the three modes, request generation, separate target/context samples, progress display, explicit failure display, and click-to-apply behavior. Add C++ tests for a late job result after selection/audio version changes; assert that no worker thread calls the native C++ action.
 
-- [ ] **Step 2: Run editor contract tests and verify failure**
+- [x] **Step 2: Run editor contract tests and verify failure**
 
 Run: `& 'D:\Praat-work\venv-ai\Scripts\python.exe' ai/tests/verify_segment_analysis_templates.py`
 
 Expected: the verifier identifies missing job/progress/stale-state contract items.
 
-- [ ] **Step 3: Implement the SoundEditor job lifecycle**
+- [x] **Step 3: Implement the SoundEditor job lifecycle**
 
 Expose model-assisted, acoustic-only, and manual modes; gather available annotation or report which fields are missing. Start the same Python service request without blocking the window, poll progress on the editor event loop, mark old results stale on relevant edits, discard late responses, and update the object only after explicit Apply.
 
-- [ ] **Step 4: Rebuild and run editor lifecycle regressions**
+- [x] **Step 4: Rebuild and run editor lifecycle regressions**
 
 Run: `& 'C:\msys64\usr\bin\bash.exe' -lc "cd /d/Praat-work/praat-simplified-chinese && mkdir -p /d/Praat-work/vot-unified-acceptance && make EXECUTABLE_FILE=/d/Praat-work/vot-unified-acceptance/Praat.exe PRAAT_COMPILER=clang -j16"`
 
 Then run: `$env:PRAAT_EXE='D:\Praat-work\vot-unified-acceptance\Praat.exe'; & 'D:\Praat-work\venv-ai\Scripts\python.exe' ai/tests/verify_segment_analysis_templates.py`
 
-Expected: build exits 0 and the verifier reports `SEGMENT_ANALYSIS_TEMPLATE_PASS: VOT contract and AI template bridge`.
+Expected: build exits 0 and the verifier reports `SEGMENT_ANALYSIS_NATIVE_PASS: VOT contract and AI local-tool bridge`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add -p -- foned/SoundEditor.cpp foned/SoundEditor.h sys/PraatAiControl.cpp sys/PraatAiControl.h fon/Praat_tests.cpp ai/tests/verify_segment_analysis_templates.py
@@ -275,21 +275,21 @@ git commit -m "feat: run VOT editor analysis asynchronously"
 - Consumes: Tasks 2 and 4 `VOTAnalysisService`, `VOTAnalysisRequest`, snapshot builder, and C++ analyzer adapter.
 - Produces: the registered `vot` tool builds and submits exactly one canonical request; its parameters cover explicit range/target, language, transcript/phonemes, three modes, manual boundaries, and existing acoustic settings. It returns the same serialized `VOTAnalysisResult` consumed by SoundEditor.
 
-- [ ] **Step 1: Add failing AI tool tests**
+- [x] **Step 1: Add failing AI tool tests**
 
 Add `test_vot_submits_canonical_request`, `test_vot_does_not_replace_explicit_range_with_nearby_selection`, `test_vot_requires_selection_or_explicit_range`, `test_vot_requires_missing_alignment_metadata_or_acoustic_mode`, and `test_vot_returns_ambiguous_and_failed_statuses`. Assert sample indices and exact snapshot identity, not six-decimal script literals. Keep TextGrid manual boundary insertion behavior separate from Sound/LongSound acoustic analysis.
 
-- [ ] **Step 2: Run AI VOT tests and verify failure**
+- [x] **Step 2: Run AI VOT tests and verify failure**
 
 Run: `$env:PYTHONPATH='ai'; & 'D:\Praat-work\venv-ai\Scripts\python.exe' -m unittest discover -s ai/tests -p test_chat_tools.py -v`
 
 Expected: tests fail because the current `vot` builder emits the old TSV action and applies the approximate selection heuristic.
 
-- [ ] **Step 3: Replace the VOT-only builder path with the shared service**
+- [x] **Step 3: Replace the VOT-only builder path with the shared service**
 
 Resolve exact explicit sample ranges or the exact editor selection once; never use the 2 ms echo rule for VOT and never fall back to the whole audio. Read available language/transcript/phone data, otherwise return a concrete request for it or honor explicit acoustic-only mode. Preserve explicit TextGrid manual-boundary behavior, and do not change other tools' range rules.
 
-- [ ] **Step 4: Run AI tool tests and full Python suite**
+- [x] **Step 4: Run AI tool tests and full Python suite**
 
 Run: `$env:PYTHONPATH='ai'; & 'D:\Praat-work\venv-ai\Scripts\python.exe' -m unittest discover -s ai/tests -p test_chat_tools.py -v`
 
@@ -297,7 +297,7 @@ Then run: `$env:PYTHONPATH='ai'; & 'D:\Praat-work\venv-ai\Scripts\python.exe' -m
 
 Expected: VOT tool tests and the full AI suite pass; unrelated tool range behavior remains unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add -p -- ai/praat_ai/tools.py ai/praat_ai/chat.py ai/tests/test_chat_tools.py ai/tests/verify_chat_templates.py
@@ -390,10 +390,10 @@ git add ai/tests/verify_vot_accuracy.py ai/tests/test_vot_accuracy.py ai/tests/f
 git commit -m "test: report VOT accuracy against human labels"
 ```
 
-## Handoff status — 2026-09-26
+## Handoff status — 2026-09-28
 
-- Tasks 1–6 implementation is present in the working tree. The editor and AI tool use the shared request/result path; native editor and AI acoustic-only/manual entrypoints have been exercised. Work remains uncommitted by request so the complete working tree can be transferred.
-- Task 7 has verified acoustic-only consistency, manual positive/zero/negative consistency, uncached AI repeatability, an independent editor repeat, 5 ms selection movement, and clipped-target failure. Model-assisted cross-entry consistency remains pending because the available MFA model is English, the wav2vec2 language list is undeclared, and its cached checkpoint lacks model weights. The new language guard returns a nonnumeric failure through the full AI `vot` tool.
-- Task 8 is unverified: there is no independently annotated Japanese real-speech VOT set in this workspace. The synthetic regression fixture and earlier `+14 ms` observation are not gold labels.
-- Full results and paths are in `D:\Praat-work\vot-unified-acceptance\acceptance-report-final.json`; continuation notes are in `HANDOFF-NEXT-COMPUTER.md` at the repository root.
-- After the final language-guard edit, verification was limited to its focused unit regression and one complete AI-tool invocation through the target `Praat.exe`. Run remaining lower-priority tests together after the model and annotation blockers are addressed.
+- Tasks 1–6 are implemented and committed; Tasks 5–6 have fresh focused verification. The native submit path invokes the short Python launcher, which starts the worker in a detached process and returns; the editor polls state on its event loop and applies only the current job result.
+- Task 7 is partially verified through the actual target executable: acoustic-only and manual full-entrypoint results agree; two fresh repeated calculations agree; moving either selection edge inward 4.989 ms keeps boundaries stable; clipping the burst yields a shared nonnumeric failure. Manual positive, zero and negative cases match at exact sample indices. Successful Japanese model-assisted parity remains unverified because no usable Japanese model is configured.
+- Task 8 remains unverified because no independently annotated Japanese real-speech cases were supplied. Synthetic data and the earlier `+14 ms` observation are not accuracy labels.
+- Fresh checks: `ai/tests/test_vot_jobs.py` 7/7 passed; `ai/tests/verify_segment_analysis_templates.py` reported `SEGMENT_ANALYSIS_NATIVE_PASS: VOT contract and AI local-tool bridge`. The detailed continuation record is `HANDOFF-NEXT-COMPUTER.md`.
+- Development is paused at the user's request after the handoff and Git update. The workspace stays on D: for this pause. Resume Task 7's model-assisted success coverage and Task 8 after Japanese model configuration and adjudicated real recordings become available.

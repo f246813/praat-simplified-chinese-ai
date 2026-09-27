@@ -22,8 +22,12 @@ from praat_ai.sendpraat import CONSUMED_NOTE, message_file_path  # noqa: E402
 from praat_ai.vot_accuracy import score_case, summarize_cases, validate_manifest  # noqa: E402
 
 
-MODE_NAMES = {"model_assisted": "模型辅助自动", "acoustic_only": "纯声学候选"}
-MODE_LABELS = {"model_assisted": "模型辅助自动", "acoustic_only": "纯声学候选"}
+MODE_NAMES = {
+    "model_assisted": "模型辅助自动",
+    "acoustic_only": "纯声学候选",
+    "manual": "人工确认",
+}
+MODE_LABELS = MODE_NAMES
 
 
 def _praat_quote(value: str | Path) -> str:
@@ -31,7 +35,13 @@ def _praat_quote(value: str | Path) -> str:
 
 
 def _time_for_sample(sample_index: int, sample_rate_hz: int) -> str:
+    """Map a half-open range boundary to Praat's time axis."""
     return format(sample_index / sample_rate_hz, ".17g")
+
+
+def _time_for_sample_center(sample_index: int, sample_rate_hz: int) -> str:
+    """Map a zero-based sample index to Praat's sample-centre time."""
+    return format((sample_index + 0.5) / sample_rate_hz, ".17g")
 
 
 def _run_ai_entrypoint(case: dict[str, Any], audio_path: Path, praat_exe: Path, root: Path) -> dict[str, Any]:
@@ -67,6 +77,12 @@ def _run_ai_entrypoint(case: dict[str, Any], audio_path: Path, praat_exe: Path, 
         "phonemes": " ".join(case.get("phonemes", [])),
         "target_phone_index": case.get("target_phone_index", 0),
     }
+    if mode == "manual":
+        boundaries = case.get("manual_boundaries_samples")
+        if not isinstance(boundaries, list) or len(boundaries) != 2:
+            raise ValueError("manual cases require manual_boundaries_samples [burst, onset]")
+        arguments["burst"] = _time_for_sample_center(int(boundaries[0]), sample_rate)
+        arguments["voicing"] = _time_for_sample_center(int(boundaries[1]), sample_rate)
     arguments.update(case.get("parameters", {}))
     return entrypoint_harness.run_ai_vot(arguments, context, environment)
 
@@ -115,7 +131,20 @@ def _run_editor_entrypoint(
         start_sample, end_sample = case["target_selection_samples"]
         mode = case.get("mode", "acoustic_only")
         if mode not in MODE_NAMES:
-            raise ValueError("accuracy cases must use model_assisted or acoustic_only mode")
+            raise ValueError("unsupported VOT mode")
+        manual_boundaries = case.get("manual_boundaries_samples")
+        if mode == "manual" and (
+            not isinstance(manual_boundaries, list) or len(manual_boundaries) != 2
+        ):
+            raise ValueError("manual cases require manual_boundaries_samples [burst, onset]")
+        if mode != "manual" and manual_boundaries is not None:
+            raise ValueError("manual_boundaries_samples are only valid in manual mode")
+        burst_time, onset_time = (
+            (_time_for_sample_center(int(manual_boundaries[0]), sample_rate),
+             _time_for_sample_center(int(manual_boundaries[1]), sample_rate))
+            if mode == "manual"
+            else ("undefined", "undefined")
+        )
         parameters = case.get("parameters", {})
         threshold = float(parameters.get("burst_threshold_db", 6.0))
         pitch_floor = float(parameters.get("pitch_floor_hz", 75.0))
@@ -161,7 +190,7 @@ def _run_editor_entrypoint(
                     f"Select: {_time_for_sample(start_sample, sample_rate)}, {_time_for_sample(end_sample, sample_rate)}",
                     "VOT: "
                     f"{_time_for_sample(start_sample, sample_rate)}, "
-                    f"{_time_for_sample(end_sample, sample_rate)}, undefined, undefined, "
+                    f"{_time_for_sample(end_sample, sample_rate)}, {burst_time}, {onset_time}, "
                     f"{_praat_quote(MODE_LABELS[mode])}, "
                     f"{_time_for_sample(int(case.get('context_start_sample', 0)), sample_rate)}, "
                     f"{_time_for_sample(int(case.get('context_end_sample', case['sample_count'])), sample_rate)}, "

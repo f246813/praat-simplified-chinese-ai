@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 import unittest
@@ -8,7 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from praat_ai import launch_vot_worker
 from praat_ai.vot import VOTJobState, VOTStatus
 from praat_ai.vot_jobs import VOTEditorJobCoordinator
 
@@ -37,6 +40,44 @@ class CompletionScriptEntryPointTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         self.assertIn("usage:", completed.stderr)
         self.assertNotIn("attempted relative import", completed.stderr)
+
+
+class NativeVotWorkerLaunchTests(unittest.TestCase):
+    def test_native_submit_invokes_the_lightweight_worker_launcher(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        source = (repository / "sys" / "PraatAiControl.cpp").read_text(encoding="utf-8")
+        match = re.search(
+            r"std::string PraatAiControl_submitVOTJob \(.*?\n\}\n\n"
+            r"PraatAiVOTJobStatus PraatAiControl_pollVOTJob",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(match, "could not find the native editor VOT submit function")
+        submit = match.group(0)
+
+        self.assertIn('"launch_vot_worker.py"', submit)
+        self.assertIn("praat_runPythonScriptFile (launcherPath", submit)
+
+    def test_worker_launcher_starts_detached_process_and_returns(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"PRAAT_AI_VOT_REQUEST": "request.json", "PRAAT_AI_PROJECT_DIR": "."},
+        ), patch.object(launch_vot_worker.subprocess, "Popen") as start:
+            self.assertEqual(launch_vot_worker.main(), 0)
+
+        command, options = start.call_args.args[0], start.call_args.kwargs
+        self.assertEqual(command[-3:], ["-m", "praat_ai.vot_editor_worker", "request.json"])
+        self.assertIs(options["stdin"], launch_vot_worker.subprocess.DEVNULL)
+        self.assertIs(options["stdout"], launch_vot_worker.subprocess.DEVNULL)
+        self.assertIs(options["stderr"], launch_vot_worker.subprocess.DEVNULL)
+        if os.name == "nt":
+            self.assertEqual(
+                options["creationflags"],
+                launch_vot_worker.subprocess.DETACHED_PROCESS
+                | launch_vot_worker.subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+        else:
+            self.assertTrue(options["start_new_session"])
 
 
 class BlockingService:
