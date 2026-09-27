@@ -5,7 +5,7 @@
 分支：`modern`
 此前原生入口修复提交：`8a37d076a`；此前目标入口整合提交：`f6253120d`；本轮采样索引舍入修复：`3736ca6d4`（已推送到 `public/modern`）。
 本轮验收器与交接更新代码提交：`220ec5cc2`（已推送到 `public/modern`）。
-本轮起声候选回溯修复与验收记录：`a45f385db`（推送中）。
+本轮起声候选回溯修复提交：`babaa4fae`（已推送到 `public/modern`）。
 推送远端：`public`（`https://github.com/f246813/praat-simplified-chinese-ai.git`）
 
 ## 当前实现
