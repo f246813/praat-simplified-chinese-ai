@@ -1,47 +1,47 @@
-# VOT 统一分析开发交接
+# VOT 统一分析交接
 
-交接日期：2026-09-26
+更新日期：2026-09-28
 源码目录：`D:\Praat-work\praat-simplified-chinese`
-快速恢复包：`G:\praat2 for move\working-tree-handoff`
-完整原始源码仍在 D: 盘；G: 盘中同名全量复制目录只是被中止的部分副本，不要当作完整仓库使用。
+分支：`modern`
+已推送提交：`043024c62`（前序功能提交 `50ecb2038`，评估工具提交 `ba57ca225`）
+推送远端：`public`（`https://github.com/f246813/praat-simplified-chinese-ai.git`）
 
-## 当前状态
+## 当前实现
 
-SoundEditor 的 VOT 窗口和 AI `vot` 工具已经接入同一份规范请求、异步模型对齐服务、C++ 声学检测入口和结果结构。音频快照以 PCM 内容哈希和对象版本识别；目标搜索范围、声学上下文和固定对齐上下文均使用原音频采样点索引。编辑器只在用户点击应用后更新对象。
+VOT 编辑器和 AI `vot` 工具已接入同一规范请求、后台模型对齐服务、C++ 声学检测入口和结果结构。目标搜索范围、声学上下文和固定对齐上下文使用原音频采样点；编辑器保留“点击应用后更新”。模型辅助路径拒绝按比例生成的近似对齐区间，并检查模型声明的语言支持。
 
-模型辅助 VOT 不再接收比例分配的近似区间。MFA 和 wav2vec2 现在需要声明支持的语言；MFA 会识别常见预训练模型名称中的语言。语言不匹配或语言未配置时返回失败原因且不产生 VOT 数值。最新定向回归和真实 AI 工具入口均覆盖了这项拦截。
+本次新增准确性评估工具：
 
-## 已有验收证据
+- `ai/praat_ai/vot_accuracy.py`：校验日语人工标注清单、音频哈希和 WAV 元数据；比较两入口的请求、边界、状态、模型／算法来源；分别报告爆破、起声、VOT 误差、漏检、错误配对、歧义决策和标注者分歧。
+- `ai/tests/verify_vot_accuracy.py`：调用目标 `Praat.exe` 的 SoundEditor `VOT` 命令和注册的 AI `vot` 工具，按人工裁定数据生成 JSON 报告。失败的入口会作为 `entrypoint_harness_failed` 报告，不会计成准确率通过。
+- `ai/tests/fixtures/vot/README.md` 和 `gold_manifest.schema.json`：标注协议与清单结构。真实录音应留在 `ai/tests/fixtures/vot/local/`，不要提交含说话者身份的信息。
 
-最终汇总在验收目录的 `acceptance-report-final.json`。关键结论：
+## 最近验证与限制
 
-- 相同合成音频和规范输入下，AI 工具与真实目标 `Praat.exe` 的编辑器入口在纯声学模式得到同一请求哈希、音频版本、边界、VOT 和状态。
-- AI 入口进行了 5 次独立新计算、共 15 次 Praat 脚本调用，结果一致；编辑器另做了独立重复计算，结果一致。将选区移动 5 ms 后边界漂移为 0 ms。选区裁掉目标时两边均失败且没有 VOT 数值。
-- 正、零、负三种人工边界的采样点、请求哈希、状态和 VOT 在两个入口逐项一致。人工模式采用 `(onset_sample - burst_sample) * 1000 / sample_rate`。
-- MFA 语言保护通过真实 AI `vot` 工具入口验证：本机英文 MFA 配置面对日语请求时返回 `language_mismatch`；wav2vec2 因语言支持未配置而不运行；最终结果没有数值。
-- 准确性仍未验证。当前回归音频是合成音频；没有可用的日语真实录音人工标注和裁定边界。先前观察到的 `+14 ms` 不能作为正确答案。
+- Python 语法检查、4 个准确性评估单测和 JSON Schema 解析通过。
+- 使用合成回归音频时，AI 工具入口由两次独立目标 `Praat.exe` 执行得到完全相同的请求哈希、边界、状态及算法来源：`candidate`，爆破样本 `13230`，起声样本 `14641`，VOT `31.9954648526 ms`。这是稳定性冒烟，不是准确性证据。
+- 新鲜启动的目标 `Praat.exe` 中，编辑器窗口成功打开；向该进程投递完整 VOT 命令后，消息被消费，但没有创建 VOT 后台作业。当前双入口冒烟因此为 `entrypoint_harness_failed`，不能声称两入口一致。诊断时进程中出现 VOT／选择表单窗口；下一步应查明脚本化表单为何未提交（当前命令已尝试数字 CHOICE 参数、分两次投递和结束 editor 上下文）。
+- 评估报告框架还没有真实人工标注录音可运行。没有真实日语录音及两位独立标注者的边界，准确性仍未验收；合成音频和此前观察的 `+14 ms` 都不能作为金标准。
+- 本机 MFA 配置是英文，不适用于日语样本；wav2vec2 模型缺少可确认的日语支持／模型权重。模型辅助日语验收仍需真实模型与语言配置。
 
-快速恢复包的 `acceptance-evidence` 保留了目标可执行文件、入口结果、编辑器案例、AI 完整结果、手工边界结果、模型诊断和合并报告。详细文件列表见汇总 JSON 的 `source_artifacts`。
+本次只运行了高优先级检查；用户要求低优先级测试集中到最后运行。完整测试计划见 `docs/superpowers/plans/2026-09-26-unified-vot-analysis.md`。
 
-## 模型环境限制
+## 下一步
 
-本机 `ai/ai_config.json` 指向 English US ARPA MFA 词典/模型，但请求样本语言是日语。新保护会正确拒绝这个组合。当前 wav2vec2 配置没有声明支持语言；先前离线探测还发现缓存的模型目录缺少 `pytorch_model.bin` 和 `model.safetensors`。因此当前机器没有能接受的日语 MFA/wav2vec2 对齐模型，不要把旧探测产生的 MFA 音素区间或置信度 `0.85` 当作可信边界。
+1. 先用可读方式取得 SoundEditor VOT 表单的脚本错误／字段状态，修好真实入口命令后，重新运行一次新鲜进程的编辑器＋AI 双入口冒烟，并重复计算确认不是缓存结果。
+2. 准备有哈希、采样率及样本数的真实日语 WAV；至少两位标注者独立标注，再裁定边界。覆盖正、零、负 VOT、多爆破候选、持续有声和歧义样本。
+3. 配置经确认支持日语的 MFA 或 wav2vec2 模型；对模型辅助、纯声学、人工确认分别报告结果。边界误差阈值尚未约定，不要自行写整体通过结论。
+4. 完成高优先级入口一致性、重复稳定性、选区微移及真实音频准确性后，再集中运行低优先级测试。
 
-配置示例在 `ai/ai_config.example.json`，说明在 `ai/README.zh-CN.md`：MFA 填 `alignment.mfa.language`（例如 `ja`）；wav2vec2 填 `alignment.wav2vec2.languages`（例如 `["ja"]`，只在模型确实支持多语言时填 `["*"]`）。更换到真实日语模型后，再做模型辅助模式的双入口对齐验收。
+## 工作区与迁移
 
-## 恢复与继续步骤
-
-1. 阅读 `G:\praat2 for move\working-tree-handoff\HANDOFF-RESTORE.md`。从你现有的 Git 远端克隆/拉取仓库，检出基线提交 `50863f04140fec96f8fe08142d64159eebce27f1`，应用 `tracked-changes.patch`，再按相对路径复制 `untracked-files`。
-2. 恢复后查看 `git status --short`；不要丢弃现有修改。交接时分支为 `modern`、HEAD 为上述提交，有大量未提交变更；没有暂存内容，也没有为本次工作创建提交。旧二进制快照和快捷方式没有放入快速包，可从 Git 或原 D: 盘找回。
-3. 先读本文件、`docs/superpowers/specs/2026-09-26-unified-vot-analysis-design.md` 和 `docs/superpowers/plans/2026-09-26-unified-vot-analysis.md`。
-4. 新电脑需要重新检查编译器、Python、Praat AI 依赖和 MFA/wav2vec2 模型路径。Python 虚拟环境和模型缓存没有包含在快速包中；按项目依赖重新安装即可。
-5. 先补齐真实日语模型与人工裁定的真实录音，再通过实际 `Praat.exe` 编辑器和 AI 工具入口比较模型辅助结果。覆盖正、零、负 VOT、多个爆破候选和持续有声片段，并分别报告边界误差、漏检、错误配对和歧义。
-6. 高优先级验收完成后，再集中运行计划中剩余的低优先级测试，避免重复跑全套测试。
-
-本次开发已按要求暂停；不要在未恢复任务前继续实现或改动验收范围。D: 盘源目录没有删除或清理。
+- `public/modern` 已包含上述三个提交。`origin` 指向上游只读地址，本次没有向它推送。
+- 本机还存在多份未跟踪的 `Praat-*.exe` 快照、`PraatZHcn.lnk` 和 `vot-analysis.tsv`；它们没有加入 Git，也没有删除。
+- 当前检查时 `G:\` 不存在，因此没有把项目复制到 `G:\praat2 for move`。旧文档提到的 `G:\praat2 for move\working-tree-handoff` 也不可访问；不要把此前的部分副本当作完整仓库。
+- 源码仍在 D 盘。另一台电脑可从 `public` 克隆 `modern` 分支并检出提交 `043024c62`；不需要再套用旧的 `tracked-changes.patch`。
 
 ## 参考实现
 
-- [AutoVOT](https://github.com/mlml/autovot)：其分类器面向正 VOT，不能直接充当负 VOT 检测器。
-- [VOT-CP](https://github.com/llcit/vot-cp)：展示了先使用对齐区间缩小目标范围、再做声学 VOT 检测的拆分方式。
-- [JUCE Windows 消息队列](https://github.com/juce-framework/JUCE/blob/master/modules/juce_events/native/juce_Messaging_windows.cpp) 和 [进度对话框示例](https://github.com/juce-framework/JUCE/blob/master/examples/GUI/DialogsDemo.h)：用于检查后台工作完成后回到界面线程的模式。
+- [AutoVOT](https://github.com/mlml/autovot)：其分类器针对正 VOT，不能直接充当负 VOT 检测器。
+- [VOT-CP](https://github.com/llcit/vot-cp)：先用对齐结果缩小目标范围，再做声学 VOT 检测。
+- [JUCE Windows 消息队列](https://github.com/juce-framework/JUCE/blob/master/modules/juce_events/native/juce_Messaging_windows.cpp) 与 [进度对话框示例](https://github.com/juce-framework/JUCE/blob/master/examples/GUI/DialogsDemo.h)：后台任务结束后回到界面线程的参考实现。
