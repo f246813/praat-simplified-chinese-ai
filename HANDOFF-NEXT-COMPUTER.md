@@ -3,7 +3,7 @@
 更新日期：2026-09-28
 源码目录：`D:\Praat-work\praat-simplified-chinese`
 分支：`modern`
-已推送提交：`043024c62`（前序功能提交 `50ecb2038`，评估工具提交 `ba57ca225`）
+已推送代码基线：`b84ffd856`（前序功能提交 `50ecb2038`，评估工具提交 `ba57ca225`）
 推送远端：`public`（`https://github.com/f246813/praat-simplified-chinese-ai.git`）
 
 ## 当前实现
@@ -38,7 +38,7 @@ VOT 编辑器和 AI `vot` 工具已接入同一规范请求、后台模型对齐
 - `public/modern` 已包含上述三个提交。`origin` 指向上游只读地址，本次没有向它推送。
 - 本机还存在多份未跟踪的 `Praat-*.exe` 快照、`PraatZHcn.lnk` 和 `vot-analysis.tsv`；它们没有加入 Git，也没有删除。
 - 当前检查时 `G:\` 不存在，因此没有把项目复制到 `G:\praat2 for move`。旧文档提到的 `G:\praat2 for move\working-tree-handoff` 也不可访问；不要把此前的部分副本当作完整仓库。
-- 源码仍在 D 盘。另一台电脑可从 `public` 克隆 `modern` 分支并检出提交 `043024c62`；不需要再套用旧的 `tracked-changes.patch`。
+- 源码仍在 D 盘。另一台电脑可从 `public` 克隆 `modern` 分支并检出 `b84ffd856` 或更新的 `modern` HEAD；不需要再套用旧的 `tracked-changes.patch`。
 
 ## 参考实现
 
