@@ -46,3 +46,8 @@ consistency, and annotator disagreement. The report intentionally has no overall
 pass/fail accuracy threshold; the threshold must be agreed after reviewing the
 annotated results. The previous synthetic `+14 ms` observation is not a gold
 label and must not be added as one.
+
+If Praat consumes an editor command without creating its native VOT job, the
+report status is `entrypoint_harness_failed` and the CLI exits nonzero. Such a
+report is diagnostic only; accuracy conclusions require returned results from
+both real entry points for each gold case.
