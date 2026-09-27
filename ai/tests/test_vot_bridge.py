@@ -69,7 +69,7 @@ def _candidate_tsv(time_origin: float) -> str:
         "voicing_time_s\tmetric_id\tvalue\tunit\tstatus\treason\n"
     )
     base = "1\t9.0\tedited\t7\t\t22\t22.2\t.2\t48000\t2\tLongSound\tVOT\t"
-    parameters = "algorithmVersion=context-pair-v3; burstDetectionPath=high-band; burstDetectionBand=high-band; burstDetectionFallbackReason="
+    parameters = "algorithmVersion=context-pair-v4; burstDetectionPath=high-band; burstDetectionBand=high-band; burstDetectionFallbackReason="
     rows = []
     for metric, value, unit, status, reason in (
         ("burst_time_candidate", repr(time_origin + 55 / 48000), "s", "warning", "Candidate from high-band."),
@@ -84,7 +84,7 @@ def _candidate_tsv(time_origin: float) -> str:
 class VOTBridgeTests(unittest.TestCase):
     def test_parameter_parser_preserves_semicolons_inside_provenance(self) -> None:
         parameters = _parse_parameters(
-            "algorithmVersion=context-pair-v3; "
+            "algorithmVersion=context-pair-v4; "
             "burstDetectionFallbackReason=Nyquist low; secondary fallback reason; "
             "burstDetectionPath=full-band"
         )

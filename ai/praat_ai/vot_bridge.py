@@ -135,7 +135,7 @@ def parse_vot_acoustic_result(
         onset_sample_index=onset_sample if status == VOTStatus.CANDIDATE else None,
         reason=reason,
         burst_source=f"cpp:{band or path}:release-envelope" if burst_sample is not None else "",
-        onset_source="cpp:pitch-stability-and-hnr" if onset_sample is not None else "",
+        onset_source="cpp:pitch-candidate-backtrack-and-hnr" if onset_sample is not None else "",
         detector_path=path,
         fallback_reason=fallback_reason,
         negative_vot_evidence=bool(negative_evidence and negative_evidence > 0.0),

@@ -121,6 +121,45 @@ struct EnvelopeRise {
 	double riseDb { 0.0 };
 };
 
+struct PitchCandidateOnset {
+	double time { 0.0 };
+	double frequency { 0.0 };
+};
+
+std::optional<PitchCandidateOnset> findPitchCandidateBacktrack (Pitch pitch, integer runStartFrame,
+		double referenceFrequency, double minimumTime, double maximumBacktrackSeconds,
+		double minimumStrength, double maximumRelativeFrequencyDifference, integer requiredFrames)
+{
+	if (runStartFrame <= 1 || referenceFrequency <= 0.0 || requiredFrames <= 0)
+		return {};
+	integer matchedFrames = 0;
+	std::optional<PitchCandidateOnset> earliest;
+	for (integer frame = runStartFrame - 1; frame >= 1; frame --) {
+		const double frameTime = pitch -> x1 + (frame - 1) * pitch -> dx;
+		const double runStartTime = pitch -> x1 + (runStartFrame - 1) * pitch -> dx;
+		if (frameTime < minimumTime || runStartTime - frameTime > maximumBacktrackSeconds)
+			break;
+		const Pitch_Frame pitchFrame = & pitch -> frames [frame];
+		std::optional<PitchCandidateOnset> match;
+		double strongestMatch = minimumStrength;
+		for (integer candidateIndex = 1; candidateIndex <= pitchFrame -> nCandidates; candidateIndex ++) {
+			const Pitch_Candidate candidate = & pitchFrame -> candidates [candidateIndex];
+			if (candidate -> frequency <= 0.0 || candidate -> strength < minimumStrength ||
+					std::abs (candidate -> frequency - referenceFrequency) / referenceFrequency > maximumRelativeFrequencyDifference)
+				continue;
+			if (! match || candidate -> strength > strongestMatch) {
+				match = PitchCandidateOnset { frameTime, candidate -> frequency };
+				strongestMatch = candidate -> strength;
+			}
+		}
+		if (! match)
+			break;
+		earliest = match;
+		matchedFrames ++;
+	}
+	return matchedFrames >= requiredFrames ? earliest : std::optional<PitchCandidateOnset> {};
+}
+
 std::vector<EnvelopeRise> findEnvelopeRises (constIntensity envelope, double minimumTime, double maximumTime,
 		const VOTCandidateSettings &settings)
 {
@@ -284,7 +323,7 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 		AnalysisResult incomplete {};
 		incomplete.source = input.metadata;
 		addTextParameter (incomplete, U"boundaryMode", U"estimateCandidates");
-		addTextParameter (incomplete, U"algorithmVersion", U"context-pair-v3");
+		addTextParameter (incomplete, U"algorithmVersion", U"context-pair-v4");
 		addTextParameter (incomplete, U"candidateStatus", U"target_incomplete");
 		const std::u32string reason = U"The target selection clips the aligned phone.";
 		for (const auto &metric : { std::pair { U"burst_time_candidate", U"s" }, { U"burst_rise_db", U"dB" },
@@ -314,6 +353,7 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	double lastVoicedTime = -1.0;
 	double secondRunStart = -1.0;
 	integer voicedRun = 0;
+	integer runStartFrame = 0;
 
 	for (integer frame = 1; frame <= pitch -> nx; frame ++) {
 		const double frameTime = pitch -> x1 + (frame - 1) * pitch -> dx;
@@ -325,6 +365,7 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 			if (voicedRun == 1) {
 				runStart = frameTime;
 				runStartF0 = frequency;
+				runStartFrame = frame;
 			}
 			if (! voicingTime && voicedRun >= settings.stableVoicedFrames) {
 				const bool runAfterBurst = burst.time && runStart >= burst.time.value() &&
@@ -338,6 +379,17 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 				if (runAfterBurst || runSpansBurst) {
 					voicingTime = runStart;
 					voicingOnsetF0 = runStartF0;
+					const double earliestAllowedOnset = burst.time ?
+						(runStart >= burst.time.value() ? burst.time.value() :
+							std::max (minimumTime, burst.time.value() - settings.maximumPrevoicingLeadSeconds)) : minimumTime;
+					const double candidateBacktrackSeconds = 1.5 / settings.pitchFloorHz;
+					std::optional<PitchCandidateOnset> candidateOnset = findPitchCandidateBacktrack (pitch.get(), runStartFrame,
+						runStartF0, earliestAllowedOnset, candidateBacktrackSeconds,
+						0.75 * settings.pitchVoicingThreshold, 0.20, settings.stableVoicedFrames);
+					if (candidateOnset) {
+						voicingTime = candidateOnset -> time;
+						voicingOnsetF0 = candidateOnset -> frequency;
+					}
 				}
 			}
 			if (secondRunStart >= 0.0 && ! secondVoicingTime)
@@ -375,7 +427,10 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	AnalysisResult result;
 	result.source = input.metadata;
 	addTextParameter (result, U"boundaryMode", U"estimateCandidates");
-	addTextParameter (result, U"algorithmVersion", U"context-pair-v3");
+	addTextParameter (result, U"algorithmVersion", U"context-pair-v4");
+	addParameter (result, U"pitchCandidateBacktrackSeconds", 1.5 / settings.pitchFloorHz, U"s");
+	addParameter (result, U"pitchCandidateStrengthRatio", 0.75, U"relative");
+	addParameter (result, U"pitchCandidateRelativeFrequencyTolerance", 0.20, U"relative");
 	addTextParameter (result, U"burstDetectionPath", burst.path.c_str());
 	addTextParameter (result, U"burstDetectionBand", burst.band.c_str());
 	addTextParameter (result, U"burstDetectionFallbackReason", burst.fallbackReason.c_str());
