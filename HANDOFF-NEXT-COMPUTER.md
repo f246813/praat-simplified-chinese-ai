@@ -60,13 +60,18 @@ VOT 编辑器和 AI `vot` 工具已接入同一规范请求、后台模型对齐
 - 同一正例在加入负 VOT 轨迹后曾错误输出 `-16.01 ms`；两真实入口均复现。增加 10 ms 的“释放后稳定起声与释放关联窗”后，正例回到两个入口完全相同的 `+43.9909 ms`，负例继续稳定输出 `-100.0 ms`。聚焦验证：新鲜 clang 原生构建成功，`verify_segment_analysis_templates.py` 输出 `SEGMENT_ANALYSIS_NATIVE_PASS: VOT contract and AI local-tool bridge`；`ai/tests/test_vot_bridge.py` 6/6 通过；`git diff --check` 通过。没有运行低优先级全套。
 - Task 8 仍未验收。现有真实录音网页参考不是两位标注者独立标记后的裁定金标，而且没有正／零／负、多爆破、持续有声、歧义全覆盖；合成样本、模型输出和这个网页的单标注都不能替代它。准确度阈值也尚未约定。
 
+- 2026-09-28 补齐 v5 模型辅助正例的全入口稳定性复核。使用目标程序 Praat-vot-context-v5.exe，分别直接运行 SoundEditor 的 VOT 命令与注册的 AI vot 工具；每个入口都新建进程、独立执行 MFA 和 C++，不使用缓存。音频 ta-da.wav SHA-256 为 1fc1f82035e68cd12f14565b9d9cb805d3eae2ae0cfa4d1f2b16e3379b9b490a，采样率 44.1 kHz；Japanese MFA 模型版本为本机 japanese_mfa.zip。基线和完全相同请求的第二次新鲜运行，其请求哈希都为 9986ce81e834a00b8a9fc920fcb0e7cd5253280c434822af81d4fdb8debc5794，结果逐字段一致：candidate，目标 /t/ 为 [6615,10584)，爆破样点 8238，起声样点 10178，VOT +43.9909297052 ms。第二次运行报告：D:\Praat-work\vot-unified-acceptance\education-gold\run-ja-ta-v5-model-stability\identical-request-repeat-2.json。
+- 同一音频和模型上把选区左边缘从 4410 移到 4630，或右边缘从 13230 移到 13010（各移动 220 样点，即 4.989 ms），两入口都重新运行完整请求；请求哈希分别变为 30c5801688cf7f6432e8c0c1b5ab7e4b10cf6fae2b4889c49254d21a9ff24b99 与 babb6a429afa078ccd149a63e028b170616da6e5a17dedd3467b5d9797e68eb9，模型目标与状态不变，边界及 VOT 漂移为 0。报告分别为 left-edge-plus-220.json 与 right-edge-minus-220.json，均在上述 run-ja-ta-v5-model-stability 目录。
+- 将目标选区裁到 [6615,10364)，使其少覆盖目标音素末端 220 样点后，完整 SoundEditor 和 AI 入口均重新执行 MFA，并一致返回 target_incomplete，失败原因为 target selection clips the aligned phone；爆破、起声与 VOT 全为空。请求哈希 935472f5d2b77d7619e366235b66d3a7c6887fb7f292efe267d1e5a6ccf6fcc3。报告：D:\Praat-work\vot-unified-acceptance\education-gold\run-ja-ta-v5-model-stability\selection-clips-phone-incomplete.json。以上证明只针对该真实录音与这组 MFA 参数；它不构成宽语料准确性验收。
+- 本轮通过浏览器查阅了 [NINJAL CSJ 官方第 9 版说明](https://clrd.ninjal.ac.jp/csj/en/data-index.html)、[申请步骤](https://clrd.ninjal.ac.jp/csj/en/subscription.html)及[样例页](https://clrd.ninjal.ac.jp/csj/en/sample.html)。官方说明完整数据约 120 GB；付费版需提交申请、签署许可并提供所属机构身份证明、付款后邮寄交付。公开样例是音频／转录，RDB 样例注明仅订阅者可发表基于该数据的研究且禁止二次分发，均没有可核验的 VOT 双标注边界。因此本轮没有下载或纳入这些不满足金标要求的样本。ISCA 的 Tohoku 日语研究报告真实录音中的正、负 VOT，但公开页未提供对应音频、逐条边界或独立标注记录。此桌面会话的电脑控制只暴露 Codex 内置浏览器，Edge 未连接；NINJAL 仓储跳转页面也因连接关闭未能打开。没有尝试绕过访问限制。
+
 完整测试计划见 `docs/superpowers/plans/2026-09-26-unified-vot-analysis.md`。
 
 ## 下一步
 
 1. 获取真实日语录音及至少两位标注者的独立边界和裁定结果，覆盖正、零、负 VOT、多爆破候选、持续有声和歧义样本，运行 `ai/tests/verify_vot_accuracy.py`。误差阈值尚未约定，不要自行写整体通过结论。
 2. 在继续开发的电脑上配置 Japanese MFA v3（或经确认支持日语的 wav2vec2）及相应词典。不要把比例近似区间或固定 MFA 置信度作为有效边界证据。
-3. 对 `context-pair-v5` 补做模型辅助塞音目标的多轮新鲜重复和选区稳定验收，尤其覆盖移动选区后仍指向同一完整音素的情况。随后准备双人独立标注及裁定后的真实日语塞音录音，覆盖正／零／负 VOT、多爆破、持续有声与歧义样本，预先约定误差阈值后运行准确性评估。
+3. v5 的模型辅助正例已完成同请求新鲜重复、约 5 ms 左右边缘移动及目标不完整失败的两入口验收；无需重复这些已完成检查。下一步取得授权使用、具有独立人工边界及裁定结果的真实日语录音，覆盖正／零／负 VOT、多爆破、持续有声和歧义，并预先约定误差阈值后运行准确性评估。
 
 ## 工作区与迁移
 
@@ -77,7 +82,7 @@ VOT 编辑器和 AI `vot` 工具已接入同一规范请求、后台模型对齐
 
 ## 当前状态
 
-统一分析服务及两入口接入已实现。v5 原生回归和 VOT 桥接聚焦检查通过；v5 的 MFA 正例已用两个真实入口新鲜复算并一致，声学负例已完成双入口独立重复和左右边界稳定性复核。v5 模型辅助路径的多轮重复和模型选区移动仍待复验。Task 8 准确性仍未验收：当前只有网页单人参考，没有双人独立标注与裁定，也未覆盖所需样本类别。跨电脑继续时优先按“下一步”完成 v5 模型辅助稳定性，再补齐合法可用的真实日语金标及预先约定的误差阈值；不要把模型自身结果、合成样本或单人参考当成裁定答案。
+统一分析服务及两入口接入已实现。v5 原生回归和 VOT 桥接聚焦检查通过；v5 模型辅助正例已在目标 Praat.exe 的两个实际入口完成一致性、无缓存重复性、约 5 ms 选区边缘稳定性及目标不完整失败检查；声学负例也完成双入口独立重复和左右边界稳定性复核。Task 8 准确性仍未验收：当前真实录音参考只有单人手工值或人工修订但无法取得逐条音频／边界，缺少可核验的日语正／零／负、多爆破、持续有声和歧义裁定金标，误差阈值也未约定。跨电脑继续时先取得合法可用的人工边界及裁定材料，再运行准确性评估；不要把模型自身结果、合成样本或单人参考当成裁定答案。
 
 ## 参考实现
 
