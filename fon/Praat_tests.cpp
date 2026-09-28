@@ -26,6 +26,8 @@
 #include "NUMselect.h"
 #include "SlopeSelector.h"
 #include "Praat_tests.h"
+#include "../sys/PraatAiProjectDirectory.h"
+#include "../sys/PraatAiControl.h"
 
 #include "Graphics.h"
 #include "praat.h"
@@ -43,9 +45,13 @@
 #include "Praat_tests_enums.h"
 #include <string>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <random>
+#include <filesystem>
+#include <fstream>
+#include <thread>
 
 #include "Gui.h"
 
@@ -838,6 +844,61 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (str32equ (zeroText.get(), U"0"));
 			UiForm_do (form.get(), true);
 			Melder_assert (boundary == 0.0);
+		} break;
+		case kPraatTests::CHECK_AI_PROJECT_DIRECTORY_RESOLUTION: {
+			const std::filesystem::path temporaryRoot = std::filesystem::temp_directory_path () /
+				("praat-ai-project-path-" + std::to_string (
+					std::chrono::steady_clock::now ().time_since_epoch ().count ()
+				));
+			std::error_code filesystemError;
+			if (! std::filesystem::create_directory (temporaryRoot, filesystemError) || filesystemError)
+				Melder_throw (U"Could not create a unique AI project path test directory.");
+			try {
+				const std::filesystem::path staleProject = temporaryRoot / "ai";
+				const std::filesystem::path realProject = temporaryRoot / "checkout" / "ai";
+				std::filesystem::create_directories (staleProject / "runtime");
+				std::filesystem::create_directories (realProject / "praat_ai");
+				std::ofstream (staleProject / "runtime" / "status.json") << "{}";
+				std::ofstream (realProject / "run_ai_control.py") << "# project entry point";
+				std::ofstream (realProject / "praat_ai" / "launch_vot_worker.py") << "# VOT worker";
+				Melder_assert (! PraatAiProjectDirectory::isProjectDirectory (staleProject));
+				Melder_assert (PraatAiProjectDirectory::isProjectDirectory (realProject));
+				const auto resolved = PraatAiProjectDirectory::resolve (
+					std::filesystem::path ("ai"), temporaryRoot, temporaryRoot
+				);
+				Melder_assert (resolved.has_value ());
+				Melder_assert (resolved.value () == realProject.lexically_normal ());
+				const auto resolvedFromStaleAbsolute = PraatAiProjectDirectory::resolve (
+					staleProject, temporaryRoot, temporaryRoot
+				);
+				Melder_assert (resolvedFromStaleAbsolute.has_value ());
+				Melder_assert (resolvedFromStaleAbsolute.value () == realProject.lexically_normal ());
+			} catch (...) {
+				std::filesystem::remove_all (temporaryRoot, filesystemError);
+				throw;
+			}
+			std::filesystem::remove_all (temporaryRoot, filesystemError);
+		} break;
+		case kPraatTests::CHECK_AI_VOT_WORKER_ENTRYPOINT: {
+			constexpr integer sampleCount = 16000;
+			autoSound samples = Sound_create (1, 0.0, 1.0, sampleCount, 1.0 / sampleCount, 0.5 / sampleCount);
+			for (integer sample = 1; sample <= sampleCount; sample ++)
+				samples -> z [1] [sample] = 0.2 * sin (2.0 * NUMpi * 180.0 * sample / sampleCount);
+			const std::string jobId = PraatAiControl_submitVOTJob (
+				samples.get(), 424242, 4000, 8000, 0, sampleCount,
+				U"manual", U"", U"", U"", 0, 6.0, 75.0, 6000, 6320
+			);
+			autostring32 jobId32 = Melder_8to32_e (jobId.c_str());
+			PraatAiVOTJobStatus status;
+			for (integer attempt = 0; attempt < 500; attempt ++) {
+				status = PraatAiControl_pollVOTJob (jobId32.get());
+				if (status.state == "completed" || status.state == "failed")
+					break;
+				std::this_thread::sleep_for (std::chrono::milliseconds (20));
+			}
+			Melder_assert (status.state == "completed");
+			Melder_assert (status.resultJson.find ("\"status\":\"manual_confirmed\"") != std::string::npos);
+			Melder_assert (status.resultJson.find ("\"vot_ms\":20.0") != std::string::npos);
 		} break;
 		case kPraatTests::CHECK_SEGMENT_VOT_BOUNDARIES: {
 			autoSound samples = Sound_create (1, -0.5, 0.5, 1000, 0.001, -0.4995);

@@ -12,6 +12,7 @@
 #include "LongSound.h"
 #include "SegmentAcousticVOT.h"
 #include "Sound.h"
+#include "PraatAiProjectDirectory.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -210,12 +211,6 @@ namespace {
 		}
 	}
 
-	bool isProjectDirectory (const std::filesystem::path &directory) {
-		std::error_code error;
-		return std::filesystem::exists (directory / "run_ai_control.py", error) ||
-			std::filesystem::exists (directory / "runtime" / "status.json", error);
-	}
-
 	std::filesystem::path projectDirectoryPath () {
 		/*
 			The application reads preferences more than once during GUI startup.
@@ -229,28 +224,34 @@ namespace {
 			environmentDirectory : (theAiProjectDirectory [0] ? theAiProjectDirectory : U"ai");
 		autostring8 directory8 = Melder_32to8 (directory);
 		const std::filesystem::path configuredDirectory = std::filesystem::u8path (directory8 ? directory8.get() : "ai");
-		if (configuredDirectory.is_absolute())
-			return configuredDirectory;
 		std::error_code error;
-		const std::filesystem::path currentDirectory =
-			std::filesystem::current_path (error) / configuredDirectory;
-		if (isProjectDirectory (currentDirectory))
-			return currentDirectory;
+		const std::filesystem::path currentDirectory = std::filesystem::current_path (error);
+		const std::filesystem::path safeCurrentDirectory = error ? std::filesystem::path (".") : currentDirectory;
+		/* An explicit environment override remains authoritative. */
+		if (environmentDirectory && environmentDirectory [0])
+			return configuredDirectory.is_absolute() ? configuredDirectory : safeCurrentDirectory / configuredDirectory;
+
+		std::filesystem::path executableDirectory;
 		#if defined (_WIN32)
 			wchar_t executablePath [MAX_PATH];
 			const DWORD executablePathLength = GetModuleFileNameW (
 				nullptr, executablePath, static_cast <DWORD> (MAX_PATH)
 			);
 			if (executablePathLength > 0 && executablePathLength < MAX_PATH) {
-				const std::filesystem::path executableDirectory =
-					std::filesystem::path (executablePath, executablePath + executablePathLength). parent_path();
-				const std::filesystem::path executableRelativeDirectory =
-					executableDirectory / configuredDirectory;
-				if (isProjectDirectory (executableRelativeDirectory))
-					return executableRelativeDirectory;
+				executableDirectory = std::filesystem::path (
+					executablePath, executablePath + executablePathLength
+				).parent_path();
 			}
 		#endif
-		return currentDirectory;
+		const auto resolvedDirectory = PraatAiProjectDirectory::resolve (
+			configuredDirectory, safeCurrentDirectory, executableDirectory
+		);
+		if (resolvedDirectory)
+			return *resolvedDirectory;
+
+		if (configuredDirectory.is_absolute())
+			return configuredDirectory;
+		return safeCurrentDirectory / configuredDirectory;
 	}
 
 	std::filesystem::path controlScriptPath () {
@@ -746,12 +747,20 @@ std::string PraatAiControl_submitVOTJob (Thing audioObject, integer objectId,
 		U"VOT target sample range must lie inside the fixed context range.");
 	Melder_require (manualBurstSample.has_value() == manualOnsetSample.has_value(),
 		U"Manual VOT needs both boundary sample indices.");
+	const std::filesystem::path projectDirectory = projectDirectoryPath();
+	const std::filesystem::path launcherFilesystemPath = projectDirectory / "praat_ai" / "launch_vot_worker.py";
+	std::error_code launcherError;
+	if (! std::filesystem::is_regular_file (launcherFilesystemPath, launcherError) || launcherError) {
+		autostring32 missingLauncherPath = Melder_8to32_e (launcherFilesystemPath.u8string().c_str());
+		Melder_throw (U"VOT worker launcher is missing: ", missingLauncherPath.get (),
+			U". Set the AI project directory to the checkout that contains ai/praat_ai/launch_vot_worker.py.");
+	}
 
 	const uint64_t serial = nextVotJobId.fetch_add (1, std::memory_order_relaxed);
 	const auto clockValue = std::chrono::steady_clock::now().time_since_epoch().count();
 	const std::string jobId = "vot-" + std::to_string (objectId) + "-" +
 		std::to_string (clockValue) + "-" + std::to_string (serial);
-	const std::filesystem::path jobDirectory = projectDirectoryPath() / "runtime" / "vot_jobs" / jobId;
+	const std::filesystem::path jobDirectory = projectDirectory / "runtime" / "vot_jobs" / jobId;
 	std::error_code filesystemError;
 	std::filesystem::create_directories (jobDirectory, filesystemError);
 	Melder_require (! filesystemError, U"Could not create the VOT job directory.");
@@ -863,8 +872,8 @@ std::string PraatAiControl_submitVOTJob (Thing audioObject, integer objectId,
 	votEditorJobs.emplace (jobId, record);
 
 	const std::string requestPath8 = record.requestPath.u8string();
-	const std::string projectPath8 = projectDirectoryPath().u8string();
-	autostring32 launcherPath = Melder_8to32_e (	(projectDirectoryPath() / "praat_ai" / "launch_vot_worker.py").u8string().c_str());
+	const std::string projectPath8 = projectDirectory.u8string();
+	autostring32 launcherPath = Melder_8to32_e (launcherFilesystemPath.u8string().c_str());
 	autostring32 projectPath = Melder_8to32_e (projectPath8.c_str());
 	setEnvironmentUtf8 ("PRAAT_AI_VOT_REQUEST", requestPath8);
 	try {

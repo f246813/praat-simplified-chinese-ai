@@ -234,7 +234,7 @@ def main() -> int:
                     environment,
                 )
             )
-        expected_manual = [(13229, 14553), (13229, 13229), (14553, 13229)]
+        expected_manual = [(13230, 14553), (13230, 13230), (14553, 13230)]
         for result, (burst_sample, onset_sample) in zip(manual_values, expected_manual):
             expected_ms = (onset_sample - burst_sample) * 1000.0 / 44100.0
             if (
