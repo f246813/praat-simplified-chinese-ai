@@ -2950,7 +2950,8 @@ void UiForm_setReal (UiForm me, double *p_variable, double value) {
 						/*
 							If the default is overtly real, the shown value should be as well.
 						*/
-						if ((str32chr (field -> stringDefaultValue.get(), U'.') || str32chr (field -> stringDefaultValue.get(), U'e')) &&
+						if (Melder_isStringNumeric (field -> stringDefaultValue.get()) &&
+							(str32chr (field -> stringDefaultValue.get(), U'.') || str32chr (field -> stringDefaultValue.get(), U'e')) &&
 							! (str32chr (s, U'.') || str32chr (s, U'e')))
 						{
 							str32cpy (s + Melder_length (s), U".0");
