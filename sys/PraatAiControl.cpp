@@ -5,18 +5,13 @@
 
 #include "PraatAiControl.h"
 #include "GuiP.h"
+#include "machine.h"
 #include "praat.h"
 #include "praat_python.h"
 #include "praat_translate.h"
 #include "Preferences.h"
-#include "LongSound.h"
-#include "SegmentAcousticVOT.h"
-#include "Sound.h"
 #include "PraatAiProjectDirectory.h"
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -24,7 +19,6 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 #if defined (_WIN32)
 	#include <windows.h>
@@ -58,92 +52,6 @@ namespace {
 	Thing theNotedEditor = nullptr;
 	Thing theNotedEditorObject = nullptr;
 	double theNotedSelectionStart = 0.0, theNotedSelectionEnd = 0.0;
-	std::optional<double> theNotedVotContextStart, theNotedVotContextEnd;
-
-	struct VOTJobRecord {
-		std::filesystem::path directory;
-		std::filesystem::path manifestPath, pcmPath, wavPath, requestPath, statePath;
-		std::filesystem::path preparedPath, acousticResultPath;
-		integer objectId { 0 };
-		integer targetStartSample { 0 }, targetEndSample { 0 };
-		integer contextStartSample { 0 }, contextEndSample { 0 };
-		double burstThresholdDb { 6.0 }, pitchFloorHz { 75.0 };
-		std::string mode;
-		bool completionStarted { false };
-	};
-	std::unordered_map<std::string, VOTJobRecord> votEditorJobs;
-	std::atomic <uint64_t> nextVotJobId { 0 };
-
-	std::string jsonQuoteUtf8 (const std::string &value) {
-		std::string result = "\"";
-		for (const unsigned char character : value) {
-			switch (character) {
-				case '\\': result += "\\\\"; break;
-				case '"': result += "\\\""; break;
-				case '\n': result += "\\n"; break;
-				case '\r': result += "\\r"; break;
-				case '\t': result += "\\t"; break;
-				default:
-					if (character < 0x20) {
-						static constexpr char hex [] = "0123456789abcdef";
-						result += "\\u00";
-						result += hex [character >> 4];
-						result += hex [character & 15];
-					} else {
-						result += (char) character;
-					}
-			}
-		}
-		result += '"';
-		return result;
-	}
-
-	std::string jsonQuote32 (conststring32 value) {
-		autostring8 utf8 = Melder_32to8 (value ? value : U"");
-		return jsonQuoteUtf8 (utf8 ? utf8.get() : "");
-	}
-
-	std::string jsonNumber32 (double value) {
-		autostring8 utf8 = Melder_32to8 (Melder_double (value));
-		return utf8 ? utf8.get() : "0";
-	}
-
-	std::string jsonObjectField (const std::string &json, const std::string &name) {
-		const std::string key = "\"" + name + "\"";
-		const size_t keyPosition = json.find (key);
-		if (keyPosition == std::string::npos)
-			return {};
-		const size_t begin = json.find ('{', keyPosition + key.size());
-		if (begin == std::string::npos)
-			return {};
-		bool inString = false, escaped = false;
-		integer depth = 0;
-		for (size_t position = begin; position < json.size(); position ++) {
-			const char character = json [position];
-			if (inString) {
-				if (escaped)
-					escaped = false;
-				else if (character == '\\')
-					escaped = true;
-				else if (character == '"')
-					inString = false;
-				continue;
-			}
-			if (character == '"') {
-				inString = true;
-			} else if (character == '{') {
-				depth ++;
-			} else if (character == '}' && -- depth == 0) {
-				return json.substr (begin, position - begin + 1);
-			}
-		}
-		return {};
-	}
-
-	std::string utf8From32 (conststring32 value) {
-		autostring8 utf8 = Melder_32to8 (value ? value : U"");
-		return utf8 ? utf8.get() : "";
-	}
 
 	bool notedSelectionMatches (integer iobject, Daata object) {
 		if (! theNotedEditor || theNotedEditorObject != (Thing) object)
@@ -158,7 +66,7 @@ namespace {
 
 	std::string formatSelectionSeconds (double value) {
 		std::ostringstream text;
-		text << std::fixed << std::setprecision (17) << value;
+		text << std::fixed << std::setprecision (6) << value;
 		return text. str();
 	}
 
@@ -212,14 +120,7 @@ namespace {
 	}
 
 	std::filesystem::path projectDirectoryPath () {
-		/*
-			The application reads preferences more than once during GUI startup.
-			An environment override applied only in initPreferences() is therefore
-			overwritten by the saved AI.projectDirectory value before the first VOT
-			request. Keep the environment override authoritative at the point where
-			paths are resolved.
-		*/
-		conststring32 environmentDirectory = Melder_getenv (U"PRAAT_AI_PROJECT_DIR");
+		const conststring32 environmentDirectory = Melder_getenv (U"PRAAT_AI_PROJECT_DIR");
 		const char32 *directory = environmentDirectory && environmentDirectory [0] ?
 			environmentDirectory : (theAiProjectDirectory [0] ? theAiProjectDirectory : U"ai");
 		autostring8 directory8 = Melder_32to8 (directory);
@@ -230,7 +131,6 @@ namespace {
 		/* An explicit environment override remains authoritative. */
 		if (environmentDirectory && environmentDirectory [0])
 			return configuredDirectory.is_absolute() ? configuredDirectory : safeCurrentDirectory / configuredDirectory;
-
 		std::filesystem::path executableDirectory;
 		#if defined (_WIN32)
 			wchar_t executablePath [MAX_PATH];
@@ -248,7 +148,6 @@ namespace {
 		);
 		if (resolvedDirectory)
 			return *resolvedDirectory;
-
 		if (configuredDirectory.is_absolute())
 			return configuredDirectory;
 		return safeCurrentDirectory / configuredDirectory;
@@ -346,6 +245,31 @@ namespace {
 		PraatAiControl_refreshStatus();
 	}
 
+	std::unordered_map<GuiMenuItem, int> theModelMenuActions;
+	GuiMenuItem theModelPresetItems [2] { };
+
+	void modelMenuCallback (Thing /* boss */, GuiMenuItemEvent event) {
+		try {
+			const auto iterator = theModelMenuActions. find (event -> menuItem);
+			if (iterator == theModelMenuActions. end())
+				return;
+			switch (iterator -> second) {
+				case 1: setModelPath (U"D:/models/Qwen3.5-0.8B-Q4_K_M.gguf"); break;
+				case 2: setModelPath (U"D:/llama.cpp/Qwen3.5-2B-UD-Q5_K_XL.gguf"); break;
+				case 3: PraatAiControl_chooseFrontendModel (); break;
+				case 4: PraatAiControl_startFrontend (); break;
+				case 5: PraatAiControl_stopFrontend (); break;
+				default: break;
+			}
+			if (theModelPresetItems [0])
+				GuiMenuItem_check (theModelPresetItems [0], iterator -> second == 1);
+			if (theModelPresetItems [1])
+				GuiMenuItem_check (theModelPresetItems [1], iterator -> second == 2);
+		} catch (MelderError) {
+			Melder_flushError ();
+		}
+	}
+
 	std::string cleanContextField (conststring32 value) {
 		autostring8 value8 = Melder_32to8 (value ? value : U"");
 		std::string result = value8 ? value8. get() : "";
@@ -369,7 +293,7 @@ namespace {
 
 	std::string buildChatContext () {
 		std::ostringstream text;
-		text << "id\tclass\tname\tselected\tsel_start\tsel_end\tcontext_start\tcontext_end\n";
+		text << "id\tclass\tname\tselected\tsel_start\tsel_end\n";
 		if (theCurrentPraatObjects) {
 			for (integer iobject = 1; iobject <= theCurrentPraatObjects -> n; iobject ++) {
 				Daata object = theCurrentPraatObjects -> list [iobject]. object;
@@ -383,11 +307,9 @@ namespace {
 				if (notedSelectionMatches (iobject, object))
 					text
 						<< '\t' << formatSelectionSeconds (theNotedSelectionStart)
-						<< '\t' << formatSelectionSeconds (theNotedSelectionEnd)
-						<< '\t' << (theNotedVotContextStart ? formatSelectionSeconds (theNotedVotContextStart.value()) : "")
-						<< '\t' << (theNotedVotContextEnd ? formatSelectionSeconds (theNotedVotContextEnd.value()) : "");
+						<< '\t' << formatSelectionSeconds (theNotedSelectionEnd);
 				else
-					text << "\t\t\t\t";   // 没有圈选就留空四列，行数与表头保持一致
+					text << "\t\t";   // 没有圈选就留空两列，行数与表头保持一致
 				text << '\n';
 			}
 		}
@@ -493,6 +415,9 @@ void PraatAiControl_initPreferences () {
 	Preferences_addString (U"AI.alignmentMode", theAiAlignmentMode, U"auto");
 	MelderString_copy (& statusFrontendModel, defaultFrontendModel);
 	MelderString_copy (& statusFrontendStatus, U"stopped");
+	conststring32 configuredDirectory = Melder_getenv (U"PRAAT_AI_PROJECT_DIR");
+	if (configuredDirectory && configuredDirectory [0])
+		str32cpy (theAiProjectDirectory, configuredDirectory);
 }
 
 conststring32 PraatAiControl_getAlignmentMode () {
@@ -556,6 +481,43 @@ conststring32 PraatAiControl_getVramText (bool *low) {
 	if (low)
 		*low = statusVramLow;
 	return text. string;
+}
+
+void PraatAiControl_addModelMenu (GuiWindow window) {
+	#if motif
+		GuiMenu menu = GuiMenu_createInForm (
+			window,
+			-190, -8,
+			Machine_getMenuBarBottom (),
+			Machine_getMenuBarBottom () + 24,
+			U"Models",
+			0
+		);
+		theModelPresetItems [0] = GuiMenu_addItem (
+			menu, U"Qwen3.5-0.8B", GuiMenu_RADIO_FIRST,
+			modelMenuCallback, nullptr
+		);
+		theModelMenuActions [theModelPresetItems [0]] = 1;
+		theModelPresetItems [1] = GuiMenu_addItem (
+			menu, U"Qwen3.5-2B", GuiMenu_RADIO_NEXT,
+			modelMenuCallback, nullptr
+		);
+		theModelMenuActions [theModelPresetItems [1]] = 2;
+		GuiMenu_addSeparator (menu);
+		GuiMenuItem customItem = GuiMenu_addItem (
+			menu, U"Add model path...", 0, modelMenuCallback, nullptr
+		);
+		theModelMenuActions [customItem] = 3;
+		GuiMenu_addSeparator (menu);
+		GuiMenuItem startItem = GuiMenu_addItem (
+			menu, U"Start frontend", 0, modelMenuCallback, nullptr
+		);
+		theModelMenuActions [startItem] = 4;
+		GuiMenuItem stopItem = GuiMenu_addItem (
+			menu, U"Stop frontend", 0, modelMenuCallback, nullptr
+		);
+		theModelMenuActions [stopItem] = 5;
+	#endif
 }
 
 void PraatAiControl_chooseFrontendModel () {
@@ -675,317 +637,14 @@ void PraatAiControl_reportChatScriptFailure (conststring32 message) {
 	}
 }
 
-void PraatAiControl_reportVOTEditorDiagnostic (conststring32 message) {
-	/*
-		SoundEditor keeps form/validation failures in its window state instead of
-		propagating them as script errors. An opt-in file lets the native-entrypoint
-		test capture that exact failure without changing normal user-visible behavior.
-	*/
-	conststring32 configuredPath = Melder_getenv (U"PRAAT_AI_VOT_DIAGNOSTIC_FILE");
-	if (! configuredPath || ! configuredPath [0])
-		return;
-	autostring8 path8 = Melder_32to8 (configuredPath);
-	autostring8 message8 = Melder_32to8 (message ? message : U"");
-	if (! path8 || ! message8)
-		return;
-	std::ofstream diagnostic (std::filesystem::u8path (path8.get()), std::ios::binary | std::ios::app);
-	if (diagnostic.is_open())
-		diagnostic << message8.get() << "\n";
-}
-
-void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end,
-		std::optional<double> contextStart, std::optional<double> contextEnd)
-{
+void PraatAiControl_noteEditorSelection (Thing editor, Thing object, double start, double end) {
 	if (Melder_batch)
 		return;
-	const bool sameEditor = theNotedEditor == editor && theNotedEditorObject == object;
 	theNotedEditor = editor;
 	theNotedEditorObject = object;
 	theNotedSelectionStart = start;
 	theNotedSelectionEnd = end;
-	if (contextStart.has_value() && contextEnd.has_value() &&
-		std::isfinite (contextStart.value()) && std::isfinite (contextEnd.value()) &&
-		contextStart.value() < contextEnd.value())
-	{
-		theNotedVotContextStart = contextStart;
-		theNotedVotContextEnd = contextEnd;
-	} else if (! sameEditor) {
-		theNotedVotContextStart.reset();
-		theNotedVotContextEnd.reset();
-	}
 	writeChatContext ();   // 内容没变化时不会重复写盘
-}
-
-void PraatAiControl_clearEditorVOTContext (Thing editor, Thing object) {
-	if (Melder_batch || theNotedEditor != editor || theNotedEditorObject != object)
-		return;
-	theNotedVotContextStart.reset();
-	theNotedVotContextEnd.reset();
-	writeChatContext ();
-}
-
-std::string PraatAiControl_submitVOTJob (Thing audioObject, integer objectId,
-		integer targetStartSample, integer targetEndSample,
-		integer contextStartSample, integer contextEndSample,
-		conststring32 mode, conststring32 language, conststring32 transcript,
-		conststring32 phonemes, integer targetPhoneIndex,
-		double burstThresholdDb, double pitchFloorHz,
-		std::optional<integer> manualBurstSample,
-		std::optional<integer> manualOnsetSample)
-{
-	Melder_require (audioObject && objectId > 0, U"VOT analysis requires a live Sound or LongSound object.");
-	Melder_require (std::isfinite (burstThresholdDb) && std::isfinite (pitchFloorHz),
-		U"VOT acoustic parameters must be finite.");
-	Melder_require ((bool) mode && (str32equ (mode, U"model_assisted") ||
-		str32equ (mode, U"acoustic_only") || str32equ (mode, U"manual")),
-		U"VOT mode must be model_assisted, acoustic_only, or manual.");
-	const bool isLongSound = Thing_isa (audioObject, classLongSound);
-	const bool isSound = Thing_isa (audioObject, classSound);
-	Melder_require (isLongSound || isSound, U"VOT analysis supports Sound and LongSound objects only.");
-	Melder_require (targetStartSample >= contextStartSample && targetStartSample < targetEndSample &&
-		targetEndSample <= contextEndSample,
-		U"VOT target sample range must lie inside the fixed context range.");
-	Melder_require (manualBurstSample.has_value() == manualOnsetSample.has_value(),
-		U"Manual VOT needs both boundary sample indices.");
-	const std::filesystem::path projectDirectory = projectDirectoryPath();
-	const std::filesystem::path launcherFilesystemPath = projectDirectory / "praat_ai" / "launch_vot_worker.py";
-	std::error_code launcherError;
-	if (! std::filesystem::is_regular_file (launcherFilesystemPath, launcherError) || launcherError) {
-		autostring32 missingLauncherPath = Melder_8to32_e (launcherFilesystemPath.u8string().c_str());
-		Melder_throw (U"VOT worker launcher is missing: ", missingLauncherPath.get (),
-			U". Set the AI project directory to the checkout that contains ai/praat_ai/launch_vot_worker.py.");
-	}
-
-	const uint64_t serial = nextVotJobId.fetch_add (1, std::memory_order_relaxed);
-	const auto clockValue = std::chrono::steady_clock::now().time_since_epoch().count();
-	const std::string jobId = "vot-" + std::to_string (objectId) + "-" +
-		std::to_string (clockValue) + "-" + std::to_string (serial);
-	const std::filesystem::path jobDirectory = projectDirectory / "runtime" / "vot_jobs" / jobId;
-	std::error_code filesystemError;
-	std::filesystem::create_directories (jobDirectory, filesystemError);
-	Melder_require (! filesystemError, U"Could not create the VOT job directory.");
-	VOTJobRecord record;
-	record.directory = jobDirectory;
-	record.manifestPath = jobDirectory / "snapshot.json";
-	record.pcmPath = jobDirectory / "snapshot.f64le";
-	record.wavPath = jobDirectory / "alignment.wav";
-	record.requestPath = jobDirectory / "request.json";
-	record.statePath = jobDirectory / "state.json";
-	record.preparedPath = jobDirectory / "prepared.json";
-	record.acousticResultPath = jobDirectory / "native-acoustic.tsv";
-	record.objectId = objectId;
-	record.targetStartSample = targetStartSample;
-	record.targetEndSample = targetEndSample;
-	record.contextStartSample = contextStartSample;
-	record.contextEndSample = contextEndSample;
-	record.burstThresholdDb = burstThresholdDb;
-	record.pitchFloorHz = pitchFloorHz;
-	record.mode = utf8From32 (mode);
-
-	autostring32 manifestName = Melder_8to32_e (record.manifestPath.u8string().c_str());
-	autostring32 pcmName = Melder_8to32_e (record.pcmPath.u8string().c_str());
-	autostring32 wavName = Melder_8to32_e (record.wavPath.u8string().c_str());
-	if (isLongSound)
-		praat_LongSound_writeVOTAudioSnapshot (static_cast <LongSound> (audioObject), objectId,
-			contextStartSample, contextEndSample, manifestName.get(), pcmName.get(), wavName.get());
-	else
-		praat_Sound_writeVOTAudioSnapshot (static_cast <Sound> (audioObject), objectId,
-			contextStartSample, contextEndSample, manifestName.get(), pcmName.get(), wavName.get());
-
-	const SampledXY sampled = static_cast <SampledXY> (audioObject);
-	const std::string requestIdJson = jsonQuoteUtf8 (jobId);
-	autoMelderString phoneArray;
-	MelderString_append (& phoneArray, U"[");
-	bool firstPhone = true;
-	std::u32string phone;
-	for (const char32 *character = phonemes ? phonemes : U"";; character ++) {
-		if (*character && *character != U' ' && *character != U'\t' && *character != U'\r' && *character != U'\n') {
-			phone.push_back (*character);
-			continue;
-		}
-		if (! phone.empty()) {
-			if (! firstPhone)
-				MelderString_append (& phoneArray, U",");
-			const std::string phoneJson = jsonQuote32 (phone.c_str());
-			autostring32 phoneJson32 = Melder_8to32_e (phoneJson.c_str());
-			MelderString_append (& phoneArray, phoneJson32.get());
-			firstPhone = false;
-			phone.clear();
-		}
-		if (! *character)
-			break;
-	}
-	MelderString_append (& phoneArray, U"]");
-	autostring8 phoneArray8 = Melder_32to8 (phoneArray.string);
-
-	const std::string snapshotKind = isLongSound ? "LongSound" : "Sound";
-	const std::string manifestPath8 = record.manifestPath.u8string();
-	const std::string pcmPath8 = record.pcmPath.u8string();
-	const std::string wavPath8 = record.wavPath.u8string();
-	const std::string jobDirectory8 = record.directory.u8string();
-	const std::string sampleRate = jsonNumber32 (1.0 / sampled -> dx);
-	const std::string timeOrigin = jsonNumber32 (
-		isLongSound ? static_cast <LongSound> (audioObject) -> x1 + contextStartSample * sampled -> dx :
-		static_cast <Sound> (audioObject) -> x1 + contextStartSample * sampled -> dx);
-	const std::string parametersJson = "{\"burst_threshold_db\":" + jsonNumber32 (burstThresholdDb) +
-		",\"pitch_floor_hz\":" + jsonNumber32 (pitchFloorHz) +
-		",\"pitch_ceiling_hz\":500.0}";
-	const std::string phonemeValues = phoneArray8 ? phoneArray8.get() : "[]";
-	std::ofstream request (record.requestPath, std::ios::binary | std::ios::trunc);
-	Melder_require (request.is_open(), U"Could not create the VOT editor request.");
-	request
-		<< "{\"request_id\":" << requestIdJson
-		<< ",\"job_directory\":" << jsonQuoteUtf8 (jobDirectory8)
-		<< ",\"audio_snapshot\":{\"object_id\":" << objectId
-		<< ",\"source_kind\":" << jsonQuoteUtf8 (snapshotKind)
-		<< ",\"sample_rate_hz\":" << sampleRate
-		<< ",\"channels\":" << (isLongSound ? static_cast <LongSound> (audioObject) -> numberOfChannels : static_cast <Sound> (audioObject) -> ny)
-		<< ",\"sample_count\":" << contextEndSample - contextStartSample
-		<< ",\"snapshot_start_sample\":" << contextStartSample
-		<< ",\"time_origin_seconds\":" << timeOrigin << "}"
-		<< ",\"snapshot_paths\":{\"manifest\":" << jsonQuoteUtf8 (manifestPath8)
-		<< ",\"pcm\":" << jsonQuoteUtf8 (pcmPath8)
-		<< ",\"wav\":" << jsonQuoteUtf8 (wavPath8) << "}"
-		<< ",\"target_range\":[" << targetStartSample << "," << targetEndSample << "]"
-		<< ",\"acoustic_context_range\":[" << contextStartSample << "," << contextEndSample << "]"
-		<< ",\"alignment_context_range\":[" << contextStartSample << "," << contextEndSample << "]"
-		<< ",\"language\":" << jsonQuote32 (language)
-		<< ",\"transcript\":" << jsonQuote32 (transcript)
-		<< ",\"phonemes\":" << phonemeValues
-		<< ",\"target_phone_index\":" << targetPhoneIndex
-		<< ",\"mode\":" << jsonQuoteUtf8 (record.mode)
-		<< ",\"parameters\":" << parametersJson
-		<< ",\"manual_boundaries\":";
-	if (manualBurstSample)
-		request << "[" << manualBurstSample.value() << "," << manualOnsetSample.value() << "]";
-	else
-		request << "null";
-	request << "}\n";
-	request.close();
-	Melder_require (request.good(), U"Could not finish writing the VOT editor request.");
-	{
-		std::ofstream queued (record.statePath, std::ios::binary | std::ios::trunc);
-		queued << "{\"job_id\":" << requestIdJson
-			<< ",\"state\":\"queued\",\"stage\":\"queued\",\"progress\":0.0,\"error\":\"\"}\n";
-		Melder_require (queued.good(), U"Could not initialize VOT job state.");
-	}
-	votEditorJobs.emplace (jobId, record);
-
-	const std::string requestPath8 = record.requestPath.u8string();
-	const std::string projectPath8 = projectDirectory.u8string();
-	autostring32 launcherPath = Melder_8to32_e (launcherFilesystemPath.u8string().c_str());
-	autostring32 projectPath = Melder_8to32_e (projectPath8.c_str());
-	setEnvironmentUtf8 ("PRAAT_AI_VOT_REQUEST", requestPath8);
-	try {
-		praat_runPythonScriptFile (launcherPath.get(), projectPath.get());
-	} catch (...) {
-		clearEnvironmentUtf8 ("PRAAT_AI_VOT_REQUEST");
-		votEditorJobs.erase (jobId);
-		throw;
-	}
-	clearEnvironmentUtf8 ("PRAAT_AI_VOT_REQUEST");
-	return jobId;
-}
-
-PraatAiVOTJobStatus PraatAiControl_pollVOTJob (conststring32 jobId32) {
-	const std::string jobId = utf8From32 (jobId32);
-	auto found = votEditorJobs.find (jobId);
-	Melder_require (found != votEditorJobs.end(), U"Unknown VOT editor job.");
-	VOTJobRecord &job = found -> second;
-	const std::optional<std::string> contents = readTextFile (job.statePath);
-	const std::string stateJson = contents.value_or (
-		"{\"state\":\"queued\",\"stage\":\"starting\",\"progress\":0.0,\"error\":\"\"}");
-	PraatAiVOTJobStatus status;
-	status.state = jsonStringField (stateJson, "state", "queued");
-	status.stage = jsonStringField (stateJson, "stage", "queued");
-	status.error = jsonStringField (stateJson, "error", "");
-	status.progress = std::clamp (jsonNumberField (stateJson, "progress", 0.0), 0.0, 1.0);
-	const std::string alignedJson = jsonObjectField (stateJson, "aligned_phone");
-	if (! alignedJson.empty()) {
-		const double alignedStart = jsonNumberField (alignedJson, "start_sample", -1.0);
-		const double alignedEnd = jsonNumberField (alignedJson, "end_sample", -1.0);
-		if (alignedStart >= 0.0 && alignedEnd > alignedStart) {
-			status.alignedStartSample = Melder_iround (alignedStart);
-			status.alignedEndSample = Melder_iround (alignedEnd);
-		}
-	}
-	if (status.state == "ready_for_acoustics" && ! job.completionStarted) {
-		job.completionStarted = true;
-		try {
-			const integer alignedStart = status.alignedStartSample.value_or (-1);
-			const integer alignedEnd = status.alignedEndSample.value_or (-1);
-			const std::string parametersJson = "{\"burst_threshold_db\":" + jsonNumber32 (job.burstThresholdDb) +
-				",\"pitch_floor_hz\":" + jsonNumber32 (job.pitchFloorHz) +
-				",\"pitch_ceiling_hz\":500.0}";
-			autostring32 manifestPath = Melder_8to32_e (job.manifestPath.u8string().c_str());
-			autostring32 pcmPath = Melder_8to32_e (job.pcmPath.u8string().c_str());
-			autostring32 resultPath = Melder_8to32_e (job.acousticResultPath.u8string().c_str());
-			autostring32 parameters = Melder_8to32_e (parametersJson.c_str());
-			praat_VOT_analyseSnapshotAndWriteResult (manifestPath.get(), pcmPath.get(),
-				job.targetStartSample, job.targetEndSample, job.contextStartSample, job.contextEndSample,
-				alignedStart, alignedEnd, parameters.get(), resultPath.get());
-			const std::string script8 = (projectDirectoryPath() / "praat_ai" / "complete_vot_editor_job.py").u8string();
-			const std::string directory8 = projectDirectoryPath().u8string();
-			autostring32 script32 = Melder_8to32_e (script8.c_str());
-			autostring32 directory32 = Melder_8to32_e (directory8.c_str());
-			setEnvironmentUtf8 ("PRAAT_AI_VOT_PREPARED", job.preparedPath.u8string());
-			setEnvironmentUtf8 ("PRAAT_AI_VOT_CPP_RESULT", job.acousticResultPath.u8string());
-			setEnvironmentUtf8 ("PRAAT_AI_VOT_STATE", job.statePath.u8string());
-			try {
-				praat_runPythonScriptFile (script32.get(), directory32.get());
-			} catch (...) {
-				clearEnvironmentUtf8 ("PRAAT_AI_VOT_PREPARED");
-				clearEnvironmentUtf8 ("PRAAT_AI_VOT_CPP_RESULT");
-				clearEnvironmentUtf8 ("PRAAT_AI_VOT_STATE");
-				throw;
-			}
-			clearEnvironmentUtf8 ("PRAAT_AI_VOT_PREPARED");
-			clearEnvironmentUtf8 ("PRAAT_AI_VOT_CPP_RESULT");
-			clearEnvironmentUtf8 ("PRAAT_AI_VOT_STATE");
-		} catch (MelderError) {
-			const std::string error = utf8From32 (Melder_getError());
-			Melder_clearError();
-			std::ofstream failed (job.statePath, std::ios::binary | std::ios::trunc);
-			failed << "{\"job_id\":" << jsonQuoteUtf8 (jobId)
-				<< ",\"state\":\"failed\",\"stage\":\"failed\",\"progress\":1.0,\"error\":"
-				<< jsonQuoteUtf8 (error) << "}\n";
-		} catch (const std::exception &error) {
-			std::ofstream failed (job.statePath, std::ios::binary | std::ios::trunc);
-			failed << "{\"job_id\":" << jsonQuoteUtf8 (jobId)
-				<< ",\"state\":\"failed\",\"stage\":\"failed\",\"progress\":1.0,\"error\":"
-				<< jsonQuoteUtf8 (error.what()) << "}\n";
-		}
-		const std::optional<std::string> completed = readTextFile (job.statePath);
-		const std::string finalJson = completed.value_or ("{}");
-		status.state = jsonStringField (finalJson, "state", "failed");
-		status.stage = jsonStringField (finalJson, "stage", status.state);
-		status.error = jsonStringField (finalJson, "error", "");
-		status.progress = std::clamp (jsonNumberField (finalJson, "progress", 1.0), 0.0, 1.0);
-		status.resultJson = jsonObjectField (finalJson, "result");
-	}
-	/* Terminal Python results (for example, missing language/model input) can be
-	   written before the editor's first poll. Always expose the nested result. */
-	if (status.resultJson.empty())
-		status.resultJson = jsonObjectField (stateJson, "result");
-	return status;
-}
-
-bool PraatAiControl_cancelVOTJob (conststring32 jobId32) {
-	const std::string jobId = utf8From32 (jobId32);
-	auto found = votEditorJobs.find (jobId);
-	if (found == votEditorJobs.end())
-		return false;
-	VOTJobRecord &job = found -> second;
-	std::ofstream cancel (job.directory / "cancel", std::ios::binary | std::ios::trunc);
-	if (! cancel.is_open())
-		return false;
-	cancel << "stale\n";
-	cancel.close();
-	std::ofstream state (job.statePath, std::ios::binary | std::ios::trunc);
-	state << "{\"job_id\":" << jsonQuoteUtf8 (jobId)
-		<< ",\"state\":\"cancelled\",\"stage\":\"stale\",\"progress\":1.0,"
-		<< "\"error\":\"VOT request became stale before completion\"}\n";
-	return state.good();
 }
 
 /* End of file PraatAiControl.cpp */

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import math
-import os
 import re
 import shutil
 import subprocess
@@ -14,7 +13,7 @@ import numpy as np
 
 from .audio import read_wav
 from .config import AlignmentConfig, MfaAlignmentConfig, Wav2Vec2AlignmentConfig
-from .models import AlignedPhone, AlignmentResult, PhoneSpec, VOTAlignmentEvidence
+from .models import AlignedPhone, AlignmentResult, PhoneSpec
 
 
 class AlignmentError(RuntimeError):
@@ -37,67 +36,6 @@ class AlignmentBackend(ABC):
         transcript: str = "",
     ) -> AlignmentResult:
         raise NotImplementedError
-
-    def validate_vot_language(self, language: str) -> None:
-        """Validate declared model language for the strict VOT path."""
-
-
-_LANGUAGE_ALIASES = {
-    "eng": "en",
-    "english": "en",
-    "jpn": "ja",
-    "japanese": "ja",
-    "cmn": "zh",
-    "chinese": "zh",
-    "mandarin": "zh",
-}
-
-
-def _language_code(value: str) -> str:
-    normalized = str(value or "").strip().casefold().replace("_", "-")
-    primary = normalized.split("-", 1)[0]
-    return _LANGUAGE_ALIASES.get(primary, primary)
-
-
-def _require_language_match(
-    backend_name: str,
-    supported_languages: list[str],
-    requested_language: str,
-    config_key: str,
-) -> None:
-    requested = _language_code(requested_language)
-    if not requested:
-        raise AlignmentError("language is required for model-assisted VOT")
-    supported = {
-        _language_code(value) for value in supported_languages if value.strip()
-    }
-    if not supported:
-        raise AlignmentError(
-            f"{backend_name} language metadata is not configured; set {config_key}"
-        )
-    if "*" in supported:
-        return
-    if requested not in supported:
-        rendered = ", ".join(sorted(supported))
-        raise AlignmentError(
-            f"language mismatch: {backend_name} is configured for {rendered}, "
-            f"but the request language is {requested_language.strip()}"
-        )
-
-
-def _infer_mfa_language(*model_names: str) -> str:
-    """Recognize common MFA pretrained-model names when old config lacks a tag."""
-
-    tokens = set()
-    for model_name in model_names:
-        basename = Path(model_name).name.casefold()
-        tokens.update(re.split(r"[^a-z]+", basename))
-    inferred = {
-        _LANGUAGE_ALIASES[token]
-        for token in tokens
-        if token in _LANGUAGE_ALIASES
-    }
-    return next(iter(inferred)) if len(inferred) == 1 else ""
 
 
 def _copy_as_wav(source: str | Path, destination: Path) -> None:
@@ -206,20 +144,6 @@ class MfaAligner(AlignmentBackend):
             and bool(self.config.acoustic_model)
         )
 
-    def validate_vot_language(self, language: str) -> None:
-        configured = self.config.language.strip()
-        if not configured:
-            configured = _infer_mfa_language(
-                self.config.dictionary_path,
-                self.config.acoustic_model,
-            )
-        _require_language_match(
-            "MFA",
-            [configured] if configured else [],
-            language,
-            "alignment.mfa.language",
-        )
-
     def _launcher(self) -> list[str]:
         if self.config.conda_executable and self.config.conda_environment:
             return [
@@ -292,10 +216,6 @@ class MfaAligner(AlignmentBackend):
                     encoding="utf-8",
                 )
             command = self.build_command(corpus, dictionary, output)
-            mfa_root = root / "mfa-root"
-            mfa_root.mkdir()
-            environment = os.environ.copy()
-            environment["MFA_ROOT_DIR"] = str(mfa_root)
             completed = subprocess.run(
                 command,
                 capture_output=True,
@@ -303,7 +223,6 @@ class MfaAligner(AlignmentBackend):
                 encoding="utf-8",
                 errors="replace",
                 check=False,
-                env=environment,
             )
             if completed.returncode != 0:
                 message = completed.stderr.strip() or completed.stdout.strip()
@@ -400,14 +319,6 @@ class Wav2Vec2Aligner(AlignmentBackend):
             and bool(self.config.model)
             and importlib.util.find_spec("torch") is not None
             and importlib.util.find_spec("transformers") is not None
-        )
-
-    def validate_vot_language(self, language: str) -> None:
-        _require_language_match(
-            "wav2vec2",
-            self.config.languages,
-            language,
-            "alignment.wav2vec2.languages",
         )
 
     def _load(self) -> None:
@@ -615,61 +526,6 @@ class CompositeAligner:
             results[0].warnings.extend(warnings)
             return results[0]
         return self._merge(results, warnings)
-
-    def align_for_vot(
-        self,
-        audio_path: str | Path,
-        phones: list[PhoneSpec],
-        language: str,
-        transcript: str = "",
-    ) -> VOTAlignmentEvidence:
-        """Collect model evidence without manufacturing or averaging boundaries."""
-        results: list[AlignmentResult] = []
-        backend_errors: list[str] = []
-        for backend in self.backends:
-            try:
-                available = backend.available()
-            except Exception as error:
-                backend_errors.append(
-                    f"{backend.name}: availability check failed: {error}"
-                )
-                continue
-            if not available:
-                backend_errors.append(f"{backend.name}: unavailable")
-                continue
-            try:
-                backend.validate_vot_language(language)
-                result = backend.align(audio_path, phones, language, transcript)
-                if isinstance(backend, MfaAligner):
-                    # MFA's parser currently assigns a fixed compatibility score.
-                    # Preserve its intervals and provenance, but do not present
-                    # that constant as calibrated VOT alignment confidence.
-                    result = AlignmentResult(
-                        phones=[
-                            AlignedPhone(
-                                phone_index=phone.phone_index,
-                                ipa=phone.ipa,
-                                start=phone.start,
-                                end=phone.end,
-                                confidence=None,
-                                source=phone.source,
-                            )
-                            for phone in result.phones
-                        ],
-                        source=result.source,
-                        confidence=None,
-                        warnings=list(result.warnings),
-                    )
-            except Exception as error:
-                backend_errors.append(f"{backend.name}: {error}")
-                continue
-            results.append(result)
-
-        return VOTAlignmentEvidence(
-            results=results,
-            backend_errors=backend_errors,
-            disagreement_threshold_sec=self.agreement_threshold_sec,
-        )
 
     def _merge(
         self,

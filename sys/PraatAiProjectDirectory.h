@@ -20,7 +20,7 @@ namespace PraatAiProjectDirectory {
 			return std::filesystem::is_regular_file (path, error) && ! error;
 		};
 		return isRegularFile (directory / "run_ai_control.py") &&
-			isRegularFile (directory / "praat_ai" / "launch_vot_worker.py");
+			isRegularFile (directory / "start_ai_chat.py");
 	}
 
 	inline std::optional <std::filesystem::path> resolve (
@@ -40,11 +40,9 @@ namespace PraatAiProjectDirectory {
 			if (isProjectDirectory (candidate))
 				return candidate.lexically_normal ();
 
-		/*
-			A development build can live next to the checkout while its default
-			"ai" directory is a child of that checkout. Search one directory level
-			for a unique, complete project; never infer it from runtime/status.json.
-		*/
+		/* A development build can live next to the checkout while its default
+		   "ai" directory is a child of that checkout. Search one level for a
+		   unique project, never inferring it from runtime/status.json. */
 		const std::filesystem::path projectName = configuredDirectory.filename ();
 		if (projectName.empty () || projectName == "." || projectName == ".." ||
 			projectName.has_parent_path ())

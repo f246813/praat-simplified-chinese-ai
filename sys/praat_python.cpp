@@ -943,8 +943,7 @@ static void praat_runPythonScriptFile_impl (conststring32 filePath, conststring3
 		}
 
 		if (exitCode != 0) {
-			Melder_throw (U"Python script exited with error (exit code ", (int) exitCode,
-				U"). Output:\n", out32 && out32 [0] ? out32.get() : U"(no Python output captured)");
+			Melder_throw (U"Python script exited with error (exit code ", (int) exitCode, U"). See Info window for details.");
 		}
 	#else
 		// POSIX implementation (macOS and Linux)
@@ -1019,8 +1018,7 @@ static void praat_runPythonScriptFile_impl (conststring32 filePath, conststring3
 		}
 
 		if (exitCode != 0) {
-			Melder_throw (U"Python script exited with error (exit code ", exitCode,
-				U"). Output:\n", out32 && out32 [0] ? out32.get() : U"(no Python output captured)");
+			Melder_throw (U"Python script exited with error (exit code ", exitCode, U"). See Info window for details.");
 		}
 	#endif
 

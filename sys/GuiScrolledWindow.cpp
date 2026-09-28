@@ -76,10 +76,9 @@ GuiScrolledWindow GuiScrolledWindow_create (GuiForm parent, int left, int right,
 		my v_positionInForm (my d_widget, left, right, top, bottom, parent);
 		g_signal_connect (G_OBJECT (my d_widget), "destroy", G_CALLBACK (_GuiGtkScrolledWindow_destroyCallback), me.get());
 	#elif motif
+		(void) horizontalScrollbarPersistence;
+		(void) verticalScrollbarPersistence;
 		my d_widget = XmCreateScrolledWindow (parent -> d_widget, "scrolledWindow", nullptr, 0);
-		my d_widget -> motiff.scrolledWindow.horizontalScrollbarPersistence = horizontalScrollbarPersistence;
-		my d_widget -> motiff.scrolledWindow.verticalScrollbarPersistence = verticalScrollbarPersistence;
-		my d_widget -> motiff.scrolledWindow.updatingScrollbarLayout = false;
 		_GuiObject_setUserData (my d_widget, me.get());
 		my v_positionInForm (my d_widget, left, right, top, bottom, parent);
 		Melder_assert (my classInfo == classGuiScrolledWindow);

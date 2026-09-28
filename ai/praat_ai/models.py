@@ -134,7 +134,7 @@ class AlignedPhone:
     ipa: str
     start: float
     end: float
-    confidence: float | None = 1.0
+    confidence: float = 1.0
     source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -145,7 +145,7 @@ class AlignedPhone:
 class AlignmentResult:
     phones: list[AlignedPhone]
     source: str
-    confidence: float | None = 1.0
+    confidence: float = 1.0
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -155,10 +155,3 @@ class AlignmentResult:
             "confidence": self.confidence,
             "warnings": self.warnings,
         }
-
-
-@dataclass(slots=True)
-class VOTAlignmentEvidence:
-    results: list[AlignmentResult]
-    backend_errors: list[str]
-    disagreement_threshold_sec: float

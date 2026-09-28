@@ -31,20 +31,7 @@
 #define LookAndFeel_COCOA  9
 #define LookAndFeel_CHROME  10
 
-/* Some controls query these dimensions during GUI bootstrap, before explicit look-and-feel initialization. */
-#if defined (macintosh)
-	static int lookAndFeel = LookAndFeel_COCOA;
-#elif defined (_WIN32)
-	static int lookAndFeel = LookAndFeel_WIN32;
-#elif defined (linux)
-	#if defined (chrome)
-		static int lookAndFeel = LookAndFeel_CHROME;
-	#else
-		static int lookAndFeel = LookAndFeel_LINUX;
-	#endif
-#else
-	static int lookAndFeel = LookAndFeel_MOTIF;
-#endif
+static int lookAndFeel;
 
 int Machine_getMenuBarTop () {
 	static int tops [] = {

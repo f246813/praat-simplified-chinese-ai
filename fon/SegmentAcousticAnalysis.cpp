@@ -6,7 +6,6 @@
 #include "Sound_to_Pitch.h"
 #include "melder_app.h"
 #include "melder_files.h"
-#include "../sys/praat_translate.h"
 
 #include <algorithm>
 #include <atomic>
@@ -91,8 +90,6 @@ conststring32 metricStatusName (MetricStatus status) {
 	switch (status) {
 		case MetricStatus::measured: return U"measured";
 		case MetricStatus::warning: return U"warning";
-		case MetricStatus::ambiguous: return U"ambiguous";
-		case MetricStatus::targetIncomplete: return U"target_incomplete";
 		case MetricStatus::unavailable: return U"unavailable";
 	}
 	return U"unavailable";
@@ -117,138 +114,16 @@ void addMetric (AnalysisResult &result, conststring32 id, conststring32 unit,
 }
 
 struct EnvelopeRise {
-	double onset { 0.0 };
+	std::optional<double> onset;
 	double riseDb { 0.0 };
 };
 
-struct PitchCandidateOnset {
-	double time { 0.0 };
-	double frequency { 0.0 };
-};
-
-struct PrevoicingDetection {
-	std::optional<PitchCandidateOnset> onset;
-	bool truncatedAtSearchBoundary { false };
-};
-
-std::optional<PitchCandidateOnset> findPitchCandidateBacktrack (Pitch pitch, integer runStartFrame,
-		double referenceFrequency, double minimumTime, double maximumBacktrackSeconds,
-		double minimumStrength, double maximumRelativeFrequencyDifference, integer requiredFrames)
-{
-	if (runStartFrame <= 1 || referenceFrequency <= 0.0 || requiredFrames <= 0)
-		return {};
-	integer matchedFrames = 0;
-	std::optional<PitchCandidateOnset> earliest;
-	for (integer frame = runStartFrame - 1; frame >= 1; frame --) {
-		const double frameTime = pitch -> x1 + (frame - 1) * pitch -> dx;
-		const double runStartTime = pitch -> x1 + (runStartFrame - 1) * pitch -> dx;
-		if (frameTime < minimumTime || runStartTime - frameTime > maximumBacktrackSeconds)
-			break;
-		const Pitch_Frame pitchFrame = & pitch -> frames [frame];
-		std::optional<PitchCandidateOnset> match;
-		double strongestMatch = minimumStrength;
-		for (integer candidateIndex = 1; candidateIndex <= pitchFrame -> nCandidates; candidateIndex ++) {
-			const Pitch_Candidate candidate = & pitchFrame -> candidates [candidateIndex];
-			if (candidate -> frequency <= 0.0 || candidate -> strength < minimumStrength ||
-					std::abs (candidate -> frequency - referenceFrequency) / referenceFrequency > maximumRelativeFrequencyDifference)
-				continue;
-			if (! match || candidate -> strength > strongestMatch) {
-				match = PitchCandidateOnset { frameTime, candidate -> frequency };
-				strongestMatch = candidate -> strength;
-			}
-		}
-		if (! match)
-			break;
-		earliest = match;
-		matchedFrames ++;
-	}
-	return matchedFrames >= requiredFrames ? earliest : std::optional<PitchCandidateOnset> {};
-}
-
-PrevoicingDetection findPrevoicingCandidateTrack (Pitch pitch, double releaseTime, double minimumTime,
-		double maximumLeadSeconds, double minimumStrength, double maximumRelativeFrequencyDifference,
-		integer requiredFrames)
-{
-	PrevoicingDetection result;
-	if (! pitch || ! std::isfinite (releaseTime) || ! std::isfinite (minimumTime) ||
-			maximumLeadSeconds <= 0.0 || minimumStrength < 0.0 || maximumRelativeFrequencyDifference <= 0.0 || requiredFrames <= 0)
-		return result;
-	const double earliestTime = std::max (minimumTime, releaseTime - maximumLeadSeconds);
-	integer lastFrameBeforeRelease = 0;
-	for (integer frame = 1; frame <= pitch -> nx; frame ++) {
-		const double frameTime = pitch -> x1 + (frame - 1) * pitch -> dx;
-		if (frameTime >= releaseTime)
-			break;
-		if (frameTime >= earliestTime)
-			lastFrameBeforeRelease = frame;
-	}
-	if (lastFrameBeforeRelease == 0)
-		return result;
-	const double lastFrameTime = pitch -> x1 + (lastFrameBeforeRelease - 1) * pitch -> dx;
-	if (releaseTime - lastFrameTime > 1.5 * pitch -> dx)
-		return result;
-
-	integer longestTrackFrames = 0;
-	for (integer seedIndex = 1; seedIndex <= pitch -> frames [lastFrameBeforeRelease].nCandidates; seedIndex ++) {
-		const Pitch_Candidate seed = & pitch -> frames [lastFrameBeforeRelease].candidates [seedIndex];
-		if (seed -> frequency <= 0.0 || seed -> strength < minimumStrength)
-			continue;
-		integer matchedFrames = 1;
-		double currentFrequency = seed -> frequency;
-		PitchCandidateOnset earliest { lastFrameTime, currentFrequency };
-		bool truncated = false;
-		for (integer frame = lastFrameBeforeRelease - 1; frame >= 1; frame --) {
-			const double frameTime = pitch -> x1 + (frame - 1) * pitch -> dx;
-			const Pitch_Frame pitchFrame = & pitch -> frames [frame];
-			if (frameTime < earliestTime) {
-				for (integer candidateIndex = 1; candidateIndex <= pitchFrame -> nCandidates; candidateIndex ++) {
-					const Pitch_Candidate candidate = & pitchFrame -> candidates [candidateIndex];
-					if (candidate -> frequency > 0.0 && candidate -> strength >= minimumStrength &&
-							std::abs (candidate -> frequency - currentFrequency) / currentFrequency <= maximumRelativeFrequencyDifference)
-						truncated = true;
-				}
-				break;
-			}
-			std::optional<PitchCandidateOnset> match;
-			double bestFrequencyDifference = maximumRelativeFrequencyDifference;
-			double strongestMatch = minimumStrength;
-			for (integer candidateIndex = 1; candidateIndex <= pitchFrame -> nCandidates; candidateIndex ++) {
-				const Pitch_Candidate candidate = & pitchFrame -> candidates [candidateIndex];
-				if (candidate -> frequency <= 0.0 || candidate -> strength < minimumStrength)
-					continue;
-				const double frequencyDifference = std::abs (candidate -> frequency - currentFrequency) / currentFrequency;
-				if (frequencyDifference > maximumRelativeFrequencyDifference)
-					continue;
-				if (! match || frequencyDifference < bestFrequencyDifference ||
-						(frequencyDifference == bestFrequencyDifference && candidate -> strength > strongestMatch))
-				{
-					match = PitchCandidateOnset { frameTime, candidate -> frequency };
-					bestFrequencyDifference = frequencyDifference;
-					strongestMatch = candidate -> strength;
-				}
-			}
-			if (! match)
-				break;
-			currentFrequency = match -> frequency;
-			earliest = match.value();
-			matchedFrames ++;
-		}
-		if (matchedFrames < requiredFrames)
-			continue;
-		if (truncated)
-			result.truncatedAtSearchBoundary = true;
-		if (! result.onset || matchedFrames > longestTrackFrames) {
-			result.onset = earliest;
-			longestTrackFrames = matchedFrames;
-		}
-	}
-	return result;
-}
-
-std::vector<EnvelopeRise> findEnvelopeRises (constIntensity envelope, double minimumTime, double maximumTime,
+EnvelopeRise findSteepestEnvelopeRise (constIntensity envelope, double minimumTime, double maximumTime,
 		const VOTCandidateSettings &settings)
 {
-	std::vector<EnvelopeRise> result;
+	EnvelopeRise result;
+	double bestRise = -1000.0;
+	integer bestFrame = 0;
 	for (integer frame = 1; frame <= envelope -> nx; frame ++) {
 		const double frameTime = envelope -> x1 + (frame - 1) * envelope -> dx;
 		const integer lookbackFrame = frame - settings.burstRiseLookbackFrames;
@@ -264,46 +139,36 @@ std::vector<EnvelopeRise> findEnvelopeRises (constIntensity envelope, double min
 		if (holdFrame <= envelope -> nx)
 			laterValue = envelope -> z [1] [holdFrame];
 		const double rise = currentValue - previousValue;
-		if (laterValue < currentValue - settings.burstRiseHoldDropDb)
-			continue;
-		double onset = frameTime;
-	const double maximumBacktrackSeconds = settings.burstRiseLookbackFrames * envelope -> dx;
-		const double referenceValue = currentValue;
-		for (integer backFrame = frame - 1; backFrame >= 1; backFrame --) {
-			const double backTime = envelope -> x1 + (backFrame - 1) * envelope -> dx;
-			if (frameTime - backTime > maximumBacktrackSeconds || backTime < minimumTime ||
-					envelope -> z [1] [backFrame] < referenceValue - settings.burstOnsetBacktrackDropDb)
-				break;
-			onset = backTime;
+		if (laterValue >= currentValue - settings.burstRiseHoldDropDb && rise > bestRise) {
+			bestRise = rise;
+			bestFrame = frame;
 		}
-		if (! result.empty() && onset - result.back().onset < settings.burstCandidateSeparationSeconds) {
-			if (rise > result.back().riseDb)
-				result.back() = { onset, rise };
-		} else {
-			result.push_back ({ onset, rise });
-		}
+	}
+	if (bestFrame == 0)
+		return result;
+
+	result.riseDb = bestRise;
+	result.onset = envelope -> x1 + (bestFrame - 1) * envelope -> dx;
+	const double referenceValue = envelope -> z [1] [bestFrame];
+	for (integer frame = bestFrame - 1; frame >= 1; frame --) {
+		const double frameTime = envelope -> x1 + (frame - 1) * envelope -> dx;
+		if (frameTime < minimumTime || envelope -> z [1] [frame] < referenceValue - settings.burstOnsetBacktrackDropDb)
+			break;
+		result.onset = frameTime;
 	}
 	return result;
 }
 
-void discardWeakRises (std::vector<EnvelopeRise> &candidates, double minimumRiseDb) {
-	candidates.erase (std::remove_if (candidates.begin(), candidates.end(), [&] (const EnvelopeRise &candidate) {
-		return candidate.riseDb < minimumRiseDb;
-	}), candidates.end());
-}
-
 struct BurstDetection {
-	std::vector<EnvelopeRise> candidates;
 	std::optional<double> time;
 	double riseDb { 0.0 };
 	std::u32string band;
-	std::u32string path;
-	std::u32string fallbackReason;
 	std::u32string reason;
 };
 
 BurstDetection detectBurst (Sound sound, double minimumTime, double maximumTime, const VOTCandidateSettings &settings) {
 	BurstDetection result;
+	EnvelopeRise highBandRise;
 	const double nyquistFrequency = 0.5 / sound -> dx;
 	if (nyquistFrequency >= settings.burstBandMaximumHz) {
 		try {
@@ -311,47 +176,34 @@ BurstDetection detectBurst (Sound sound, double minimumTime, double maximumTime,
 				settings.burstBandMinimumHz, settings.burstBandMaximumHz, settings.burstBandSmoothingHz);
 			autoIntensity highBandEnvelope = Sound_to_Intensity (
 				highBandSound.get(), 2000.0, settings.intensityTimeStepSeconds, true);
-			result.candidates = findEnvelopeRises (highBandEnvelope.get(), minimumTime, maximumTime, settings);
-			discardWeakRises (result.candidates, settings.burstThresholdDb);
-			if (! result.candidates.empty()) {
-				const EnvelopeRise &strongest = * std::max_element (result.candidates.begin(), result.candidates.end(),
-					[] (const EnvelopeRise &left, const EnvelopeRise &right) { return left.riseDb < right.riseDb; });
-				result.time = strongest.onset;
-				result.riseDb = strongest.riseDb;
-				result.band = U"high-band";
-				result.path = U"high-band";
-				return result;
-			}
-			result.fallbackReason = U"High-band analysis found no sustained rise above threshold.";
+			highBandRise = findSteepestEnvelopeRise (highBandEnvelope.get(), minimumTime, maximumTime, settings);
 		} catch (MelderError) {
 			Melder_clearError ();
-			result.fallbackReason = U"High-band filtering or envelope analysis failed.";
 		}
-	} else {
-		result.fallbackReason = U"Nyquist frequency was below the requested high-band maximum.";
 	}
+	if (highBandRise.onset && highBandRise.riseDb >= settings.burstThresholdDb) {
+		result.time = highBandRise.onset;
+		result.riseDb = highBandRise.riseDb;
+		result.band = U"2–8 kHz";
+		return result;
+	}
+
 	try {
 		autoIntensity broadbandEnvelope = Sound_to_Intensity (sound, 1000.0, settings.intensityTimeStepSeconds, true);
-		result.candidates = findEnvelopeRises (broadbandEnvelope.get(), minimumTime, maximumTime, settings);
-		discardWeakRises (result.candidates, settings.burstThresholdDb);
-		if (! result.candidates.empty()) {
-			const EnvelopeRise &strongest = * std::max_element (result.candidates.begin(), result.candidates.end(),
-				[] (const EnvelopeRise &left, const EnvelopeRise &right) { return left.riseDb < right.riseDb; });
-			result.time = strongest.onset;
-			result.riseDb = strongest.riseDb;
-			result.band = U"full-band";
-			result.path = U"full-band-fallback";
+		const EnvelopeRise broadbandRise = findSteepestEnvelopeRise (
+			broadbandEnvelope.get(), minimumTime, maximumTime, settings);
+		if (broadbandRise.onset && broadbandRise.riseDb >= settings.burstThresholdDb) {
+			result.time = broadbandRise.onset;
+			result.riseDb = broadbandRise.riseDb;
+			result.band = U"full band";
 			return result;
 		}
 	} catch (MelderError) {
 		Melder_clearError ();
-		result.fallbackReason += U"; full-band envelope analysis failed";
 	}
-	result.reason = U"No sustained target-region energy rise reached the ";
+	result.reason = U"No sustained energy rise reached the ";
 	result.reason += Melder_double (settings.burstThresholdDb);
-	result.reason += U" dB threshold in the high-band or full-band envelope.";
-	result.band = U"unavailable";
-	result.path = U"unavailable";
+	result.reason += U" dB threshold in the high-frequency or full-band envelope.";
 	return result;
 }
 
@@ -371,12 +223,6 @@ void validateVOTCandidateSettings (const VOTCandidateSettings &settings) {
 	if (! std::isfinite (settings.intensityTimeStepSeconds) || settings.intensityTimeStepSeconds <= 0.0 ||
 			! std::isfinite (settings.pitchTimeStepSeconds) || settings.pitchTimeStepSeconds <= 0.0)
 		Melder_throw (U"VOT analysis time steps must be positive and finite.");
-	if (! std::isfinite (settings.burstCandidateSeparationSeconds) || settings.burstCandidateSeparationSeconds <= 0.0 ||
-			! std::isfinite (settings.maximumPositiveVotSeconds) || settings.maximumPositiveVotSeconds <= 0.0 ||
-			! std::isfinite (settings.maximumPrevoicingLeadSeconds) || settings.maximumPrevoicingLeadSeconds <= 0.0 ||
-			! std::isfinite (settings.maximumPrevoicingAssociationGapSeconds) || settings.maximumPrevoicingAssociationGapSeconds <= 0.0 ||
-			! std::isfinite (settings.minimumHnrDb))
-		Melder_throw (U"VOT candidate-pair and HNR validity settings must be finite and positive where applicable.");
 }
 
 AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandidateSettings &settings) {
@@ -384,53 +230,20 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	if (! std::isfinite (input.metadata.startTime) || ! std::isfinite (input.metadata.endTime) ||
 			input.metadata.startTime >= input.metadata.endTime || input.metadata.startTime < input.samples -> xmin ||
 			input.metadata.endTime > input.samples -> xmax)
-		Melder_throw (U"Candidate estimation requires a valid target selection inside the Sound time domain.");
+		Melder_throw (U"Candidate estimation requires a valid segment inside the Sound time domain.");
 
-	VOTDetectionScope scope { input.metadata.startTime, input.metadata.endTime,
-		input.metadata.startTime, input.metadata.endTime, {}, {} };
-	if (input.votScope)
-		scope = input.votScope.value();
-	const bool hasAlignedStart = scope.alignedPhoneStartTime.has_value();
-	const bool hasAlignedEnd = scope.alignedPhoneEndTime.has_value();
-	if (hasAlignedStart != hasAlignedEnd)
-		Melder_throw (U"The aligned target phone requires both start and end times.");
-	if (! std::isfinite (scope.contextStartTime) || ! std::isfinite (scope.contextEndTime) ||
-			scope.contextStartTime >= scope.contextEndTime || scope.contextStartTime < input.samples -> xmin ||
-			scope.contextEndTime > input.samples -> xmax || ! std::isfinite (scope.targetStartTime) ||
-			! std::isfinite (scope.targetEndTime) || scope.targetStartTime >= scope.targetEndTime ||
-			scope.targetStartTime < scope.contextStartTime || scope.targetEndTime > scope.contextEndTime)
-		Melder_throw (U"VOT context and target ranges must be increasing and inside the Sound time domain.");
-	const double searchStart = hasAlignedStart ? scope.alignedPhoneStartTime.value() : scope.targetStartTime;
-	const double searchEnd = hasAlignedEnd ? scope.alignedPhoneEndTime.value() : scope.targetEndTime;
-	if (! std::isfinite (searchStart) || ! std::isfinite (searchEnd) || searchStart >= searchEnd ||
-			searchStart < scope.contextStartTime || searchEnd > scope.contextEndTime)
-		Melder_throw (U"The aligned target phone must be inside the acoustic context.");
-	if (hasAlignedStart && (scope.targetStartTime > searchStart || scope.targetEndTime < searchEnd)) {
-		AnalysisResult incomplete {};
-		incomplete.source = input.metadata;
-		addTextParameter (incomplete, U"boundaryMode", U"estimateCandidates");
-		addTextParameter (incomplete, U"algorithmVersion", U"context-pair-v5");
-		addTextParameter (incomplete, U"candidateStatus", U"target_incomplete");
-		const std::u32string reason = U"The target selection clips the aligned phone.";
-		for (const auto &metric : { std::pair { U"burst_time_candidate", U"s" }, { U"burst_rise_db", U"dB" },
-				{ U"voicing_time_candidate", U"s" }, { U"voicing_f0_hz", U"Hz" }, { U"hnr_max_db", U"dB" },
-				{ U"second_voicing_time_candidate", U"s" }, { U"vot_candidate_s", U"s" }, { U"vot_candidate_ms", U"ms" } })
-			addMetric (incomplete, metric.first, metric.second, {}, MetricStatus::targetIncomplete, reason.c_str());
-		addTextParameter (incomplete, U"candidateFailureReason", reason.c_str());
-		return incomplete;
-	}
-
-	const double minimumTime = scope.contextStartTime;
-	const double maximumTime = scope.contextEndTime;
-	auto extractedSegment = Sound_extractPart (const_cast<Sound> (input.samples), minimumTime, maximumTime,
+	const double minimumTime = input.metadata.startTime;
+	const double maximumTime = input.metadata.endTime;
+	autoSound extractedSegment = Sound_extractPart (const_cast<Sound> (input.samples), minimumTime, maximumTime,
 		kSound_windowShape::RECTANGULAR, 1.0, true);
 	Sound sound = extractedSegment.get();
-	BurstDetection burst = detectBurst (sound, searchStart, searchEnd, settings);
+	const BurstDetection burst = detectBurst (sound, minimumTime, maximumTime, settings);
 	autoPitch pitch = Sound_to_Pitch_rawAc (sound,
 		settings.pitchTimeStepSeconds, settings.pitchFloorHz, settings.pitchCeilingHz,
 		settings.maximumPitchCandidates, false, settings.pitchSilenceThreshold, settings.pitchVoicingThreshold,
 		settings.pitchOctaveCost, settings.pitchOctaveJumpCost, settings.pitchVoicedUnvoicedCost);
 
+	std::optional<double> firstVoicedTime;
 	std::optional<double> voicingTime;
 	std::optional<double> secondVoicingTime;
 	double voicingOnsetF0 = 0.0;
@@ -439,7 +252,7 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	double lastVoicedTime = -1.0;
 	double secondRunStart = -1.0;
 	integer voicedRun = 0;
-	integer runStartFrame = 0;
+	bool rangeStartsVoiced = false;
 
 	for (integer frame = 1; frame <= pitch -> nx; frame ++) {
 		const double frameTime = pitch -> x1 + (frame - 1) * pitch -> dx;
@@ -447,35 +260,24 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 			continue;
 		const double frequency = pitch -> frames [frame]. candidates [1]. frequency;
 		if (frequency > 0.0) {
+			if (! firstVoicedTime) {
+				firstVoicedTime = frameTime;
+				rangeStartsVoiced = frameTime <= minimumTime + 0.01;
+			}
 			voicedRun ++;
 			if (voicedRun == 1) {
 				runStart = frameTime;
 				runStartF0 = frequency;
-				runStartFrame = frame;
 			}
-			if (! voicingTime && voicedRun >= settings.stableVoicedFrames) {
-				const bool runAfterBurst = burst.time && runStart >= burst.time.value() &&
-					runStart - burst.time.value() <= settings.maximumPositiveVotSeconds;
+			if (! voicingTime && voicedRun >= settings.stableVoicedFrames && ! rangeStartsVoiced) {
+				const bool runAfterBurst = ! burst.time || runStart >= burst.time.value();
 				// A pitch frame centred on the release can look voiced before the actual vowel begins.
 				const double minimumPrevoicingLead = settings.stableVoicedFrames * settings.pitchTimeStepSeconds;
-				const bool runSpansBurst = burst.time && runStart >= searchStart &&
-					runStart <= burst.time.value() - minimumPrevoicingLead &&
-					burst.time.value() - runStart <= settings.maximumPrevoicingLeadSeconds &&
+				const bool runSpansBurst = burst.time && runStart <= burst.time.value() - minimumPrevoicingLead &&
 					frameTime >= burst.time.value();
 				if (runAfterBurst || runSpansBurst) {
 					voicingTime = runStart;
 					voicingOnsetF0 = runStartF0;
-					const double earliestAllowedOnset = burst.time ?
-						(runStart >= burst.time.value() ? burst.time.value() :
-							std::max (minimumTime, burst.time.value() - settings.maximumPrevoicingLeadSeconds)) : minimumTime;
-					const double candidateBacktrackSeconds = 1.5 / settings.pitchFloorHz;
-					std::optional<PitchCandidateOnset> candidateOnset = findPitchCandidateBacktrack (pitch.get(), runStartFrame,
-						runStartF0, earliestAllowedOnset, candidateBacktrackSeconds,
-						0.75 * settings.pitchVoicingThreshold, 0.20, settings.stableVoicedFrames);
-					if (candidateOnset) {
-						voicingTime = candidateOnset -> time;
-						voicingOnsetF0 = candidateOnset -> frequency;
-					}
 				}
 			}
 			if (secondRunStart >= 0.0 && ! secondVoicingTime)
@@ -488,66 +290,12 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 			secondRunStart = -1.0;
 		}
 	}
-	if (voicingTime) {
-		const bool releaseFollowsPrevoicing = std::any_of (burst.candidates.begin(), burst.candidates.end(),
-			[&] (const EnvelopeRise &candidate) {
-				return candidate.onset > voicingTime.value() &&
-					candidate.onset - voicingTime.value() <= settings.maximumPrevoicingLeadSeconds;
-			});
-		if (releaseFollowsPrevoicing) {
-			burst.candidates.erase (std::remove_if (burst.candidates.begin(), burst.candidates.end(),
-				[&] (const EnvelopeRise &candidate) {
-					return std::abs (candidate.onset - voicingTime.value()) <= 2.0 * settings.pitchTimeStepSeconds;
-				}), burst.candidates.end());
-			if (! burst.candidates.empty()) {
-				const EnvelopeRise &strongest = * std::max_element (burst.candidates.begin(), burst.candidates.end(),
-					[] (const EnvelopeRise &left, const EnvelopeRise &right) { return left.riseDb < right.riseDb; });
-				burst.time = strongest.onset;
-				burst.riseDb = strongest.riseDb;
-			} else {
-				burst.time.reset();
-			}
-		}
-	}
-
-	PrevoicingDetection prevoicingTrack;
-	if (burst.time) {
-		prevoicingTrack = findPrevoicingCandidateTrack (pitch.get(), burst.time.value(), searchStart,
-			settings.maximumPrevoicingLeadSeconds, 0.5 * settings.pitchVoicingThreshold, 0.20,
-			settings.stableVoicedFrames);
-	}
-	const bool prevoicingBoundaryAmbiguous = burst.time && prevoicingTrack.truncatedAtSearchBoundary &&
-		(! voicingTime || (voicingTime.value() >= burst.time.value() &&
-			voicingTime.value() - burst.time.value() <= settings.maximumPrevoicingAssociationGapSeconds));
-	const bool postReleaseVoicingSupportsPrevoicing = burst.time && voicingTime &&
-		voicingTime.value() >= burst.time.value() &&
-		voicingTime.value() - burst.time.value() <= settings.maximumPrevoicingAssociationGapSeconds;
-	if (postReleaseVoicingSupportsPrevoicing && prevoicingTrack.onset &&
-			prevoicingTrack.onset -> time < voicingTime.value()) {
-		voicingTime = prevoicingTrack.onset -> time;
-		voicingOnsetF0 = prevoicingTrack.onset -> frequency;
-	}
 
 	AnalysisResult result;
 	result.source = input.metadata;
 	addTextParameter (result, U"boundaryMode", U"estimateCandidates");
-	addTextParameter (result, U"algorithmVersion", U"context-pair-v5");
-	addParameter (result, U"pitchCandidateBacktrackSeconds", 1.5 / settings.pitchFloorHz, U"s");
-	addParameter (result, U"pitchCandidateStrengthRatio", 0.75, U"relative");
-	addParameter (result, U"pitchCandidateRelativeFrequencyTolerance", 0.20, U"relative");
-	addParameter (result, U"prevoicingPitchCandidateStrengthRatio", 0.50, U"relative");
-	addParameter (result, U"prevoicingPitchCandidateRelativeFrequencyTolerance", 0.20, U"relative");
-	addTextParameter (result, U"burstDetectionPath", burst.path.c_str());
-	addTextParameter (result, U"burstDetectionBand", burst.band.c_str());
-	addTextParameter (result, U"burstDetectionFallbackReason", burst.fallbackReason.c_str());
-	addParameter (result, U"targetStartTime", scope.targetStartTime, U"s");
-	addParameter (result, U"targetEndTime", scope.targetEndTime, U"s");
-	addParameter (result, U"contextStartTime", scope.contextStartTime, U"s");
-	addParameter (result, U"contextEndTime", scope.contextEndTime, U"s");
-	if (hasAlignedStart) {
-		addParameter (result, U"alignedPhoneStartTime", searchStart, U"s");
-		addParameter (result, U"alignedPhoneEndTime", searchEnd, U"s");
-	}
+	addTextParameter (result, U"burstDetectionPath",
+		0.5 / sound -> dx >= settings.burstBandMaximumHz ? U"high-band" : U"full-band-fallback");
 	addParameter (result, U"burstBandMinimumHz", settings.burstBandMinimumHz, U"Hz");
 	addParameter (result, U"burstBandMaximumHz", settings.burstBandMaximumHz, U"Hz");
 	addParameter (result, U"burstBandSmoothingHz", settings.burstBandSmoothingHz, U"Hz");
@@ -567,34 +315,9 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	addParameter (result, U"burstRiseHoldFrames", (double) settings.burstRiseHoldFrames, U"frames");
 	addParameter (result, U"burstRiseHoldDropDb", settings.burstRiseHoldDropDb, U"dB");
 	addParameter (result, U"burstOnsetBacktrackDropDb", settings.burstOnsetBacktrackDropDb, U"dB");
-	addParameter (result, U"burstCandidateSeparationSeconds", settings.burstCandidateSeparationSeconds, U"s");
-	addParameter (result, U"maximumPositiveVotSeconds", settings.maximumPositiveVotSeconds, U"s");
-	addParameter (result, U"maximumPrevoicingLeadSeconds", settings.maximumPrevoicingLeadSeconds, U"s");
-	addParameter (result, U"maximumPrevoicingAssociationGapSeconds", settings.maximumPrevoicingAssociationGapSeconds, U"s");
 	addParameter (result, U"secondVoicingGapSeconds", settings.secondVoicingGapSeconds, U"s");
 	addParameter (result, U"hnrSliceSeconds", settings.hnrSliceSeconds, U"s");
 	addParameter (result, U"hnrMinimumSliceSeconds", settings.hnrMinimumSliceSeconds, U"s");
-	addParameter (result, U"minimumHnrDb", settings.minimumHnrDb, U"dB");
-	addParameter (result, U"burstCandidateCount", (double) burst.candidates.size(), U"candidates");
-
-	const bool secondVoicingCanPair = burst.time && secondVoicingTime &&
-		secondVoicingTime.value() >= burst.time.value() &&
-		secondVoicingTime.value() - burst.time.value() <= settings.maximumPositiveVotSeconds;
-	if (burst.candidates.size() > 1 || secondVoicingCanPair || prevoicingBoundaryAmbiguous) {
-		const std::u32string reason = prevoicingBoundaryAmbiguous ?
-			U"Voicing continues beyond the target or prevoicing search boundary; the negative onset cannot be localized reliably." :
-			burst.candidates.size() > 1 ?
-			U"Multiple target-region release candidates remain plausible; review the pairing manually." :
-			U"Multiple stable voiced runs can pair with the target release; review the onset manually.";
-		for (const auto &metric : { std::pair { U"burst_time_candidate", U"s" }, { U"burst_rise_db", U"dB" },
-				{ U"voicing_time_candidate", U"s" }, { U"voicing_f0_hz", U"Hz" }, { U"hnr_max_db", U"dB" },
-				{ U"second_voicing_time_candidate", U"s" }, { U"negative_vot_prevoicing_evidence", U"boolean" },
-				{ U"vot_candidate_s", U"s" }, { U"vot_candidate_ms", U"ms" } })
-			addMetric (result, metric.first, metric.second, {}, MetricStatus::ambiguous, reason.c_str());
-		addTextParameter (result, U"candidateStatus", U"ambiguous");
-		addTextParameter (result, U"candidateFailureReason", reason.c_str());
-		return result;
-	}
 
 	if (burst.time) {
 		std::u32string reason = U"Candidate from ";
@@ -607,7 +330,13 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 		addMetric (result, U"burst_rise_db", U"dB", {}, MetricStatus::unavailable, burst.reason.c_str());
 	}
 
-	if (voicingTime) {
+	if (rangeStartsVoiced) {
+		voicingTime.reset ();
+		addMetric (result, U"voicing_time_candidate", U"s", {}, MetricStatus::unavailable,
+			U"The selected range begins within 10 ms of stable voicing; include the closure or choose a later segment.");
+		addMetric (result, U"voicing_f0_hz", U"Hz", {}, MetricStatus::unavailable,
+			U"The selected range begins with voicing, so its onset is outside the selected range.");
+	} else if (voicingTime) {
 		const bool prevoicing = burst.time && voicingTime.value() < burst.time.value();
 		const conststring32 reason = prevoicing ?
 			U"Stable autocorrelation voicing continues across the release; this negative VOT candidate needs manual confirmation." :
@@ -622,7 +351,7 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	}
 
 	std::optional<double> hnrMaximum;
-	if (voicingTime) {
+	if (voicingTime && ! rangeStartsVoiced) {
 		const double hnrEnd = std::min (voicingTime.value() + settings.hnrSliceSeconds, sound -> xmax);
 		if (hnrEnd - voicingTime.value() >= settings.hnrMinimumSliceSeconds) {
 			try {
@@ -648,26 +377,17 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 		addMetric (result, U"second_voicing_time_candidate", U"s", {}, MetricStatus::unavailable,
 			U"No second voiced run separated by the configured gap was found.");
 
-	if (burst.time && voicingTime && hnrMaximum && hnrMaximum.value() >= settings.minimumHnrDb) {
+	if (burst.time && voicingTime && ! rangeStartsVoiced) {
 		const double votSeconds = voicingTime.value() - burst.time.value();
 		addMetric (result, U"vot_candidate_s", U"s", votSeconds, MetricStatus::warning,
 			U"Difference of estimated candidates; confirm both boundaries before reporting VOT.");
 		addMetric (result, U"vot_candidate_ms", U"ms", votMilliseconds (burst.time.value(), voicingTime.value()),
 			MetricStatus::warning, U"Difference of estimated candidates; confirm both boundaries before reporting VOT.");
-		addMetric (result, U"negative_vot_prevoicing_evidence", U"boolean",
-			voicingTime.value() < burst.time.value() ? 1.0 : 0.0, MetricStatus::measured,
-			voicingTime.value() < burst.time.value() ? U"Stable target-related voicing spans the release." : U"No negative prevoicing was used.");
-		addTextParameter (result, U"candidateStatus", U"candidate");
-		addTextParameter (result, U"candidateFailureReason", U"");
 	} else {
 		const std::u32string reason = ! burst.time ? U"Burst candidate unavailable: " + burst.reason :
-			voicingTime ? U"Stable voiced onset failed the HNR validity threshold." :
-			U"Voicing candidate unavailable for the fixed acoustic context.";
+			U"Voicing candidate unavailable for the selected range.";
 		addMetric (result, U"vot_candidate_s", U"s", {}, MetricStatus::unavailable, reason.c_str());
 		addMetric (result, U"vot_candidate_ms", U"ms", {}, MetricStatus::unavailable, reason.c_str());
-		addMetric (result, U"negative_vot_prevoicing_evidence", U"boolean", {}, MetricStatus::unavailable, reason.c_str());
-		addTextParameter (result, U"candidateStatus", U"failed");
-		addTextParameter (result, U"candidateFailureReason", reason.c_str());
 	}
 	return result;
 }
@@ -757,66 +477,6 @@ void AnalysisResult_toTsv (const AnalysisResult &result, MelderString *output) {
 	}
 }
 
-const MetricResult *AnalysisResult_findMetric (const AnalysisResult &result, conststring32 id) {
-	const auto found = std::find_if (result.metrics.begin(), result.metrics.end(), [id] (const MetricResult &metric) {
-		return metric.id == id;
-	});
-	return found == result.metrics.end() ? nullptr : & *found;
-}
-
-VOTDisplayData AnalysisResult_toVOTDisplayData (const AnalysisResult &result, VOTBoundaryMode mode) {
-	VOTDisplayData display;
-	display.mode = mode;
-	const auto readMetric = [& result] (conststring32 id) -> std::optional<double> {
-		const MetricResult *metric = AnalysisResult_findMetric (result, id);
-		if (! metric || metric -> status == MetricStatus::unavailable || ! metric -> value ||
-			! std::isfinite (metric -> value.value()))
-			return {};
-		return metric -> value;
-	};
-	const MetricResult *votMetric = nullptr;
-	if (mode == VOTBoundaryMode::estimateCandidates) {
-		display.burstTime = readMetric (U"burst_time_candidate");
-		display.voicingTime = readMetric (U"voicing_time_candidate");
-		votMetric = AnalysisResult_findMetric (result, U"vot_candidate_ms");
-	} else {
-		display.burstTime = result.source.burstTime;
-		display.voicingTime = result.source.voicingTime;
-		votMetric = AnalysisResult_findMetric (result, U"vot_ms");
-	}
-	if (votMetric && votMetric -> status != MetricStatus::unavailable && votMetric -> value &&
-		std::isfinite (votMetric -> value.value()) && display.burstTime && display.voicingTime &&
-		std::isfinite (display.burstTime.value()) && std::isfinite (display.voicingTime.value()))
-	{
-		display.valueMs = votMilliseconds (display.burstTime.value(), display.voicingTime.value());
-	} else if (mode == VOTBoundaryMode::estimateCandidates) {
-		const auto appendBoundaryFailure = [&display] (const MetricResult *metric, conststring32 fallback) {
-			if (! display.failureReason.empty())
-				display.failureReason += U"; ";
-			if (metric && ! metric -> reason.empty())
-				display.failureReason += metric -> reason;
-			else
-				display.failureReason += fallback;
-		};
-		if (! display.burstTime)
-			appendBoundaryFailure (AnalysisResult_findMetric (result, U"burst_time_candidate"),
-				U"Burst/release-time candidate is unavailable.");
-		if (! display.voicingTime)
-			appendBoundaryFailure (AnalysisResult_findMetric (result, U"voicing_time_candidate"),
-				U"Voicing-onset candidate is unavailable.");
-		if (display.failureReason.empty() && votMetric && ! votMetric -> reason.empty())
-			display.failureReason = votMetric -> reason;
-		if (display.failureReason.empty())
-			display.failureReason = U"Automatic VOT candidate is unavailable.";
-	} else {
-		if (votMetric && ! votMetric -> reason.empty())
-			display.failureReason = votMetric -> reason;
-		else
-			display.failureReason = U"Manual VOT value is unavailable.";
-	}
-	return display;
-}
-
 void AnalysisResult_toInfoSummary (const AnalysisResult &result, MelderString *output) {
 	MelderString_empty (output);
 	if (! result.source.source.displayName.empty())
@@ -826,6 +486,12 @@ void AnalysisResult_toInfoSummary (const AnalysisResult &result, MelderString *o
 		MelderString_append (output, U"Range: ", Melder_fixed (result.source.startTime, 3), U"–",
 			Melder_fixed (result.source.endTime, 3), U" s\n");
 
+	const auto findMetric = [&] (conststring32 id) -> const MetricResult * {
+		const auto found = std::find_if (result.metrics.begin(), result.metrics.end(), [&] (const MetricResult &metric) {
+			return metric.id == id;
+		});
+		return found == result.metrics.end() ? nullptr : & *found;
+	};
 	const auto appendMetric = [&] (conststring32 label, const MetricResult &metric, bool requiresReview,
 			conststring32 qualifier) {
 		MelderString_append (output, label, U": ");
@@ -838,7 +504,7 @@ void AnalysisResult_toInfoSummary (const AnalysisResult &result, MelderString *o
 				MelderString_append (output, U" ", metric.unit.c_str());
 		}
 		if (requiresReview)
-			MelderString_append (output, U" (", praat_translate (U"requires manual review"), U")");
+			MelderString_append (output, U" (requires manual review)");
 		else if (metric.status == MetricStatus::warning)
 			MelderString_append (output, U" (warning)");
 		if (qualifier)
@@ -848,7 +514,7 @@ void AnalysisResult_toInfoSummary (const AnalysisResult &result, MelderString *o
 		MelderString_appendCharacter (output, U'\n');
 	};
 
-	if (const MetricResult *manualVot = AnalysisResult_findMetric (result, U"vot_ms")) {
+	if (const MetricResult *manualVot = findMetric (U"vot_ms")) {
 		appendMetric (U"VOT", * manualVot, false, U"(manual measurement)");
 		if (result.source.burstTime)
 			MelderString_append (output, U"Burst time: ", Melder_fixed (result.source.burstTime.value(), 3), U" s\n");
@@ -857,8 +523,8 @@ void AnalysisResult_toInfoSummary (const AnalysisResult &result, MelderString *o
 		return;
 	}
 
-	if (const MetricResult *candidateVot = AnalysisResult_findMetric (result, U"vot_candidate_ms"))
-		appendMetric (praat_translate (U"Automatically estimated candidate"), * candidateVot, true, nullptr);
+	if (const MetricResult *candidateVot = findMetric (U"vot_candidate_ms"))
+		appendMetric (U"VOT candidate", * candidateVot, true, nullptr);
 	for (const MetricResult &metric : result.metrics) {
 		conststring32 label = nullptr;
 		if (metric.id == U"burst_time_candidate") label = U"Burst candidate";

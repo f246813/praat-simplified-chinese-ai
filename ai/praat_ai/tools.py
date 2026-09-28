@@ -120,10 +120,6 @@ TIME_DOMAIN_CLASSES = frozenset(
 # 只有 Sound 类对象有 Play / 采样率 / 通道数。
 SOUND_CLASSES = frozenset({"Sound", "LongSound"})
 
-# 共振峰工具可以直接查询已有 Formant，也可以从 Sound 临时计算；其他对象即使
-# 有时长（例如 Harmonicity）也不能作为共振峰输入。
-FORMANT_SOURCE_CLASSES = frozenset({"Sound", "Formant"})
-
 
 @dataclass(frozen=True, slots=True)
 class ObjectRow:
@@ -134,9 +130,6 @@ class ObjectRow:
     # Praat 那边打开着这个对象的编辑器时，会多写两列：用户手动拖出来的选区。
     selection_start: float | None = None
     selection_end: float | None = None
-    # SoundEditor 在 VOT 小窗初始化后，还会发布保持不变的分析上下文。
-    selection_context_start: float | None = None
-    selection_context_end: float | None = None
 
     @property
     def selection(self) -> tuple[float, float] | None:
@@ -147,20 +140,6 @@ class ObjectRow:
         if self.selection_end - self.selection_start <= 0.0:
             return None
         return (self.selection_start, self.selection_end)
-
-    @property
-    def selection_context(self) -> tuple[float, float] | None:
-        """与当前编辑器选区配套的固定 VOT 分析上下文。"""
-
-        if self.selection_context_start is None or self.selection_context_end is None:
-            return None
-        if (
-            not math.isfinite(self.selection_context_start)
-            or not math.isfinite(self.selection_context_end)
-            or self.selection_context_start >= self.selection_context_end
-        ):
-            return None
-        return (self.selection_context_start, self.selection_context_end)
 
     @property
     def label(self) -> str:
@@ -269,45 +248,12 @@ class ToolContext:
             return candidates[0]
         raise ToolError(f"{description}（对象 {row.id} 是 {row.class_name}）。")
 
-    def resolve_formant_source(self, requested: Any = None) -> ObjectRow:
-        """取共振峰分析输入：只允许 Sound / Formant，显式对象绝不猜换。"""
-
-        description = "共振峰分析只接受 Sound 或 Formant 对象"
-        if requested is not None and requested != "":
-            row = self.resolve_object(requested)
-            if row.class_name not in FORMANT_SOURCE_CLASSES:
-                raise ToolError(
-                    f"{description}（对象 {row.id} 是 {row.class_name}）。"
-                )
-            return row
-
-        if not self.objects:
-            raise ToolError("Praat 对象列表为空，请先在 Praat 中打开或新建对象。")
-
-        selected = next((row for row in self.objects if row.selected), None)
-        if selected and selected.class_name in FORMANT_SOURCE_CLASSES:
-            return selected
-
-        candidates = [
-            row for row in self.objects if row.class_name in FORMANT_SOURCE_CLASSES
-        ]
-        if len(candidates) == 1:
-            return candidates[0]
-        if len(candidates) > 1:
-            options = "、".join(f"{row.id}: {row.name}" for row in candidates)
-            raise ToolError(f"{description}，但有多个候选，请用对象 id 指定：{options}")
-        if selected:
-            raise ToolError(
-                f"{description}（当前对象 {selected.id} 是 {selected.class_name}）。"
-            )
-        raise ToolError(f"{description}（对象列表中没有可用对象）。")
-
 
 def parse_object_context(text: str) -> tuple[ObjectRow, ...]:
     """Parse the ``id / class / name / selected`` TSV written by Praat.
 
-    旧版本只写四列；打开着编辑器时 Praat 会多写选区和固定 VOT 上下文列。
-    缺列就当作没有圈选或固定上下文。
+    旧版本只写四列；打开着编辑器时 Praat 会多写 ``sel_start``/``sel_end`` 两列，
+    缺列就当作没有圈选。
     """
 
     rows: list[ObjectRow] = []
@@ -323,8 +269,6 @@ def parse_object_context(text: str) -> tuple[ObjectRow, ...]:
                 selected=parts[3] == "1",
                 selection_start=_optional_seconds(parts, 4),
                 selection_end=_optional_seconds(parts, 5),
-                selection_context_start=_optional_seconds(parts, 6),
-                selection_context_end=_optional_seconds(parts, 7),
             )
         )
     return tuple(rows)
@@ -529,12 +473,12 @@ def _formant_lines(
     label: str,
     with_bandwidth: bool = False,
 ) -> list[str]:
-    row = context.resolve_formant_source(arguments.get("object"))
+    row = context.resolve_object(arguments.get("object"))
     formatns = _formant_numbers(arguments)
     unit = _unit_literal(arguments, "hertz")
     unit_text = _unit_display(arguments, "hertz")
     times = _query_times(arguments, fallback=_default_time_expression(row))
-    temporary = row.class_name == "Sound"
+    temporary = row.class_name != "Formant"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     if temporary:
         lines.extend(
@@ -959,11 +903,12 @@ def _build_formant_statistics(
 ) -> str:
     """一段时间内的共振峰平均值与标准差（「共振峰平均是多少」用这个）。"""
 
-    row = context.resolve_formant_source(arguments.get("object"))
+    row = context.resolve_object(arguments.get("object"))
+    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做共振峰分析")
     formatns = _formant_numbers(arguments)
     unit = _unit_literal(arguments, "hertz")
     unit_text = _unit_display(arguments, "hertz")
-    temporary = row.class_name == "Sound"
+    temporary = row.class_name != "Formant"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     lines.extend(_range_lines(arguments, row))
     if temporary:
@@ -1409,6 +1354,25 @@ def _echoes_editor_selection(
     return True
 
 
+def _build_vot_explicit(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """Send complete explicit boundaries to the shared C++ VOT action."""
+
+    burst = _vot_time(arguments, "burst")
+    voicing = _vot_time(arguments, "voicing", alias="onset")
+    if burst is None:
+        raise ToolError("算 VOT 需要 burst 参数：爆破/除阻时刻（秒）。")
+    if voicing is None:
+        raise ToolError("算 VOT 需要 voicing 参数：浊音起始时刻（秒）。")
+    row = context.resolve_by_class(
+        arguments.get("object"),
+        frozenset({"TextGrid", "Sound", "LongSound"}),
+        "算 VOT 需要 TextGrid、Sound 或 LongSound 对象",
+    )
+    if row.class_name == "TextGrid":
+        return _build_vot_textgrid_explicit(arguments, context, row, burst, voicing)
+    return _vot_action_script(arguments, context, row, burst, voicing, candidate_mode=False)
+
+
 def _build_vot_textgrid_explicit(
     arguments: Mapping[str, Any],
     context: ToolContext,
@@ -1452,6 +1416,101 @@ def _build_vot_textgrid_explicit(
         ),
     ]
     return _assemble(lines, context)
+
+
+def _vot_action_script(
+    arguments: Mapping[str, Any],
+    context: ToolContext,
+    row: ObjectRow,
+    burst: float | None,
+    voicing: float | None,
+    *,
+    candidate_mode: bool,
+) -> str:
+    """Build one script action call and copy the core's TSV into the AI result file."""
+
+    burst_db = _number(arguments, "burst_db", 6.0, 3.0, 30.0)
+    pitch_floor = _number(arguments, "pitch_floor", 75.0, 40.0, 500.0)
+    selection = _selection_range(arguments, row)
+    start_arg = arguments.get("from", arguments.get("start", None))
+    end_arg = arguments.get("to", arguments.get("end", None))
+    analysis_path = context.result_path.with_suffix(".vot.tsv")
+    lines = [f"selectObject: {row.id}", "tmin = Get start time", "tmax = Get end time"]
+    if selection is not None:
+        lines.extend(
+            [
+                f"tmin = {selection[0]:.6f}",
+                f"tmax = {selection[1]:.6f}",
+                _range_note(selection),
+            ]
+        )
+    else:
+        lines.append('rangeNote$ = "（按对象时间范围搜索）"')
+        if start_arg not in (None, ""):
+            lines.append(f"tmin = {_seconds_argument(start_arg, 'from'):.6f}")
+        if end_arg not in (None, ""):
+            lines.append(f"tmax = {_seconds_argument(end_arg, 'to'):.6f}")
+        if start_arg not in (None, "") or end_arg not in (None, ""):
+            lines.append(
+                'rangeNote$ = "（使用明确范围 " + fixed$ (tmin, 3) + "–" '
+                '+ fixed$ (tmax, 3) + " 秒）"'
+            )
+    burst_arg = "undefined" if burst is None else f"{burst:.6f}"
+    voicing_arg = "undefined" if voicing is None else f"{voicing:.6f}"
+    lines.extend(
+        [
+            f"Write VOT analysis to file: tmin, tmax, {burst_arg}, {voicing_arg}, "
+            f"{burst_db:.6f}, {pitch_floor:.6f}, {quote(analysis_path)}",
+            f"votTsv$ = readFile$ ({quote(analysis_path)})",
+            _write_result(
+                context,
+                [
+                    quote(
+                        "VOT 候选（C++ 自动估计，需人工确认）"
+                        if candidate_mode
+                        else "VOT 测量（使用给定边界）"
+                    ),
+                    "rangeNote$",
+                ],
+            ),
+            f"appendFile: {quote(context.result_path)}, votTsv$",
+        ]
+    )
+    return _assemble(lines, context)
+
+
+def _seconds_argument(value: Any, key: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ToolError(f"参数 {key} 必须是数字，收到：{value!r}") from error
+    if not math.isfinite(number) or not -36000.0 <= number <= 36000.0:
+        raise ToolError(f"参数 {key} 必须是 -36000 到 36000 之间的有限秒数。")
+    return number
+
+
+def _build_vot_auto(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """Request editable C++ candidate estimates in the chosen Sound interval."""
+
+    row = context.resolve_by_class(
+        arguments.get("object"), SOUND_CLASSES, "自动估计 VOT 需要 Sound 或 LongSound 对象"
+    )
+    return _vot_action_script(arguments, context, row, None, None, candidate_mode=True)
+
+
+def _build_vot(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """Pass a complete manual boundary pair, or request C++ candidate estimation."""
+
+    burst = _vot_time(arguments, "burst")
+    voicing = _vot_time(arguments, "voicing", alias="onset")
+    if burst is not None and voicing is not None:
+        return _build_vot_explicit(arguments, context)
+    if burst is not None or voicing is not None:
+        raise ToolError(
+            "VOT 需要同时给出 burst（爆破）和 voicing（浊音起始）两个时刻；"
+            "只想自动估计的话两个都不填，改用 from/to 给出大概范围。"
+        )
+    return _build_vot_auto(arguments, context)
 
 
 def _vot_time(
@@ -2692,340 +2751,6 @@ class LocalTool:
         return f"- {self.name}: {self.summary} 参数：{self.signature}"
 
 
-def _vot_range_arguments(
-    arguments: Mapping[str, Any],
-    row: ObjectRow,
-) -> tuple[tuple[float, float], tuple[float | None, float | None]]:
-    """Resolve the target exactly and keep acoustic context as a separate range."""
-
-    start = arguments.get("from", arguments.get("start"))
-    end = arguments.get("to", arguments.get("end"))
-    if start in (None, "") and end in (None, ""):
-        target = row.selection
-        if target is None:
-            raise ToolError(
-                "VOT 需要目标选区：请在编辑器中拖选目标音素，或同时提供 from 和 to；不会退回整段音频。"
-            )
-    elif start in (None, "") or end in (None, ""):
-        raise ToolError("VOT 的 from 和 to 必须同时提供。")
-    else:
-        target = (_vot_time(arguments, "from"), _vot_time(arguments, "to"))
-        assert target[0] is not None and target[1] is not None
-        target = (target[0], target[1])
-    if not all(math.isfinite(value) for value in target) or target[0] >= target[1]:
-        raise ToolError("VOT 目标范围必须是递增的有限时间。")
-
-    context_start = arguments.get("context_from")
-    context_end = arguments.get("context_to")
-    if context_start in (None, "") and context_end in (None, ""):
-        selection_context = row.selection_context
-        if (
-            selection_context is not None
-            and selection_context[0] <= target[0]
-            and selection_context[1] >= target[1]
-        ):
-            return target, selection_context
-        return target, (None, None)
-    if context_start in (None, "") or context_end in (None, ""):
-        raise ToolError("VOT 的 context_from 和 context_to 必须同时提供。")
-    context = (
-        _vot_time(arguments, "context_from"),
-        _vot_time(arguments, "context_to"),
-    )
-    assert context[0] is not None and context[1] is not None
-    if context[0] >= context[1] or context[0] > target[0] or context[1] < target[1]:
-        raise ToolError("VOT 固定上下文必须递增并完整包含目标范围。")
-    return target, (context[0], context[1])
-
-
-def _vot_sample_index(
-    time_seconds: float,
-    *,
-    first_sample_time: float,
-    sample_period_sec: float,
-    sample_count: int,
-) -> int:
-    """Match SoundEditor::editorSampleIndexAtTime on the original sample axis."""
-
-    if not math.isfinite(time_seconds):
-        raise ToolError("VOT 时间必须是有限数字。")
-    domain_start = first_sample_time - sample_period_sec * 0.5
-    domain_end = first_sample_time + (sample_count - 0.5) * sample_period_sec
-    scale = max(
-        1.0,
-        abs(time_seconds),
-        abs(domain_start),
-        abs(domain_end),
-        abs(first_sample_time),
-    )
-    domain_tolerance = 8.0 * math.ulp(scale)
-    if (
-        time_seconds < domain_start - domain_tolerance
-        or time_seconds > domain_end + domain_tolerance
-    ):
-        raise ToolError("VOT 目标或上下文超出音频对象的时间轴。")
-    offset = (time_seconds - first_sample_time) / sample_period_sec
-    # Subtraction and division can move a mathematically exact half-sample
-    # below the tie (for example 220 / 44100 against a half-sample origin).
-    # Snap only within the floating-point resolution of the time inputs so
-    # this keeps the same tie-up rule as SoundEditor without widening it by a
-    # meaningful fraction of a sample.
-    offset_scale = max(
-        abs(time_seconds),
-        abs(first_sample_time),
-        abs(offset * sample_period_sec),
-        sample_period_sec,
-    )
-    offset_tolerance = 8.0 * math.ulp(offset_scale) / sample_period_sec
-    lower_tie = math.floor(offset) + 0.5
-    if abs(offset - lower_tie) <= offset_tolerance:
-        offset = lower_tie
-    return min(sample_count, max(0, math.floor(offset + 0.5)))
-
-
-def _finite_vot_parameter(arguments: Mapping[str, Any], *names: str, default: float) -> float:
-    raw: Any = default
-    for name in names:
-        if arguments.get(name) not in (None, ""):
-            raw = arguments[name]
-            break
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        raise ToolError(f"VOT 参数 {names[0]} 必须是有限数字。") from None
-    if not math.isfinite(value):
-        raise ToolError(f"VOT 参数 {names[0]} 必须是有限数字。")
-    return value
-
-
-def _run_vot(
-    arguments: Mapping[str, Any],
-    context: ToolContext,
-    environment: LocalEnvironment,
-) -> tuple[bool, list[str], str]:
-    """Build one canonical request, then invoke the native snapshot and detector."""
-
-    requested_object = arguments.get("object")
-    if requested_object not in (None, ""):
-        row = context.resolve_object(requested_object)
-    else:
-        row = context.default_object()
-    if row.class_name not in SOUND_CLASSES | {"TextGrid"}:
-        raise ToolError("VOT 需要 Sound、LongSound 或 TextGrid 对象。")
-
-    burst = _vot_time(arguments, "burst")
-    voicing = _vot_time(arguments, "voicing", alias="onset")
-    if (burst is None) != (voicing is None):
-        raise ToolError("人工确认 VOT 必须同时提供 burst 和 voicing 两个边界。")
-    if row.class_name == "TextGrid":
-        if burst is None or voicing is None:
-            raise ToolError("TextGrid 的 VOT 工具需要人工提供 burst 和 voicing 边界。")
-        script = _build_vot_textgrid_explicit(arguments, context, row, burst, voicing)
-        return environment.execute(script)
-
-    mode_value = arguments.get("mode")
-    if mode_value in (None, ""):
-        mode_value = "manual" if burst is not None else "model_assisted"
-    mode_value = str(mode_value).strip().lower()
-    if mode_value not in {"model_assisted", "acoustic_only", "manual"}:
-        raise ToolError("VOT mode 必须是 model_assisted、acoustic_only 或 manual。")
-    if mode_value == "manual" and burst is None:
-        raise ToolError("人工确认模式需要同时提供 burst 和 voicing。")
-    if mode_value != "manual" and burst is not None:
-        raise ToolError("提供了 burst/voicing 时，请选择 manual 模式。")
-
-    target_seconds, context_seconds = _vot_range_arguments(arguments, row)
-    metadata_script = _assemble(
-        [
-            f"selectObject: {row.id}",
-            "sampleRate = Get sampling frequency",
-            "sampleCount = Get number of samples",
-            "firstSampleTime = Get time from sample number: 1",
-            _write_result(
-                context,
-                [
-                    "fixed$ (sampleCount, 0)",
-                    quote("|"),
-                    "fixed$ (sampleRate, 15)",
-                    quote("|"),
-                    "fixed$ (firstSampleTime, 20)",
-                ],
-            ),
-        ],
-        context,
-    )
-    ok, rows, failure = environment.execute(metadata_script)
-    if not ok:
-        return False, [], failure or "Praat 无法读取 VOT 音频采样信息。"
-    metadata = next((line for line in rows if line.count("|") == 2), None)
-    if metadata is None:
-        return False, [], "Praat 没有返回完整的 VOT 音频采样信息。"
-    try:
-        sample_count_text, sample_rate_text, first_sample_text = metadata.split("|")
-        sample_count = int(sample_count_text)
-        sample_rate = float(sample_rate_text)
-        first_sample_time = float(first_sample_text)
-        sample_period = 1.0 / sample_rate
-    except (ValueError, TypeError):
-        return False, [], "Praat 返回了无效的 VOT 音频采样信息。"
-    if (
-        sample_count <= 0
-        or sample_rate <= 0
-        or not math.isfinite(first_sample_time)
-        or not math.isfinite(sample_period)
-        or sample_period <= 0
-    ):
-        return False, [], "Praat 返回了无效的 VOT 音频采样信息。"
-
-    target_range = tuple(
-        _vot_sample_index(
-            value,
-            first_sample_time=first_sample_time,
-            sample_period_sec=sample_period,
-            sample_count=sample_count,
-        )
-        for value in target_seconds
-    )
-    if context_seconds == (None, None):
-        domain_start = first_sample_time - 0.5 * sample_period
-        domain_end = first_sample_time + (sample_count - 0.5) * sample_period
-        context_seconds = (
-            max(domain_start, target_seconds[0] - 0.5),
-            min(domain_end, target_seconds[1] + 0.5),
-        )
-    context_range = tuple(
-        _vot_sample_index(
-            value,
-            first_sample_time=first_sample_time,
-            sample_period_sec=sample_period,
-            sample_count=sample_count,
-        )
-        for value in context_seconds
-    )
-    if not (
-        context_range[0] <= target_range[0] < target_range[1] <= context_range[1]
-    ):
-        raise ToolError("VOT 目标选区在采样点精度下为空或超出固定上下文。")
-
-    from .vot_editor_worker import _request_from_payload
-
-    job_directory = environment.runtime_directory / "vot_ai" / uuid.uuid4().hex
-    job_directory.mkdir(parents=True, exist_ok=False)
-    manifest_path = job_directory / "snapshot.json"
-    pcm_path = job_directory / "snapshot.f64le"
-    wav_path = job_directory / "alignment.wav"
-    snapshot_script = _assemble(
-        [
-            f"selectObject: {row.id}",
-            "Write VOT audio snapshot: "
-            f"{quote(manifest_path)}, {quote(pcm_path)}, {quote(wav_path)}, "
-            f"{context_range[0]}, {context_range[1]}",
-        ],
-        context,
-    )
-    ok, _, failure = environment.execute(snapshot_script)
-    if not ok:
-        return False, [], failure or "Praat 无法创建当前音频的 VOT 快照。"
-
-    parameters = {
-        "burst_threshold_db": _finite_vot_parameter(
-            arguments, "burst_threshold_db", "burst_db", default=6.0
-        ),
-        "pitch_floor_hz": _finite_vot_parameter(
-            arguments, "pitch_floor_hz", "pitch_floor", default=75.0
-        ),
-        "pitch_ceiling_hz": 500.0,
-    }
-    manual_boundaries = None
-    if mode_value == "manual":
-        assert burst is not None and voicing is not None
-        manual_boundaries = [
-            _vot_sample_index(
-                value,
-                first_sample_time=first_sample_time,
-                sample_period_sec=sample_period,
-                sample_count=sample_count,
-            )
-            for value in (burst, voicing)
-        ]
-    payload = {
-        "request_id": uuid.uuid4().hex,
-        "job_directory": str(job_directory),
-        "snapshot_paths": {
-            "manifest": str(manifest_path),
-            "pcm": str(pcm_path),
-            "wav": str(wav_path),
-        },
-        "target_range": list(target_range),
-        "acoustic_context_range": list(context_range),
-        "alignment_context_range": list(context_range),
-        "language": str(arguments.get("language", "") or ""),
-        "transcript": str(arguments.get("transcript", "") or ""),
-        "phonemes": arguments.get("phonemes", "") or "",
-        "target_phone_index": arguments.get("target_phone_index", 0),
-        "mode": mode_value,
-        "parameters": parameters,
-        "manual_boundaries": manual_boundaries,
-    }
-    request = _request_from_payload(payload)
-
-    from .config import load_config
-    from .forced_alignment import build_aligner
-    from .vot import VOTAnalysisService, VOTMode
-    from .vot_bridge import TSVVOTAcousticAnalyzer
-
-    service = VOTAnalysisService(build_aligner(load_config().alignment))
-    if request.mode == VOTMode.MANUAL:
-        result = service.confirm_manual(request)
-    else:
-        prepared = service.prepare(request, use_cache=False)
-        if prepared.status is not None:
-            result = service.complete(prepared, None)
-        else:
-            acoustic_path = job_directory / "native-acoustic.tsv"
-            aligned = prepared.target_phone
-            aligned_start = aligned.start_sample if aligned else -1
-            aligned_end = aligned.end_sample if aligned else -1
-            parameters_json = json.dumps(
-                {
-                    **request.to_dict()["parameters"],
-                    "mode": request.mode.value,
-                    "manual_boundaries": None,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            acoustic_script = _assemble(
-                [
-                    f"selectObject: {row.id}",
-                    "Analyse VOT audio snapshot: "
-                    f"{quote(manifest_path)}, {quote(pcm_path)}, "
-                    f"{target_range[0]}, {target_range[1]}, "
-                    f"{context_range[0]}, {context_range[1]}, "
-                    f"{aligned_start}, {aligned_end}, {quote(parameters_json)}, "
-                    f"{quote(acoustic_path)}",
-                ],
-                context,
-            )
-            ok, _, failure = environment.execute(acoustic_script)
-            if not ok:
-                class MissingNativeResult:
-                    def analyze(self, request, aligned_phone):
-                        del request, aligned_phone
-                        raise RuntimeError(failure or "native VOT detector did not run")
-
-                result = service.complete(prepared, MissingNativeResult())
-            else:
-                result = service.complete(
-                    prepared, TSVVOTAcousticAnalyzer(acoustic_path)
-                )
-    result_json = json.dumps(
-        result.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
-    return True, [result_json], ""
-
-
 TOOLS: tuple[Tool, ...] = (
     Tool(
         name="object_info",
@@ -3110,6 +2835,12 @@ TOOLS: tuple[Tool, ...] = (
         summary="在 TextGrid 某一层的指定时刻插入一个边界。",
         signature="time（秒）、tier（层号，默认 1）、object（可选）",
         build=_build_textgrid_insert_boundary,
+    ),
+    Tool(
+        name="vot",
+        summary="分析 VOT：给 burst（爆破）和 voicing（浊音起始）时由 C++ 核心测量，支持零和负 VOT；省略两者时返回需人工确认的 C++ 候选及质量状态。",
+        signature="burst、voicing（秒，必须同时给出；允许相等或 voicing 更早）、from、to（分析范围）、burst_db（默认 6）、pitch_floor（默认 75）、tier（TextGrid 层号，默认 1）、object（Sound、LongSound 或 TextGrid）",
+        build=_build_vot,
     ),
     Tool(
         name="select_object",
@@ -3450,28 +3181,18 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "burst": _seconds_arg(
-                "人工确认的爆破释放时刻（秒）；必须和 voicing 同时提供"
+                "爆破时刻（秒）；只有用户明确说出爆破时刻时才填，两个都要给，"
+                "不要填 0 或凭猜测填"
             ),
             "voicing": _seconds_arg(
-                "人工确认的浊音起始时刻（秒）；必须和 burst 同时提供"
+                "浊音起始时刻（秒）；只有用户明确说出这个时刻时才填，不要填 0"
             ),
-            "from": _seconds_arg("目标音素选区起点（秒）；与 to 同时提供，否则使用编辑器选区"),
-            "to": _seconds_arg("目标音素选区终点（秒）；与 from 同时提供，否则使用编辑器选区"),
-            "context_from": _seconds_arg("固定分析上下文起点（秒）；需和 context_to 同时提供"),
-            "context_to": _seconds_arg("固定分析上下文终点（秒）；需和 context_from 同时提供"),
-            "language": _text_arg("MFA / wav2vec2 对齐所需的语言代码"),
-            "transcript": _text_arg("完整上下文语句文字"),
-            "phonemes": _text_arg("完整上下文音素序列，按空格分隔"),
-            "target_phone_index": _integer_arg("目标音素在 phonemes 中的从零开始序号，默认 0"),
-            "mode": {
-                "type": "string",
-                "enum": ["model_assisted", "acoustic_only", "manual"],
-                "description": "分析模式；默认 model_assisted，给出两个人工边界时默认 manual",
-            },
-            "burst_threshold_db": _number_arg("C++ 爆破阈值 dB，默认 6"),
-            "pitch_floor_hz": _number_arg("C++ 起声检测基频下限 Hz，默认 75"),
+            "from": _seconds_arg("自动估计的搜索起点（秒）；用户给了范围才填"),
+            "to": _seconds_arg("自动估计的搜索终点（秒）；用户给了范围才填"),
+            "burst_db": _number_arg("爆破最小升幅 dB，默认 6"),
+            "pitch_floor": _number_arg("基频下限 Hz，默认 75"),
             "tier": _integer_arg("TextGrid 层号，默认 1"),
-            "object": _object_arg("当前 Praat 对象列表中的 Sound、LongSound 或 TextGrid"),
+            "object": _object_arg(),
         },
         "required": [],
     },
@@ -3651,20 +3372,6 @@ TOOL_PARAMETERS[MEASURE_TOOL] = _measure_schema()
 #: 在前端（Python）里执行的工具。它们不走「渲染脚本 → 投递」，所以单独一张表；
 #: 工具说明、schema、catalog 和标签都要一起给模型看（见下面几个函数的合并逻辑）。
 LOCAL_TOOLS: dict[str, LocalTool] = {
-    "vot": LocalTool(
-        name="vot",
-        summary=(
-            "用共享 VOT 分析服务处理当前 Sound / LongSound 快照：模型辅助自动、纯声学候选或人工确认。"
-            "返回统一边界、VOT、状态、模型和检测依据；TextGrid 支持人工边界写入。"
-        ),
-        signature=(
-            "from/to（目标选区；省略时必须有编辑器选区）、context_from/context_to（固定上下文）、"
-            "language、transcript、phonemes、target_phone_index、mode、burst/voicing、"
-            "burst_threshold_db、pitch_floor_hz、tier、object"
-        ),
-        parameters=TOOL_PARAMETERS["vot"],
-        run=_run_vot,
-    ),
     RUN_SCRIPT_TOOL: LocalTool(
         name=RUN_SCRIPT_TOOL,
         summary=(

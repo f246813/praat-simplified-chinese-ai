@@ -114,14 +114,6 @@ EXACT_MAP = {
     "Mono": "单声道",
     "Stereo": "双声道",
 
-    # VOT analysis editor form and candidate summary
-    "VOT analysis": "VOT 分析",
-    "Burst/release time (s)": "爆破释放时刻（秒）",
-    "Voicing onset time (s)": "起声时刻（秒）",
-    "Minimum burst rise (dB)": "爆破增幅阈值（dB）",
-    "Automatically estimated candidate": "自动计算的候选值",
-    "requires manual review": "需要人工复核",
-
     # AI Agent prompt generator
     "Copy AI Agent prompt (for Python)...": "复制 AI 提示词 (写 Python 脚本)...",
     "Copy AI Agent prompt (for Python)": "复制 AI 提示词 (写 Python 脚本)",
@@ -521,8 +513,6 @@ EXACT_MAP = {
     "Run AI tutor": "开始 AI 纠音",
     "Auto": "自动",
     "Alignment": "对齐",
-    "API settings": "API 配置",
-    "API settings...": "API 配置...",
     "Frontend": "前端",
     "Frontend: ": "前端: ",
     "not selected": "未选择",
@@ -535,7 +525,6 @@ EXACT_MAP = {
     "stopped": "已停止",
     "VRAM: ": "显存用量: ",
     "low VRAM: ": "显存不足: ",
-    "running (API)": "运行中（API 模式）",
     "unavailable": "不可用",
     "Python script file": "Python 脚本文件",
     "Python executable path": "Python 可执行文件路径",

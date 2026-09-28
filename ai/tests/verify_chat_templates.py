@@ -52,16 +52,6 @@ ONE_SOUND_SELECTED = (
     "id\tclass\tname\tselected\tsel_start\tsel_end\n"
     "1\tSound\tSound tone\t1\t0.250000\t0.500000\n"
 )
-# Sound 编辑器还留着 0.25–0.5 秒选区，但当前对象选中状态属于 Harmonicity。
-SOUND_SELECTION_HARMONICITY_SELECTED = (
-    "id\tclass\tname\tselected\tsel_start\tsel_end\n"
-    "1\tSound\tSound tone\t0\t0.250000\t0.500000\n"
-    "2\tHarmonicity\tHarmonicity tone\t1\t\t\n"
-)
-SOUND_WITH_HARMONICITY_SELECTED = (
-    SOUND
-    + "\nselectObject: 1\nTo Harmonicity (cc): 0.01, 75, 0.1, 1"
-)
 TEXTGRID = 'Create TextGrid: 0, 1, "words", ""'
 # 已经标好一个区间、并且 0.5 秒处已经有边界，用来验证重复插入会被跳过。
 TEXTGRID_ANNOTATED = "\n".join(
@@ -199,6 +189,61 @@ CASES: tuple[Case, ...] = (
         "已经有边界",
         tool="textgrid_insert_boundary",
     ),
+    Case(
+        "vot",
+        {"burst": 0.3, "voicing": 0.42},
+        TEXTGRID,
+        ONE_TEXTGRID,
+        "VOT = 0.1200 秒（120.0 毫秒）",
+    ),
+    Case(
+        "vot-sound",
+        {"burst": 0.3, "voicing": 0.42},
+        SOUND,
+        ONE_SOUND,
+        "vot_ms\t120\tms\tmeasured",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto",
+        {"from": 0.25, "to": 0.5},
+        VOT_SOUND,
+        ONE_SOUND,
+        "vot_candidate_ms",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto-no-range",
+        {},
+        VOT_SOUND,
+        ONE_SOUND,
+        "vot_candidate_ms",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto-no-burst",
+        {"from": 0.4, "to": 0.9},
+        VOT_SOUND,
+        ONE_SOUND,
+        "voicing_time_candidate",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto-two-phonemes",
+        {"from": 0.25, "to": 1.0},
+        TWO_PHONEME_SOUND,
+        ONE_SOUND,
+        "second_voicing_time_candidate",
+        tool="vot",
+    ),
+    Case(
+        "vot-auto-editor-selection",
+        {},
+        VOT_SOUND,
+        ONE_SOUND_SELECTED,
+        "按编辑器圈选 0.250–0.500 秒",
+        tool="vot",
+    ),
     # 选区不只 VOT 用：区间统计和截取片段取的是同一个选区，回话里都得注明出处。
     Case(
         "pitch_statistics-editor-selection",
@@ -215,22 +260,6 @@ CASES: tuple[Case, ...] = (
         ONE_SOUND_SELECTED,
         "按编辑器圈选 0.250–0.500 秒",
         tool="formant_statistics",
-    ),
-    Case(
-        "formant_statistics-harmonicity-selected-editor-selection",
-        {"formant": "1,2"},
-        SOUND_WITH_HARMONICITY_SELECTED,
-        SOUND_SELECTION_HARMONICITY_SELECTED,
-        "按编辑器圈选 0.250–0.500 秒",
-        tool="formant_statistics",
-    ),
-    Case(
-        "formant_frequency-harmonicity-selected-editor-selection",
-        {"formant": 1},
-        SOUND_WITH_HARMONICITY_SELECTED,
-        SOUND_SELECTION_HARMONICITY_SELECTED,
-        "0.375 秒处",
-        tool="formant_frequency",
     ),
     Case(
         "extract_part-editor-selection",

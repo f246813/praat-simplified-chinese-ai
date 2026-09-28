@@ -299,7 +299,6 @@ constexpr bool theCommandKeyIsToTheLeftOfTheOptionKey =
 	#define XmToggleButtonSetState XmToggleButtonGadgetSetState
 
 	void motif_win_setUserMessageCallback (int (*userMessageCallback) (void));
-	DWORD GuiWin_getMainThreadId ();
 
 	constexpr UINT WM_APP_WORK_PROC = WM_APP + 0x5C;   // like "script"
 	struct GuiWinWorkProcWrapper_base {
@@ -371,12 +370,7 @@ static void Gui_addWorkProc (F&& function) {
 		CFRunLoopWakeUp (CFRunLoopGetMain ());
 	#elif motif
 		auto *functionWrapper = new GuiWinWorkProcWrapper_derived <F> (std::forward <F> (function));
-		const DWORD mainThreadId = GuiWin_getMainThreadId ();
-		const bool posted = GetCurrentThreadId() == mainThreadId ?
-			PostMessage (HWND (nullptr), WM_APP_WORK_PROC, 0, reinterpret_cast <LPARAM> (functionWrapper)) :
-			PostThreadMessage (mainThreadId, WM_APP_WORK_PROC, 0, reinterpret_cast <LPARAM> (functionWrapper));
-		if (! posted)
-			delete functionWrapper;
+		PostMessage (HWND (nullptr), WM_APP_WORK_PROC, 0, reinterpret_cast <LPARAM> (functionWrapper));
 	#elif defined (NO_GUI)
 	#else
 		#error The function `Gui_addWorkProc`() is not implemented for this platform.
@@ -476,7 +470,6 @@ Thing_define (GuiButton, GuiControl) {
 #define GuiButton_INSENSITIVE  4
 #define GuiButton_ATTRACTIVE  8
 #define GuiButton_MULTILINE  16
-#define GuiButton_MENU_CASCADE  32
 GuiButton GuiButton_create (GuiForm parent,
 	int left, int right, int top, int bottom,
 	conststring32 text,
@@ -545,7 +538,6 @@ GuiDialog GuiDialog_create (GuiWindow parent,
 	GuiShell_GoAwayCallback goAwayCallback, Thing goAwayBoss,
 	GuiDialog_Modality modality
 );
-void GuiDialog_setOwnerWindow (GuiDialog me, GuiWindow owner);
 
 void GuiDialog_setDefaultCallback (GuiDialog me, GuiDialog_DefaultCallback callback, Thing boss);
 

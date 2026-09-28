@@ -365,33 +365,7 @@ Thing_implement (GuiButton, GuiControl, 0);
 						OffsetRect (& textRc, 0, 1);
 
 					const wchar_t *iconGlyph = getButtonIconGlyph (textBuf);
-					if ((dwRefData & GuiButton_MENU_CASCADE) && ! (dwRefData & GuiButton_MULTILINE)) {
-						constexpr int labelRailWidth = 27;
-						constexpr int iconLeftInset = 4;
-						constexpr int iconColumnWidth = 16;
-						constexpr int rightArrowColumnWidth = 19;
-						static_assert (iconLeftInset + iconColumnWidth <= labelRailWidth);
-
-						const int iconLeft = textRc.left + iconLeftInset;
-						const int titleLeft = textRc.left + labelRailWidth;
-						const int titleRight = textRc.right - labelRailWidth;
-						const int arrowLeft = textRc.right - rightArrowColumnWidth;
-
-						if (iconGlyph) {
-							HFONT hIconFont = theWinGuiIconFont (-12);
-							SelectObject (memDC, hIconFont);
-							RECT rcIcon = { iconLeft, textRc.top, iconLeft + iconColumnWidth, textRc.bottom };
-							DrawTextW (memDC, iconGlyph, -1, & rcIcon, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-							SelectObject (memDC, hFont);
-						}
-
-						RECT rcLabel = { titleLeft, textRc.top, titleRight, textRc.bottom };
-						DrawTextW (memDC, textBuf, -1, & rcLabel,
-							DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-
-						RECT rcArrow = { arrowLeft, textRc.top, textRc.right, textRc.bottom };
-						DrawTextW (memDC, L"\u203a", -1, & rcArrow, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-					} else if (iconGlyph && ! (dwRefData & GuiButton_MULTILINE)) {
+					if (iconGlyph && ! (dwRefData & GuiButton_MULTILINE)) {
 						const int iconW = isCompact ? 11 : 13;
 						const int gap = isCompact ? 2 : (boxW <= 64 ? 4 : 6);
 						SIZE szText;

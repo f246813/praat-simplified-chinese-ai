@@ -147,27 +147,6 @@ GuiDialog GuiDialog_create (GuiWindow parent, int x, int y, int width, int heigh
 	return me.releaseToAmbiguousOwner();
 }
 
-void GuiDialog_setOwnerWindow (GuiDialog me, GuiWindow owner) {
-	if (! me || ! owner)
-		return;
-	#if gtk
-		if (my d_gtkWindow && owner -> d_gtkWindow)
-			gtk_window_set_transient_for (my d_gtkWindow, owner -> d_gtkWindow);
-	#elif motif
-		HWND dialogWindow = my d_xmShell ? my d_xmShell -> window : nullptr;
-		HWND ownerWindow = owner -> d_xmShell ? owner -> d_xmShell -> window : nullptr;
-		if (dialogWindow && ownerWindow)
-			SetWindowLongPtr (dialogWindow, GWLP_HWNDPARENT, (LONG_PTR) ownerWindow);
-	#elif cocoa
-		if (my d_cocoaShell && owner -> d_cocoaShell && [my d_cocoaShell parentWindow] != owner -> d_cocoaShell) {
-			NSWindow *oldOwner = [my d_cocoaShell parentWindow];
-			if (oldOwner)
-				[oldOwner removeChildWindow: my d_cocoaShell];
-			[owner -> d_cocoaShell addChildWindow: my d_cocoaShell ordered: NSWindowAbove];
-		}
-	#endif
-}
-
 void GuiDialog_setDefaultCallback (GuiDialog me, GuiDialog_DefaultCallback callback, Thing boss) {
 	my d_defaultCallback = callback;
 	my d_defaultBoss = boss;
