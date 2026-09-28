@@ -87,6 +87,7 @@ enum class SegmentVOTFixture {
 	positive,
 	lowPitch,
 	prevoiced,
+	longPrevoiced,
 	transientOnly,
 	earlyPrevoiced,
 	laterBurstDecoy,
@@ -99,10 +100,11 @@ static autoSound createSegmentVOTFixture (SegmentVOTFixture fixture, double samp
 	const double samplePeriod = 1.0 / sampleRate;
 	const integer numberOfSamples = (integer) (duration * sampleRate);
 	autoSound result = Sound_create (1, 0.0, duration, numberOfSamples, samplePeriod, samplePeriod / 2.0);
-	const bool prevoiced = fixture == SegmentVOTFixture::prevoiced;
+	const bool prevoiced = fixture == SegmentVOTFixture::prevoiced || fixture == SegmentVOTFixture::longPrevoiced;
 	const bool transientOnly = fixture == SegmentVOTFixture::transientOnly;
 	const double voiceOnset = fixture == SegmentVOTFixture::lowPitch ? 0.332 :
-		fixture == SegmentVOTFixture::earlyPrevoiced ? 0.245 : prevoiced ? 0.26 :
+		fixture == SegmentVOTFixture::earlyPrevoiced ? 0.245 :
+		fixture == SegmentVOTFixture::longPrevoiced ? 0.20 : prevoiced ? 0.26 :
 		fixture == SegmentVOTFixture::multipleTargetBursts ? 0.43 : 0.33;
 	const double fundamental = fixture == SegmentVOTFixture::lowPitch ? 80.0 : 220.0;
 	std::mt19937 noiseGenerator (12345);
@@ -946,6 +948,18 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 				segmentVOTWithin (earlyPrevoicedTime -> value.value (), 0.245, 0.005));
 			Melder_assert (earlyPrevoicedVot && earlyPrevoicedVot -> value &&
 				segmentVOTWithin (earlyPrevoicedVot -> value.value (), -55.0, 6.0));
+
+			const AnalysisResult longPrevoicing = runScopedFixture (SegmentVOTFixture::longPrevoiced,
+				0.18, 0.40, 0.15, 0.48, 0.18, 0.36);
+			const MetricResult *longPrevoicedTime = findSegmentVOTMetric (longPrevoicing, U"voicing_time_candidate");
+			const MetricResult *longPrevoicedVot = findSegmentVOTMetric (longPrevoicing, U"vot_candidate_ms");
+			const MetricResult *longPrevoicingEvidence = findSegmentVOTMetric (longPrevoicing, U"negative_vot_prevoicing_evidence");
+			Melder_assert (longPrevoicedTime && longPrevoicedTime -> value &&
+				segmentVOTWithin (longPrevoicedTime -> value.value (), 0.20, 0.005));
+			Melder_assert (longPrevoicedVot && longPrevoicedVot -> value &&
+				segmentVOTWithin (longPrevoicedVot -> value.value (), -100.0, 6.0));
+			Melder_assert (longPrevoicingEvidence && longPrevoicingEvidence -> value &&
+				longPrevoicingEvidence -> value.value () == 1.0);
 
 			const AnalysisResult laterBurst = runScopedFixture (SegmentVOTFixture::laterBurstDecoy,
 				0.25, 0.52, 0.20, 0.55, 0.28, 0.36);

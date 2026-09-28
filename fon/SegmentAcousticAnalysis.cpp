@@ -126,6 +126,11 @@ struct PitchCandidateOnset {
 	double frequency { 0.0 };
 };
 
+struct PrevoicingDetection {
+	std::optional<PitchCandidateOnset> onset;
+	bool truncatedAtSearchBoundary { false };
+};
+
 std::optional<PitchCandidateOnset> findPitchCandidateBacktrack (Pitch pitch, integer runStartFrame,
 		double referenceFrequency, double minimumTime, double maximumBacktrackSeconds,
 		double minimumStrength, double maximumRelativeFrequencyDifference, integer requiredFrames)
@@ -158,6 +163,86 @@ std::optional<PitchCandidateOnset> findPitchCandidateBacktrack (Pitch pitch, int
 		matchedFrames ++;
 	}
 	return matchedFrames >= requiredFrames ? earliest : std::optional<PitchCandidateOnset> {};
+}
+
+PrevoicingDetection findPrevoicingCandidateTrack (Pitch pitch, double releaseTime, double minimumTime,
+		double maximumLeadSeconds, double minimumStrength, double maximumRelativeFrequencyDifference,
+		integer requiredFrames)
+{
+	PrevoicingDetection result;
+	if (! pitch || ! std::isfinite (releaseTime) || ! std::isfinite (minimumTime) ||
+			maximumLeadSeconds <= 0.0 || minimumStrength < 0.0 || maximumRelativeFrequencyDifference <= 0.0 || requiredFrames <= 0)
+		return result;
+	const double earliestTime = std::max (minimumTime, releaseTime - maximumLeadSeconds);
+	integer lastFrameBeforeRelease = 0;
+	for (integer frame = 1; frame <= pitch -> nx; frame ++) {
+		const double frameTime = pitch -> x1 + (frame - 1) * pitch -> dx;
+		if (frameTime >= releaseTime)
+			break;
+		if (frameTime >= earliestTime)
+			lastFrameBeforeRelease = frame;
+	}
+	if (lastFrameBeforeRelease == 0)
+		return result;
+	const double lastFrameTime = pitch -> x1 + (lastFrameBeforeRelease - 1) * pitch -> dx;
+	if (releaseTime - lastFrameTime > 1.5 * pitch -> dx)
+		return result;
+
+	integer longestTrackFrames = 0;
+	for (integer seedIndex = 1; seedIndex <= pitch -> frames [lastFrameBeforeRelease].nCandidates; seedIndex ++) {
+		const Pitch_Candidate seed = & pitch -> frames [lastFrameBeforeRelease].candidates [seedIndex];
+		if (seed -> frequency <= 0.0 || seed -> strength < minimumStrength)
+			continue;
+		integer matchedFrames = 1;
+		double currentFrequency = seed -> frequency;
+		PitchCandidateOnset earliest { lastFrameTime, currentFrequency };
+		bool truncated = false;
+		for (integer frame = lastFrameBeforeRelease - 1; frame >= 1; frame --) {
+			const double frameTime = pitch -> x1 + (frame - 1) * pitch -> dx;
+			const Pitch_Frame pitchFrame = & pitch -> frames [frame];
+			if (frameTime < earliestTime) {
+				for (integer candidateIndex = 1; candidateIndex <= pitchFrame -> nCandidates; candidateIndex ++) {
+					const Pitch_Candidate candidate = & pitchFrame -> candidates [candidateIndex];
+					if (candidate -> frequency > 0.0 && candidate -> strength >= minimumStrength &&
+							std::abs (candidate -> frequency - currentFrequency) / currentFrequency <= maximumRelativeFrequencyDifference)
+						truncated = true;
+				}
+				break;
+			}
+			std::optional<PitchCandidateOnset> match;
+			double bestFrequencyDifference = maximumRelativeFrequencyDifference;
+			double strongestMatch = minimumStrength;
+			for (integer candidateIndex = 1; candidateIndex <= pitchFrame -> nCandidates; candidateIndex ++) {
+				const Pitch_Candidate candidate = & pitchFrame -> candidates [candidateIndex];
+				if (candidate -> frequency <= 0.0 || candidate -> strength < minimumStrength)
+					continue;
+				const double frequencyDifference = std::abs (candidate -> frequency - currentFrequency) / currentFrequency;
+				if (frequencyDifference > maximumRelativeFrequencyDifference)
+					continue;
+				if (! match || frequencyDifference < bestFrequencyDifference ||
+						(frequencyDifference == bestFrequencyDifference && candidate -> strength > strongestMatch))
+				{
+					match = PitchCandidateOnset { frameTime, candidate -> frequency };
+					bestFrequencyDifference = frequencyDifference;
+					strongestMatch = candidate -> strength;
+				}
+			}
+			if (! match)
+				break;
+			currentFrequency = match -> frequency;
+			earliest = match.value();
+			matchedFrames ++;
+		}
+		if (matchedFrames < requiredFrames)
+			continue;
+		if (truncated)
+			result.truncatedAtSearchBoundary = true;
+		if (! result.onset || matchedFrames > longestTrackFrames) {
+			result.onset = earliest;
+			longestTrackFrames = matchedFrames;
+		}
+	}
+	return result;
 }
 
 std::vector<EnvelopeRise> findEnvelopeRises (constIntensity envelope, double minimumTime, double maximumTime,
@@ -289,6 +374,7 @@ void validateVOTCandidateSettings (const VOTCandidateSettings &settings) {
 	if (! std::isfinite (settings.burstCandidateSeparationSeconds) || settings.burstCandidateSeparationSeconds <= 0.0 ||
 			! std::isfinite (settings.maximumPositiveVotSeconds) || settings.maximumPositiveVotSeconds <= 0.0 ||
 			! std::isfinite (settings.maximumPrevoicingLeadSeconds) || settings.maximumPrevoicingLeadSeconds <= 0.0 ||
+			! std::isfinite (settings.maximumPrevoicingAssociationGapSeconds) || settings.maximumPrevoicingAssociationGapSeconds <= 0.0 ||
 			! std::isfinite (settings.minimumHnrDb))
 		Melder_throw (U"VOT candidate-pair and HNR validity settings must be finite and positive where applicable.");
 }
@@ -323,7 +409,7 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 		AnalysisResult incomplete {};
 		incomplete.source = input.metadata;
 		addTextParameter (incomplete, U"boundaryMode", U"estimateCandidates");
-		addTextParameter (incomplete, U"algorithmVersion", U"context-pair-v4");
+		addTextParameter (incomplete, U"algorithmVersion", U"context-pair-v5");
 		addTextParameter (incomplete, U"candidateStatus", U"target_incomplete");
 		const std::u32string reason = U"The target selection clips the aligned phone.";
 		for (const auto &metric : { std::pair { U"burst_time_candidate", U"s" }, { U"burst_rise_db", U"dB" },
@@ -424,13 +510,33 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 		}
 	}
 
+	PrevoicingDetection prevoicingTrack;
+	if (burst.time) {
+		prevoicingTrack = findPrevoicingCandidateTrack (pitch.get(), burst.time.value(), searchStart,
+			settings.maximumPrevoicingLeadSeconds, 0.5 * settings.pitchVoicingThreshold, 0.20,
+			settings.stableVoicedFrames);
+	}
+	const bool prevoicingBoundaryAmbiguous = burst.time && prevoicingTrack.truncatedAtSearchBoundary &&
+		(! voicingTime || (voicingTime.value() >= burst.time.value() &&
+			voicingTime.value() - burst.time.value() <= settings.maximumPrevoicingAssociationGapSeconds));
+	const bool postReleaseVoicingSupportsPrevoicing = burst.time && voicingTime &&
+		voicingTime.value() >= burst.time.value() &&
+		voicingTime.value() - burst.time.value() <= settings.maximumPrevoicingAssociationGapSeconds;
+	if (postReleaseVoicingSupportsPrevoicing && prevoicingTrack.onset &&
+			prevoicingTrack.onset -> time < voicingTime.value()) {
+		voicingTime = prevoicingTrack.onset -> time;
+		voicingOnsetF0 = prevoicingTrack.onset -> frequency;
+	}
+
 	AnalysisResult result;
 	result.source = input.metadata;
 	addTextParameter (result, U"boundaryMode", U"estimateCandidates");
-	addTextParameter (result, U"algorithmVersion", U"context-pair-v4");
+	addTextParameter (result, U"algorithmVersion", U"context-pair-v5");
 	addParameter (result, U"pitchCandidateBacktrackSeconds", 1.5 / settings.pitchFloorHz, U"s");
 	addParameter (result, U"pitchCandidateStrengthRatio", 0.75, U"relative");
 	addParameter (result, U"pitchCandidateRelativeFrequencyTolerance", 0.20, U"relative");
+	addParameter (result, U"prevoicingPitchCandidateStrengthRatio", 0.50, U"relative");
+	addParameter (result, U"prevoicingPitchCandidateRelativeFrequencyTolerance", 0.20, U"relative");
 	addTextParameter (result, U"burstDetectionPath", burst.path.c_str());
 	addTextParameter (result, U"burstDetectionBand", burst.band.c_str());
 	addTextParameter (result, U"burstDetectionFallbackReason", burst.fallbackReason.c_str());
@@ -464,6 +570,7 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	addParameter (result, U"burstCandidateSeparationSeconds", settings.burstCandidateSeparationSeconds, U"s");
 	addParameter (result, U"maximumPositiveVotSeconds", settings.maximumPositiveVotSeconds, U"s");
 	addParameter (result, U"maximumPrevoicingLeadSeconds", settings.maximumPrevoicingLeadSeconds, U"s");
+	addParameter (result, U"maximumPrevoicingAssociationGapSeconds", settings.maximumPrevoicingAssociationGapSeconds, U"s");
 	addParameter (result, U"secondVoicingGapSeconds", settings.secondVoicingGapSeconds, U"s");
 	addParameter (result, U"hnrSliceSeconds", settings.hnrSliceSeconds, U"s");
 	addParameter (result, U"hnrMinimumSliceSeconds", settings.hnrMinimumSliceSeconds, U"s");
@@ -473,8 +580,10 @@ AnalysisResult estimateVOTCandidates (const SegmentInput &input, const VOTCandid
 	const bool secondVoicingCanPair = burst.time && secondVoicingTime &&
 		secondVoicingTime.value() >= burst.time.value() &&
 		secondVoicingTime.value() - burst.time.value() <= settings.maximumPositiveVotSeconds;
-	if (burst.candidates.size() > 1 || secondVoicingCanPair) {
-		const std::u32string reason = burst.candidates.size() > 1 ?
+	if (burst.candidates.size() > 1 || secondVoicingCanPair || prevoicingBoundaryAmbiguous) {
+		const std::u32string reason = prevoicingBoundaryAmbiguous ?
+			U"Voicing continues beyond the target or prevoicing search boundary; the negative onset cannot be localized reliably." :
+			burst.candidates.size() > 1 ?
 			U"Multiple target-region release candidates remain plausible; review the pairing manually." :
 			U"Multiple stable voiced runs can pair with the target release; review the onset manually.";
 		for (const auto &metric : { std::pair { U"burst_time_candidate", U"s" }, { U"burst_rise_db", U"dB" },

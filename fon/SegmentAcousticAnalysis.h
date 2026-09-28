@@ -100,7 +100,8 @@ struct VOTCandidateSettings {
 	double burstOnsetBacktrackDropDb { 8.0 };
 	double burstCandidateSeparationSeconds { 0.04 };
 	double maximumPositiveVotSeconds { 0.15 };
-	double maximumPrevoicingLeadSeconds { 0.08 };
+	double maximumPrevoicingLeadSeconds { 0.12 };
+	double maximumPrevoicingAssociationGapSeconds { 0.01 };
 	double secondVoicingGapSeconds { 0.02 };
 	double hnrSliceSeconds { 0.05 };
 	double hnrMinimumSliceSeconds { 0.03 };
