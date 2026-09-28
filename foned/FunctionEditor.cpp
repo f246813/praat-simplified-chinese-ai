@@ -1501,7 +1501,6 @@ void structFunctionEditor :: v_createMenus () {
 		if (area)
 			area -> v_createMenus ();
 	}
-	our v_createMenusAfterFunctionAreas ();
 	if (our v_hasAiToolbar())
 		createAiMenus (this);
 }

@@ -164,7 +164,6 @@ Thing_define (FunctionEditor, Editor) {
 	bool v_hasPlayMenu () override { return true; }
 	void v_createMenus ()
 		override;
-	virtual void v_createMenusAfterFunctionAreas () { }
 	void v_createMenuItems_prefs (EditorMenu)
 		override;
 	void v_createMenuItems_save (EditorMenu)

@@ -170,51 +170,28 @@ def verify_vot_action_contract() -> None:
 
     editor_source = SOUND_EDITOR_SOURCE.read_text(encoding="utf-8")
     editor_compact = re.sub(r"\s+", " ", editor_source)
-    required_editor_registration = (
-        'EditorMenu_addCommand (editMenu, U"VOT...", GuiMenu_HIDDEN, menu_cb_SoundEditor_VOT);'
-    )
-    if editor_compact.count(required_editor_registration) != 1:
-        raise AssertionError("SoundEditor must register one hidden VOT command on its existing Edit menu")
-    if 'Editor_addCommand (this, U"Query", U"VOT..."' in editor_compact:
-        raise AssertionError("SoundEditor must not register VOT on a nonexistent Query menu")
-    required_menu_dispatch = (
-        'Editor_doMenuCommand (me, U"VOT...", 0, nullptr, nullptr, nullptr);'
-    )
-    if editor_compact.count(required_menu_dispatch) != 1:
-        raise AssertionError("SoundEditor VOT menu entry must dispatch the hidden VOT command")
-
     function_editor_header = FUNCTION_EDITOR_HEADER.read_text(encoding="utf-8")
     function_editor_source = FUNCTION_EDITOR_SOURCE.read_text(encoding="utf-8")
     sound_editor_header = SOUND_EDITOR_HEADER.read_text(encoding="utf-8")
     sound_analysis_source = SOUND_ANALYSIS_AREA_SOURCE.read_text(encoding="utf-8")
     function_editor_header_compact = re.sub(r"\s+", " ", function_editor_header)
-    if (
-        "virtual void v_createMenusAfterFunctionAreas () { }" not in function_editor_header_compact
-    ):
-        raise AssertionError("FunctionEditor must expose an extension hook after function-area menus")
+    if "VOT" in editor_compact or "vot" in editor_compact.lower():
+        raise AssertionError("SoundEditor must not expose or implement an editor-specific VOT command")
+    if "virtual void v_createMenusAfterFunctionAreas () { }" in function_editor_header_compact:
+        raise AssertionError("FunctionEditor must not retain the VOT-only post-area menu hook")
     menu_creation = function_editor_source.split("void structFunctionEditor :: v_createMenus ()", 1)[1]
     area_menus = menu_creation.find("area -> v_createMenus ();")
-    extra_menus = menu_creation.find("our v_createMenusAfterFunctionAreas ();")
     ai_menus = menu_creation.find("createAiMenus (this);")
     ai_menu_builder = function_editor_source.split("void createAiMenus (FunctionEditor me)", 1)[1]
     alignment_menu = ai_menu_builder.find('window, U"Alignment"')
-    if min(area_menus, extra_menus, ai_menus, alignment_menu) < 0 or not area_menus < extra_menus < ai_menus:
-        raise AssertionError("SoundEditor menus must be created after Pulses and before Alignment")
+    if min(area_menus, ai_menus, alignment_menu) < 0 or not area_menus < ai_menus:
+        raise AssertionError("AI menus must remain after the SoundEditor function-area menus")
     if 'Editor_addMenu (our functionEditor(), U"Pulses", 0)' not in re.sub(r"\s+", " ", sound_analysis_source):
-        raise AssertionError("SoundAnalysisArea must provide the Pulses menu before the SoundEditor VOT hook")
-    if "const int contentTop = Machine_getMenuBarBottom ();" not in function_editor_source:
-        raise AssertionError("FunctionEditor drawing area must begin below the menu bar without a VOT toolbar row")
-    if "void v_createMenusAfterFunctionAreas () override;" not in sound_editor_header:
-        raise AssertionError("SoundEditor must add its VOT menu in the post-area menu hook")
-    if (
-        'Editor_addMenu (this, U"VOT", 0)' not in editor_compact
-        or 'EditorMenu_addCommand (votMenu, U"VOT...", 0, menu_cb_SoundEditor_VOTMenu)' not in editor_compact
-        or 'Editor_doMenuCommand (me, U"VOT...", 0, nullptr, nullptr, nullptr);' not in editor_compact
-    ):
-        raise AssertionError("VOT menu must dispatch the retained hidden Edit command")
-    if any(token in function_editor_header + function_editor_source + sound_editor_header + editor_compact
-           for token in ("votToolbar", "v_extraTopToolbarHeight", "v_createExtraTopToolbarButtons", "GuiControl_moveX")):
-        raise AssertionError("VOT must be a menu-bar entry with no leftover toolbar-positioning code")
+        raise AssertionError("SoundAnalysisArea must retain its independent Pulses menu")
+    if "v_createMenusAfterFunctionAreas" in function_editor_source + function_editor_header + sound_editor_header:
+        raise AssertionError("VOT-only post-area menu hook remains in FunctionEditor or SoundEditor")
+    if "vot" not in tools.TOOL_MAP:
+        raise AssertionError("AI VOT tool must remain registered")
 
     if "AnalysisResult_toInfoSummary" not in CORE_ANALYSIS_HEADER.read_text(encoding="utf-8"):
         raise AssertionError("VOT Info summary formatter is not part of the core contract")
