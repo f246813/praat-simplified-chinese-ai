@@ -35,6 +35,7 @@
 #include "SegmentAcousticAnalysis.h"
 #include "Harmonicity.h"
 #include "Sound_extensions.h"
+#include "../sys/Ui.h"
 
 #include "enums_getText.h"
 #include "Praat_tests_enums.h"
@@ -60,6 +61,11 @@ static void testData (Daata data) {
 static autoDaata newAutoData () {
 	autoDaata data (Thing_new (Daata));
 	return data;
+}
+
+static void uiFormRealOrUndefinedTestCallback (UiForm, integer, Stackel, conststring32,
+	Interpreter, conststring32, bool, void *, Editor)
+{
 }
 
 static bool segmentVOTFailsWith (const SegmentInput &input, std::optional<double> burstTime,
@@ -812,6 +818,26 @@ int Praat_tests (kPraatTests itest, conststring32 arg1, conststring32 arg2, cons
 			Melder_assert (str32str (tsv.string, U"synthetic\t42\tD:/recordings/synthetic.wav\t0.25\t0.75\t0.5\t16000\t1\tSound\tVOT\tboundaryMode=manualConfirmed; burstThresholdDb=6 dB\tzh") != nullptr);
 			Melder_assert (str32str (tsv.string, U"\t0\t0\tduration\t0\tms\tmeasured") != nullptr);
 			Melder_assert (str32str (tsv.string, U"\t0\t0\tA1-P0\t\tdB\tunavailable\tno P0 peak") != nullptr);
+		} break;
+		case kPraatTests::CHECK_UIFORM_REAL_OR_UNDEFINED: {
+			double boundary = 1.0;
+			autoUiForm form = UiForm_create (theCurrentPraatApplication -> topShell, nullptr,
+				U"UiForm REAL_OR_UNDEFINED regression", uiFormRealOrUndefinedTestCallback, nullptr,
+				U"UiForm REAL_OR_UNDEFINED regression", nullptr);
+			UiField field = UiForm_addRealOrUndefined (form.get(), & boundary, U"boundary", U"Boundary", U"undefined");
+			UiForm_finish (form.get());
+
+			UiForm_setReal (form.get(), & boundary, undefined);
+			autostring32 undefinedText = GuiText_getString (field -> text);
+			Melder_assert (str32equ (undefinedText.get(), U"undefined"));
+			UiForm_do (form.get(), true);
+			Melder_assert (isundef (boundary));
+
+			UiForm_setReal (form.get(), & boundary, 0.0);
+			autostring32 zeroText = GuiText_getString (field -> text);
+			Melder_assert (str32equ (zeroText.get(), U"0"));
+			UiForm_do (form.get(), true);
+			Melder_assert (boundary == 0.0);
 		} break;
 		case kPraatTests::CHECK_SEGMENT_VOT_BOUNDARIES: {
 			autoSound samples = Sound_create (1, -0.5, 0.5, 1000, 0.001, -0.4995);

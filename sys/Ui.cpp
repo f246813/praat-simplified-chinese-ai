@@ -2940,7 +2940,9 @@ void UiForm_setReal (UiForm me, double *p_variable, double value) {
 				case _kUiField_type::NONNEGATIVE_:
 				case _kUiField_type::POSITIVE_:
 				{
-					if (value == Melder_atof (field -> stringDefaultValue.get())) {
+					if (field -> type == _kUiField_type::REAL_OR_UNDEFINED_ && isundef (value)) {
+						GuiText_setString (field -> text, U"undefined");
+					} else if (value == Melder_atof (field -> stringDefaultValue.get())) {
 						GuiText_setString (field -> text, field -> stringDefaultValue.get());
 					} else {
 						char32 s [40];
