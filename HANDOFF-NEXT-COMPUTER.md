@@ -16,6 +16,7 @@ VOT 编辑器和 AI `vot` 工具已接入同一规范请求、后台模型对齐
 - VOT 专用 MFA 证据保留对齐边界与来源，但不把兼容用的固定 `0.85` 写成可信度。每次 MFA 调用使用独立临时 `MFA_ROOT_DIR`，避免多个入口争用全局语料数据库。
 - 编辑器轮询导致状态文件被短暂占用时，后台 worker 对原子替换做有限重试。
 - 模型辅助 VOT 只对塞音类目标运行声学边界检测；目标为鼻音等非塞音时返回 `failed / target_phone_not_stop`，不返回边界或数值 VOT。纯声学候选和人工确认模式不受该模型音素类型门控影响。
+- 模型辅助缺少语言或完整上下文音素时，共享服务返回 `requires_input`；SoundEditor 将状态显示为“需要补充输入”，并把这两种缺项原因翻译成中文提示。表单标明语言和音素序列为模型辅助必填、文字为可选，不猜测对象语言。
 - 本轮修复了全入口验收器的两处不稳定点：Praat 完成标记脚本不再引用未定义的 `info$`；读取编辑器 `state.json` 时对 Windows 瞬时文件占用进行最多 6 次、20–120 ms 间隔的重试。新增锁重试回归用例；聚焦 `ai.tests.test_vot_accuracy` 5 项通过（本轮文档更新后按用户要求未重跑测试）。
 
 本次新增准确性评估工具：
@@ -49,6 +50,8 @@ VOT 编辑器和 AI `vot` 工具已接入同一规范请求、后台模型对齐
 - 聚焦验证：`tests.test_forced_alignment`、`tests.test_vot_editor_worker`、`tests.test_vot_service` 共 32 项通过；另通过目标程序两个完整 VOT 入口和未缓存 AI 独立复算。没有运行低优先级全套测试。
 - 准确性仍未验收：缺少带两位标注者独立标注和裁定结果的真实日语塞音录音，无法计算真实边界误差；鼻音 `/n/` 回归录音不是 VOT 金标。合成样本及此前观察的 `+14 ms` 均不是金标。
 - 2026-09-28 检索可用日语人工 VOT 资料：[ISCA 的 Tohoku 日语研究](https://www.isca-archive.org/interspeech_2022/noguchi22_interspeech.html)报告了正／负区间 VOT，Julius 对齐后由一位受训语音学家修订、另一位语音学家确认；但 ISCA 页面只提供论文及 PDF，没有可下载的对应音频、逐样本边界和独立标注记录。[NINJAL 官方说明](https://clrd.ninjal.ac.jp/csj/en/)显示 CSJ 有免费在线版和付费离线版；[CSJ-RDB 说明](https://clrd.ninjal.ac.jp/csj/en/rdb-index.html)明确 RDB 不单独发行，只给 CSJ 持有者；[官方样例页](https://clrd.ninjal.ac.jp/csj/sample.html)提供压缩 MP3 示例及仅供购入者研究使用的两讲座 RDB 样例说明，不含可核验的逐条 VOT 金标及独立标注数据。wav2VOT 使用的 CSJ-C 停音边界／爆破标签见[论文](https://arxiv.org/abs/2606.28857)，但该数据本身无法由公开页面下载。本轮未下载或纳入这些材料；Task 8 仍需有合法使用权且能核对标注过程的真实音频及边界。
+- 2026-09-28 修复了空对齐输入的编辑器提示。最近的原生请求记录 `language=""`、`phonemes=[]`，而 Sound/LongSound 对象没有可复用的语言或音素元数据；服务在调用模型前按预期返回 `requires_input`。SoundEditor 现在用中文显示“需要补充输入”，分别说明语言代码和完整上下文音素序列要求，并保留同一共享服务状态。
+- 本轮以 Windows clang x64v3 构建项目根目录 `Praat.exe` 成功。`verify_segment_analysis_templates.py` 通过；`verify_vot_entrypoints.py` 通过，覆盖 15 次新鲜原生脚本、正／零／负人工边界以及模型辅助缺少输入路径。表单提示通过契约检查和编译验证；本轮未进行桌面鼠标点击复核。
 - 2026-09-28 针对日语 `ta` 起声偏晚修复了 C++ 候选算法：动态路径确认有声后，只在 20 ms 前置窗内回查连续的备选 F0 候选，要求频率与稳定路径相差不超过 20%、强度不低于音高阈值的 75%，且至少连续 `stableVoicedFrames` 帧；允许范围受释放点及最大预浊音时长约束。算法版本为 `context-pair-v4`，结果记录这些回查参数，起声来源标记为 `cpp:pitch-candidate-backtrack-and-hnr`。
 - 用 v4 目标程序直接运行真实 SoundEditor VOT 命令和已注册 AI `vot` 工具：二者请求哈希均为 `569120dd9c29385429e4edc8e6f1cf1b13b1fdb429cca38a4eb05eb41993a45c`，音频哈希均为 `1fc1f82035e68cd12f14565b9d9cb805d3eae2ae0cfa4d1f2b16e3379b9b490a`，目标 MFA `/t/` 样点区间均为 `[6615,10584)`，状态均为 `candidate`，爆破与起声样点均为 `[8238,10178]`，VOT 均为 `43.9909297052 ms`。该教育网页为首个 `ta` 给出的手工标注约 `43.283 ms`（爆破约 `0.186712 s`、起声约 `0.229996 s`）；本次边界绝对误差约为爆破 `0.09 ms`、起声 `0.79 ms`。原始录音 SHA-256 为 `559a3560c6d6fcafb2b4d7dbff0180ab1073b44bbe2336c7c39f2bbdf1534e72`，网页保留所有权利，音频只在本机临时目录使用，未提交。该来源只给出一份手工标注，未提供双人独立标注及裁定，因此这是定位 bug 的临时单例回归结果，不构成准确性验收。结果文件在 `D:\Praat-work\vot-unified-acceptance\education-gold\run-ja-ta-v4\entrypoint-result.json`。
 - v4 目前完成了一次两个实际入口的同请求一致性复核；没有为 v4 重跑多轮重复性／选区稳定性，也没有可核验的真实日语正／零／负、多爆破及持续有声双人裁定金标。先前 v3 的稳定性数据不能替代 v4 验收。仅按用户要求跳过了低优先级测试套件；原生构建及本条全入口检查已完成。
@@ -77,7 +80,7 @@ VOT 编辑器和 AI `vot` 工具已接入同一规范请求、后台模型对齐
 
 - `public/modern` 包含功能、评估工具和原生入口修复。`origin` 指向上游，只推到 `public`。
 - 本机还存在多份未跟踪的 `Praat-*.exe` 快照、`PraatZHcn.lnk` 和 `vot-analysis.tsv`；它们没有加入 Git，也没有删除。
-- `D:\Praat-work\Praat-root-before-vot-rounding-20260928.exe` 是本轮构建前临时保存并随后恢复根目录 `Praat.exe` 时留下的原版副本，没有加入 Git；正式新构建仅复制到上文的 VOT 验收目录。
+- `D:\Praat-work\Praat-root-before-vot-rounding-20260928.exe` 是保留的原版程序副本，没有加入 Git。项目根目录当前 `Praat.exe` 已于 2026-09-28 使用 clang x64v3 重建，属于忽略的本地构建产物；另一台电脑需要从源码重新构建。
 - 暂停期间源码保留在 D 盘；另一台电脑可从 `public` 克隆 `modern` 分支，不需要再套用旧的 `tracked-changes.patch`。
 
 ## 当前状态

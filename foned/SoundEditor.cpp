@@ -156,9 +156,21 @@ static void appendVotDisplayText (SoundEditor me, MelderString *text) {
 	} else if (! my votCalculationAttempted) {
 		MelderString_append (text, U"尚未计算");
 	} else if (! my votValueMs) {
-		MelderString_append (text, U"无法计算");
-		if (! my votFailureReason.empty())
-			MelderString_append (text, U"：", my votFailureReason.c_str());
+		if (my votResultStatus == U"requires_input") {
+			MelderString_append (text, U"需要补充输入");
+			if (my votFailureReason == U"language is required for model-assisted VOT")
+				MelderString_append (text,
+					U"：模型辅助自动需要语言代码；请填写与对齐模型相符的代码，或选择“纯声学候选”。");
+			else if (my votFailureReason == U"phoneme sequence is required for model-assisted VOT")
+				MelderString_append (text,
+					U"：模型辅助自动需要完整上下文音素序列（空格分隔）；如果没有音素序列，请选择“纯声学候选”。");
+			else if (! my votFailureReason.empty())
+				MelderString_append (text, U"：", my votFailureReason.c_str());
+		} else {
+			MelderString_append (text, U"无法计算");
+			if (! my votFailureReason.empty())
+				MelderString_append (text, U"：", my votFailureReason.c_str());
+		}
 	} else {
 		MelderString_append (text, Melder_fixed (my votValueMs.value(), 3), U" ms");
 		if (my votValueIsCandidate)
@@ -546,9 +558,9 @@ static void menu_cb_SoundEditor_VOT (SoundEditor me, EDITOR_ARGS) {
 			OPTION (U"人工确认")
 		REAL_OR_UNDEFINED (contextStartTime, U"固定上下文开始时间（s）", U"undefined")
 		REAL_OR_UNDEFINED (contextEndTime, U"固定上下文结束时间（s）", U"undefined")
-		WORD (language, U"语言代码", U"")
-		SENTENCE (transcript, U"完整语句文字", U"")
-		TEXTFIELD (phonemes, U"完整语句音素（空格分隔）", U"", 2)
+		WORD (language, U"语言代码（模型辅助必填）", U"")
+		SENTENCE (transcript, U"完整语句文字（可选）", U"")
+		TEXTFIELD (phonemes, U"完整上下文音素序列（模型辅助必填，空格分隔）", U"", 2)
 		NATURAL0 (targetPhoneIndex, U"目标音素序号（从 0 开始）", U"0")
 		REAL (burstThresholdDb, U"Minimum burst rise (dB)", U"6.0")
 		REAL (pitchFloorHz, U"Pitch floor (Hz)", U"75.0")

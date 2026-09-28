@@ -214,10 +214,10 @@ def verify_vot_editor_form_contract() -> None:
         'U"模型辅助自动"',
         'U"纯声学候选"',
         'U"人工确认"',
-        'U"完整语句音素（空格分隔）"',
+        'U"完整上下文音素序列（模型辅助必填，空格分隔）"',
         'U"固定上下文开始时间（s）"',
         'U"固定上下文结束时间（s）"',
-        'U"语言代码"',
+        'U"语言代码（模型辅助必填）"',
         'U"目标音素序号（从 0 开始）"',
         'U"人工确认模式需要同时填写爆破释放时刻和起声时刻。"',
     )
@@ -327,6 +327,21 @@ def verify_vot_open_calculation_contract() -> None:
     if "runVotAnalysis" in source or "praat_Sound_analyseVOT (" in callback:
         raise AssertionError("The editor must not retain a separate synchronous VOT algorithm path")
     apply = callback.split("EDITOR_DO", 1)[1]
+    display = source.split("static void appendVotDisplayText", 1)[1].split(
+        "static void updateVotFormDisplay", 1
+    )[0]
+    for item in (
+        'my votResultStatus == U"requires_input"',
+        'U"需要补充输入"',
+        'language is required for model-assisted VOT',
+        'phoneme sequence is required for model-assisted VOT',
+        "模型辅助自动需要语言代码",
+        "模型辅助自动需要完整上下文音素序列",
+    ):
+        if item not in source:
+            raise AssertionError(f"The editor must explain model-assisted VOT input requirements: {item}")
+    if display.index('my votResultStatus == U"requires_input"') > display.index('U"需要补充输入"'):
+        raise AssertionError("The shared requires_input status must be shown as an actionable prompt")
     control = PRAAT_AI_CONTROL_SOURCE.read_text(encoding="utf-8")
     for item in ("startVotEditorJob (me,", "editorSampleIndexAtTime", "my votMode = mode"):
         if item not in source:
