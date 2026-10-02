@@ -1,0 +1,31 @@
+{
+  "payload_files": 72,
+  "hashes_verified": 71,
+  "embedded_payload_matches": true,
+  "current_sources_match": true,
+  "no_user_config_audio_runtime": true,
+  "binaries": {
+    "AIPraat-install.exe": {
+      "bytes": 56220672,
+      "sha256": "f79c21296bfb68e8c74636cf88ec9f53630803722349171ee7921f677b744aa9"
+    },
+    "AIPraat-paths.exe": {
+      "bytes": 154624,
+      "sha256": "f6890f38517b4f589448ae7473754e4f78f6aa08b6b8276d6c2d1cd0f4fcb2ed"
+    },
+    "Praat.exe": {
+      "bytes": 98873344,
+      "sha256": "777b54ff1ed57484be27aba83f79c22c62b87c3ce8406b2a4f2b0f3b8e7ab37f"
+    }
+  },
+  "wheel_closure": {
+    "310": {
+      "files": 31,
+      "MiB": 9.76
+    },
+    "314": {
+      "files": 31,
+      "MiB": 9.78
+    }
+  }
+}

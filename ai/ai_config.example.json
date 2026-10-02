@@ -7,9 +7,10 @@
     "default_mode": "text",
     "enable_thinking": false,
     "vision_when_requested": true,
-    "max_context_tokens": 8192,
+    "limit_tokens": true,
+    "max_context_tokens": 32768,
     "keep_alive_sec": 300,
-    "plan_max_tokens": 700,
+    "plan_max_tokens": 4096,
     "plan_temperature": 0.1
   },
   "api": {
@@ -19,6 +20,7 @@
     "model": "deepseek-chat",
     "api_key": "",
     "request_timeout_sec": 120,
+    "limit_tokens": false,
     "max_context_tokens": 32768,
     "plan_max_tokens": 1500,
     "plan_temperature": 0.1,
@@ -48,7 +50,7 @@
         "vision": true,
         "context_tokens": 8192,
         "qwen": {
-          "plan_max_tokens": 700,
+          "plan_max_tokens": 4096,
           "enable_thinking": false
         }
       },

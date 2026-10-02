@@ -1,0 +1,42 @@
+test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) ... 
+  test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) (text='This model does not support outputting audio.') ... FAIL
+  test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) (text='This model does not support generating audio.') ... FAIL
+  test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) (text='��ģ�Ͳ�֧�������Ƶ') ... FAIL
+  test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) (text='��ģ�Ͳ�֧��������Ƶ') ... FAIL
+
+======================================================================
+FAIL: test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) (text='This model does not support outputting audio.')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_staircase_review_fixes.py", line 263, in test_input_capability_errors_exclude_output_and_tts
+    self.assertEqual(is_audio_unsupported(400, text), expected)
+AssertionError: True != False
+
+======================================================================
+FAIL: test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) (text='This model does not support generating audio.')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_staircase_review_fixes.py", line 263, in test_input_capability_errors_exclude_output_and_tts
+    self.assertEqual(is_audio_unsupported(400, text), expected)
+AssertionError: True != False
+
+======================================================================
+FAIL: test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) (text='��ģ�Ͳ�֧�������Ƶ')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_staircase_review_fixes.py", line 263, in test_input_capability_errors_exclude_output_and_tts
+    self.assertEqual(is_audio_unsupported(400, text), expected)
+AssertionError: True != False
+
+======================================================================
+FAIL: test_input_capability_errors_exclude_output_and_tts (ai.tests.test_staircase_review_fixes.ReviewFixTests.test_input_capability_errors_exclude_output_and_tts) (text='��ģ�Ͳ�֧��������Ƶ')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_staircase_review_fixes.py", line 263, in test_input_capability_errors_exclude_output_and_tts
+    self.assertEqual(is_audio_unsupported(400, text), expected)
+AssertionError: True != False
+
+----------------------------------------------------------------------
+Ran 1 test in 0.019s
+
+FAILED (failures=4)

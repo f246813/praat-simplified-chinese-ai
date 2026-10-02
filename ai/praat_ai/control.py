@@ -294,6 +294,16 @@ def _launch_server(
     *,
     progress: ProgressSink | None = None,
 ) -> dict[str, Any]:
+    candidate = Path(config_path) if config_path else default_config_path()
+    if not candidate.is_file() and (
+        not config.server.llama_server.strip() or not config.server.model_path.strip()
+    ):
+        raise QwenServerError(
+            f"AI 配置文件不存在：{candidate}。"
+            "请将同目录的 ai_config.example.json 复制为 ai_config.json，"
+            "并设置 server.llama_server 和 server.model_path；"
+            "也可以设置 PRAAT_AI_LLAMA_SERVER 和 PRAAT_AI_QWEN_MODEL_PATH 环境变量。"
+        )
     _progress(0.05, "检查显卡与运行参数…", progress)
     gpu = detect_gpu()
     preset = active_preset(config)
@@ -455,24 +465,60 @@ def reconcile_api_transition(
         return ensure_local_service(config, config_path, progress=progress)
 
 
+def activate_api(
+    config_path: str | Path | None = None,
+    *,
+    progress: ProgressSink | None = None,
+) -> dict[str, Any]:
+    """从顶部模型菜单切换到上次配置的 API；首次使用选服务商菜单首项。"""
+
+    from .api_settings import PROVIDERS
+
+    config = load_config(config_path)
+    values: dict[str, Any] = {"enabled": True}
+    has_url = bool(config.api.base_url.strip())
+    has_model = bool(config.api.model.strip())
+    if has_url != has_model:
+        raise ValueError("API 地址和模型名需要同时配置，请在 API 配置中补全。")
+    if not has_url:
+        first = PROVIDERS[0]
+        for key in ("label", "base_url", "model"):
+            if not str(getattr(config.api, key) or "").strip():
+                values[key] = first[key]
+    update_config({"api": values}, config_path)
+    return reconcile_api_transition(config_path, progress=progress)
+
+
 def update_config(
-    values: dict[str, Any],
+    values: dict[str, Any] | Callable[[], dict[str, Any]],
     config_path: str | Path | None = None,
 ) -> dict[str, Any]:
     path = Path(config_path) if config_path else default_config_path()
-    if path.is_file():
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    else:
-        payload = load_config(config_path).to_dict()
+    from .service_lock import service_transition_lock
+    import tempfile
 
-    for section, section_values in values.items():
-        target = payload.setdefault(section, {})
-        target.update(section_values)
+    # Shared with the native path dialog: reread and merge while owning this lock.
+    with service_transition_lock(Path(str(path) + ".lock")):
+        if path.is_file():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            payload = load_config(config_path).to_dict()
 
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+        changes = values() if callable(values) else values
+        for section, section_values in changes.items():
+            target = payload.setdefault(section, {})
+            target.update(section_values)
+
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                             prefix=path.name + ".", suffix=".tmp", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return collect_status(path)
 
 
@@ -545,6 +591,8 @@ def apply_preset(
     """切换到配置里声明的模型预设（必要时真正重启 llama-server）。"""
 
     config = load_config(config_path)
+    if config.api.locked or (api_is_active(config) and config.api.stop_local_service):
+        raise PresetError("本地模型已禁用；请先在 API 配置中解除云端锁定并取消停用本地模型服务。")
     presets = config.server.presets or []
     if not presets:
         raise PresetError(

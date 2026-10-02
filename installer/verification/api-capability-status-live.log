@@ -1,0 +1,17 @@
+{
+  "checks": [
+    "real_Tk_mainloop",
+    "background_probe_SDK_400",
+    "short_code_model_before_preset_and_test",
+    "readonly_redacted_details",
+    "fits_screen_height"
+  ],
+  "python": "3.14.8",
+  "tk": 9.0,
+  "ok": true,
+  "visible_label": "status code: 400 · model: qwen3.7-flash\n模型预设：不支持直接音频输入（官方文档）\n音频实测：未能验证——资源 URL 或请求参数错误\n当前设置：直接音频输入已关闭",
+  "footer": "音频实测：未能验证——资源 URL 或请求参数错误",
+  "label_required_height": 86,
+  "window_required_height": 816,
+  "screen_height": 1080
+}

@@ -1,0 +1,9 @@
+PASS path_menu_immediately_below_add_model
+PASS dialog_opens_without_usable_python_with_three_fields
+PASS cancel_leaves_configuration_unchanged
+PASS valid_python_enables_save
+PASS save_keeps_model_api_flags_and_updates_installation
+PASS saved_python_applied_to_current_praat_within_one_second
+PASS saved_python_refills_on_reopen
+PASS new_python_survives_praat_exit_and_dialog_follows_parent
+Artifacts: C:\Users\f2468\AppData\Local\Temp\AIPraat-live-paths-9puxif68

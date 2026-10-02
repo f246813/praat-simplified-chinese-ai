@@ -1,0 +1,20 @@
+test_completed_turn_collapses_only_its_process_and_shows_elapsed_time (test_chat_process_fold.ProcessFoldTests.test_completed_turn_collapses_only_its_process_and_shows_elapsed_time) ... ok
+test_empty_process_and_failed_response_still_finish (test_chat_process_fold.ProcessFoldTests.test_empty_process_and_failed_response_still_finish) ... ok
+test_right_click_after_a_long_answer_really_displays_the_process (test_chat_process_fold.ProcessFoldTests.test_right_click_after_a_long_answer_really_displays_the_process) ... ok
+test_right_click_does_not_require_a_prior_motion_event_on_the_header (test_chat_process_fold.ProcessFoldTests.test_right_click_does_not_require_a_prior_motion_event_on_the_header) ... ok
+test_right_click_expands_and_collapses_preserving_the_process (test_chat_process_fold.ProcessFoldTests.test_right_click_expands_and_collapses_preserving_the_process) ... ok
+test_right_click_far_from_any_header_does_nothing (test_chat_process_fold.ProcessFoldTests.test_right_click_far_from_any_header_does_nothing) ... ok
+test_right_click_in_the_row_gap_above_the_header_still_toggles (test_chat_process_fold.ProcessFoldTests.test_right_click_in_the_row_gap_above_the_header_still_toggles)
+���������Ϸ������о��û���ַ���@x,y ���ڱ����б�����Ҳ�����ܵ㿪�� ... ok
+test_right_click_on_the_arrow_itself_expands_and_collapses (test_chat_process_fold.ProcessFoldTests.test_right_click_on_the_arrow_itself_expands_and_collapses) ... ok
+test_right_click_on_the_blank_tail_of_the_header_still_toggles (test_chat_process_fold.ProcessFoldTests.test_right_click_on_the_blank_tail_of_the_header_still_toggles)
+�������Ҳ�û�����ֵĿհף�@x,y �䵽��β����ǰ�Ҽ�û��Ӧ�� ... ok
+test_right_click_one_row_below_the_header_expands_the_collapsed_process (test_chat_process_fold.ProcessFoldTests.test_right_click_one_row_below_the_header_expands_the_collapsed_process)
+����������һ�е��о࣬ͬһ������ȥҲҪ��չ������������ ... ok
+test_stopped_turn_keeps_its_process_available (test_chat_process_fold.ProcessFoldTests.test_stopped_turn_keeps_its_process_available) ... ok
+test_turns_toggle_independently_and_keep_hints_after_the_answer (test_chat_process_fold.ProcessFoldTests.test_turns_toggle_independently_and_keep_hints_after_the_answer) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 6.064s
+
+OK

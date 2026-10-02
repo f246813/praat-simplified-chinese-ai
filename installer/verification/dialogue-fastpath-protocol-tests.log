@@ -1,0 +1,13 @@
+test_cancelled_socket_does_not_break_the_next_turn (test_dialogue_protocol.DialogueProtocolTests.test_cancelled_socket_does_not_break_the_next_turn) ... ok
+test_clean_http_eof_without_a_completion_marker_is_partial (test_dialogue_protocol.DialogueProtocolTests.test_clean_http_eof_without_a_completion_marker_is_partial) ... ok
+test_disconnect_after_first_text_is_not_retried_or_saved_as_complete (test_dialogue_protocol.DialogueProtocolTests.test_disconnect_after_first_text_is_not_retried_or_saved_as_complete) ... ok
+test_optional_protocol_tail_is_bounded_after_done (test_dialogue_protocol.DialogueProtocolTests.test_optional_protocol_tail_is_bounded_after_done) ... ok
+test_output_token_truncation_is_not_published_as_complete (test_dialogue_protocol.DialogueProtocolTests.test_output_token_truncation_is_not_published_as_complete) ... ok
+test_qwen_off_is_in_actual_request_and_first_text_precedes_finish (test_dialogue_protocol.DialogueProtocolTests.test_qwen_off_is_in_actual_request_and_first_text_precedes_finish) ... ok
+test_rejected_forced_high_is_not_silently_disabled_and_retried (test_dialogue_protocol.DialogueProtocolTests.test_rejected_forced_high_is_not_silently_disabled_and_retried) ... ok
+test_same_socket_reused_and_changed_force_setting_applies_immediately (test_dialogue_protocol.DialogueProtocolTests.test_same_socket_reused_and_changed_force_setting_applies_immediately) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 4.987s
+
+OK

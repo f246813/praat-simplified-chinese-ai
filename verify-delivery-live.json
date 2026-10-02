@@ -1,0 +1,70 @@
+{
+  "praat": "C:\\Users\\f2468\\Desktop\\Praat\\稳定早期版\\Praat.exe",
+  "pids": [
+    804
+  ],
+  "checks": [
+    {
+      "check": "Praat 消息文件可写（2026-10-02 的故障点）",
+      "ok": true,
+      "detail": "C:\\Users\\f2468\\AppData\\Roaming\\Praat\\Message.txt"
+    },
+    {
+      "check": "对象列表刷新（真实投递 Message.txt + WM_APP）",
+      "ok": true,
+      "detail": "已刷新"
+    },
+    {
+      "check": "投递成功时投递事实 = DELIVERED",
+      "ok": true,
+      "detail": "ok=True outcome=['delivered'] "
+    },
+    {
+      "check": "合成声音已建立并成为当前选择",
+      "ok": true,
+      "detail": "新对象 [1]"
+    },
+    {
+      "check": "真实 Praat 里跑完 vot（from/to 自动估计）",
+      "ok": true,
+      "detail": "VOT 估计值 = 0.0240 秒（24.0 毫秒）：爆破 0.030 秒（高频带 2–8 kHz 能量升 27.0 dB）→ 浊音起始 0.054 秒（自相关基频 121.0 Hz，之后 50 毫秒内谐噪比最高 96.2 dB）；范围 0–0.200 秒；爆破与浊音起始分开估计，请对着语图核对"
+    },
+    {
+      "check": "自动估计落在合理区间（合成真值 15 毫秒，允许 5–60 毫秒）",
+      "ok": true,
+      "detail": "24.0 毫秒"
+    },
+    {
+      "check": "这一条调用的投递事实也是 DELIVERED",
+      "ok": true,
+      "detail": "['delivered']"
+    },
+    {
+      "check": "给出两个时刻时 VOT = 15.0 毫秒（0.045 − 0.030）",
+      "ok": true,
+      "detail": "VOT = 0.0150 秒（15.0 毫秒）：0.030 秒（爆破）→ 0.045 秒（浊音起始）；按给出的两个时刻相减，未做自动检测"
+    },
+    {
+      "check": "写不进消息文件 → NOT_DELIVERED（不是状态不明）",
+      "ok": true,
+      "detail": "['not_delivered'] 无法写入 Praat 消息文件（C:\\Users\\f2468\\AppData\\Roaming\\Praat）：[Errno 13] Permission denied: 'C:\\\\Users\\\\f2468\\\\AppData\\\\Roaming\\\\Praat'"
+    },
+    {
+      "check": "报告上下文带上真实失败原因",
+      "ok": true,
+      "detail": "{\"original_goal\": \"测量选中这段的vot\", \"deliveries\": [\"测量选中这段的vot\"], \"direction\": \"\", \"target_material\": [{\"id\": 1, \"class\": \"Sound\", \"name\": \"Sound vot-live\", \"selection\": null}], \"evidence\": [], \"missing_reason\": \"\", \"paused_branches\": {}, \"audio_input\": false, \"blocked_attempts\": [{\"tool\": \"export_origi"
+    },
+    {
+      "check": "把真实录音读回对象列表（あなた.wav）",
+      "ok": true,
+      "detail": "あなた.wav"
+    },
+    {
+      "check": "按选区 0.437403–0.635206 秒跑同一条 vot（用户原话那条路）",
+      "ok": true,
+      "detail": "VOT 估计值 = 0.0380 秒（38.0 毫秒）：爆破 0.551 秒（高频带 2–8 kHz 能量升 18.4 dB）→ 浊音起始 0.589 秒（自相关基频 77.0 Hz，之后 50 毫秒内谐噪比最高 13.4 dB）；范围 0.437–0.635 秒；爆破与浊音起始分开估计，请对着语图核对"
+    }
+  ],
+  "user_vot": "VOT 估计值 = 0.0380 秒（38.0 毫秒）：爆破 0.551 秒（高频带 2–8 kHz 能量升 18.4 dB）→ 浊音起始 0.589 秒（自相关基频 77.0 Hz，之后 50 毫秒内谐噪比最高 13.4 dB）；范围 0.437–0.635 秒；爆破与浊音起始分开估计，请对着语图核对",
+  "ok": true
+}

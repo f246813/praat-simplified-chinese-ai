@@ -225,6 +225,16 @@ class QwenServerManager:
         if not self.config.server.auto_start:
             return False
 
+        if not self.config.server.llama_server.strip():
+            raise QwenServerError(
+                "未配置 llama-server 路径。请检查 ai_config.json 的 server.llama_server，"
+                "或设置 PRAAT_AI_LLAMA_SERVER 环境变量。"
+            )
+        if not self.config.server.model_path.strip():
+            raise QwenServerError(
+                "未配置本地模型路径。请检查 ai_config.json 的 server.model_path，"
+                "或设置 PRAAT_AI_QWEN_MODEL_PATH 环境变量。"
+            )
         server = Path(self.config.server.llama_server)
         model = Path(self.config.server.model_path)
         if not server.is_file():

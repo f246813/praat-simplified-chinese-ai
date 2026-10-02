@@ -1,0 +1,36 @@
+{
+  "python": "3.14.8",
+  "tk": 9.0,
+  "first_visible_seconds": 0.2845099999685772,
+  "finished_seconds": 0.8474323999835178,
+  "status": "complete",
+  "metrics": {
+    "first_text_seconds": 0.13561500003561378,
+    "request_timings": [
+      {
+        "request": 1,
+        "phase": "chat",
+        "retry": false,
+        "status": "complete",
+        "elapsed_seconds": 0.6348260999657214
+      }
+    ],
+    "effective_thinking_level": "off",
+    "total_seconds": 0.7045688999933191,
+    "requests": 1,
+    "input_tokens": 30,
+    "output_tokens": 15,
+    "reasoning_tokens": 7
+  },
+  "requests": 1,
+  "ok": true,
+  "checks": [
+    "actual_ChatWindow_submit_worker_queue_mainloop",
+    "SDK_localhost_SSE",
+    "first_visible_before_completion",
+    "one_request_one_saved_final",
+    "process_hint_preserved",
+    "advanced_force_save_reopen_fits_screen",
+    "client_thread_closed"
+  ]
+}

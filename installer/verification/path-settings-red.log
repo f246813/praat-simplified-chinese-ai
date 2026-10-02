@@ -1,0 +1,16 @@
+FAIL path_edit_keeps_model_api_and_unknown_settings: 路径配置功能尚未实现：PathSettings
+FAIL projection_updates_current_model_binding_and_preset_only: 路径配置功能尚未实现：PathSettings
+FAIL clearing_projection_removes_binding_and_disables_preset_vision: 路径配置功能尚未实现：PathSettings
+FAIL no_model_configured_does_not_invent_model_or_preset: 路径配置功能尚未实现：PathSettings
+FAIL load_prefers_running_python_and_reads_optional_paths: 路径配置功能尚未实现：PathSettings
+FAIL dialog_opens_without_python_and_cancel_leaves_files_unchanged: 路径配置功能尚未实现：PathSettings
+FAIL save_syncs_installation_preferences_result_and_config: 路径配置功能尚未实现：PathSettings
+FAIL locked_preferences_roll_back_config_and_install_settings: 路径配置功能尚未实现：PathSettings
+FAIL invalid_paths_do_not_write_any_files: 路径配置功能尚未实现：PathSettings
+FAIL concurrent_config_edits_are_merged_from_latest_file: 路径配置功能尚未实现：PathSettings
+RESULT 0 passed, 10 failed; artifacts=C:\Users\f2468\AppData\Local\Temp\AIPraat-path-tests-1656f27d43504624a2dbbf74384f2a34
+Exception: C:\Users\f2468\Desktop\Praat\稳定早期版\installer\tests\Run-PathTests.ps1:12
+Line |
+  12 |  if ($LASTEXITCODE -ne 0) { throw 'Path configuration tests failed.' }
+     |                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Path configuration tests failed.

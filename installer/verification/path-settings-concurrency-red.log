@@ -1,0 +1,20 @@
+PASS path_edit_keeps_model_api_and_unknown_settings
+PASS projection_updates_current_model_binding_and_preset_only
+PASS clearing_projection_removes_binding_and_disables_preset_vision
+PASS no_model_configured_does_not_invent_model_or_preset
+PASS unchanged_optional_paths_preserve_auto_start_and_vision_choices
+PASS projection_edit_preserves_another_preset_for_same_model
+PASS load_prefers_running_python_and_reads_optional_paths
+PASS dialog_opens_without_python_and_cancel_leaves_files_unchanged
+PASS save_syncs_installation_preferences_result_and_config
+PASS locked_preferences_roll_back_config_and_install_settings
+PASS invalid_paths_do_not_write_any_files
+PASS concurrent_config_edits_are_merged_from_latest_file
+FAIL model_switch_while_dialog_open_rejects_stale_projection: 旧窗口覆盖了新模型的投影
+FAIL config_writer_lock_prevents_overlapping_path_write: 未与 API/模型写入共享锁
+RESULT 12 passed, 2 failed; artifacts=C:\Users\f2468\AppData\Local\Temp\AIPraat-path-tests-108ca1ead878475da12c956e62ae3a46
+Exception: C:\Users\f2468\Desktop\Praat\稳定早期版\installer\tests\Run-PathTests.ps1:12
+Line |
+  12 |  if ($LASTEXITCODE -ne 0) { throw 'Path configuration tests failed.' }
+     |                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Path configuration tests failed.

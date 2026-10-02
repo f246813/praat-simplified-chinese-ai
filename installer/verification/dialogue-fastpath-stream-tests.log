@@ -1,0 +1,11 @@
+test_cancellation_does_not_publish_partial_as_complete (test_dialogue_stream.DialogueStreamTests.test_cancellation_does_not_publish_partial_as_complete) ... ok
+test_failure_after_first_chunk_does_not_retry_or_duplicate_text (test_dialogue_stream.DialogueStreamTests.test_failure_after_first_chunk_does_not_retry_or_duplicate_text) ... ok
+test_fast_workflow_does_not_prepare_praat_or_task_materials (test_dialogue_stream.DialogueStreamTests.test_fast_workflow_does_not_prepare_praat_or_task_materials) ... ok
+test_forced_high_is_sent_for_ordinary_conversation (test_dialogue_stream.DialogueStreamTests.test_forced_high_is_sent_for_ordinary_conversation) ... ok
+test_one_plain_request_streams_before_completion (test_dialogue_stream.DialogueStreamTests.test_one_plain_request_streams_before_completion) ... ok
+test_reuses_same_loop_and_model_then_replaces_changed_identity (test_dialogue_stream.RuntimeTests.test_reuses_same_loop_and_model_then_replaces_changed_identity) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.697s
+
+OK

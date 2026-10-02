@@ -1,0 +1,35 @@
+{
+  "installer": "C:\\Users\\f2468\\Desktop\\Praat\\稳定早期版\\AIPraat-install.exe",
+  "size": 55732224,
+  "sha256": "ed2e8abc91ada789983e22fc7c0979df2be28cf8c00fcb70c7cd4dc6b88fbdb0",
+  "payload_files": 74,
+  "hashes_verified": 73,
+  "embedded_payload_matches": true,
+  "current_sources_match": true,
+  "no_user_config_audio_runtime": true,
+  "praat_unchanged_since_last_pack": true,
+  "previous_installer_sha256": "F79C21296BFB68E8C74636CF88EC9F53630803722349171EE7921F677B744AA9",
+  "changed_or_new_entries": [
+    "AIPraat-paths.exe",
+    "AIPraat.exe",
+    "ai/praat_ai/chat.py",
+    "ai/praat_ai/cloud_agent.py",
+    "ai/praat_ai/cloud_workflow.py",
+    "ai/praat_ai/delivery.py",
+    "ai/tools/launch_praat_medium.py"
+  ],
+  "binaries": {
+    "AIPraat-install.exe": {
+      "bytes": 55732224,
+      "sha256": "ed2e8abc91ada789983e22fc7c0979df2be28cf8c00fcb70c7cd4dc6b88fbdb0"
+    },
+    "AIPraat-paths.exe": {
+      "bytes": 154624,
+      "sha256": "3a39239c797834687c9be7a2ead68d1d47ce11c0c88eb8acce3d14fa28bc25b4"
+    },
+    "Praat.exe": {
+      "bytes": 98873344,
+      "sha256": "777b54ff1ed57484be27aba83f79c22c62b87c3ce8406b2a4f2b0f3b8e7ab37f"
+    }
+  }
+}

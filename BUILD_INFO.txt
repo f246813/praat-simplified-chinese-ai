@@ -1,0 +1,127 @@
+Source commit: 2f699d8a5382a3965adf364c9e6561a1bcc90291
+Source date: 2026-09-24 14:19:00 +08:00
+Source title: fix(ai): stabilize UI and frontend service transitions
+Export: git archive snapshot; this folder is not a Git working tree.
+Build: make PRAAT_ARCH=x64v3 -j12
+Compiler: MSYS2 CLANG64 / clang 22.1.8
+Result: successful link; Praat.exe generated.
+Original snapshot Praat.exe SHA-256:
+01D8CB0F81B9C5ABE1C49D22AE48AB806AAB25146D45EA46DD67A86004D91A4A
+
+UI-only update: 2026-09-29
+UI reference: D:\Praat-work\praat-simplified-chinese (Objects window layout)
+Changed source files: sys/Gui.h, sys/GuiP.h, sys/GuiButton.cpp,
+sys/GuiMenu.cpp, sys/machine.cpp, sys/motifEmulator.cpp, sys/praat_actions.cpp.
+All other 3528 original source/config/test files match the pre-update hashes.
+No AI, VOT, editor or acoustic-analysis implementation imported from the new version.
+Build: make PRAAT_ARCH=x64v3 -j12; exit 0.
+Live UI verification: passed at 96 DPI, including scrollbar-transition submenu widths.
+Full batch suite: not fully passed; original GUI-only and translated-error assertions
+were reproduced with the original executable. See UI port notes for details.
+Current Praat.exe SHA-256:
+6D6020954EAB4AD4D08C4A24FD589B72FE5530AD79CCE0DD67D5580EF1818EEC
+
+Frontend startup repair: 2026-09-29
+Restored ai/ai_config.json from this machine's configured main checkout.
+The git archive snapshot contained only ai_config.example.json; the actual
+configuration was ignored by Git, leaving the server and model paths empty.
+Changed Python sources: ai/praat_ai/control.py, ai/praat_ai/server.py.
+Missing configuration and blank startup paths now produce actionable messages.
+Added regression coverage: ai/tests/test_startup_config.py.
+Validation: all 536 AI unit tests passed; real model cold start and shutdown
+passed on an isolated temporary port; configured service and chat window started.
+Logs: verify-ai-startup-tests.log, verify-ai-startup-live.log.
+Original Python files: D:\Praat-work\稳定早期版-前端修复备份-20260929.
+No C++ source changes or executable rebuild were needed for this repair.
+
+VOT chat dispatch repair: 2026-09-29
+Recognized complete VOT commands now dispatch directly to the existing VOT tool.
+Only explicit user landmarks are used for subtraction; search windows remain
+search windows. Successful measurements include the formula and tool results.
+Missing VOT values, invalid ranges/landmarks/selections and incompatible explicit
+objects produce an incomplete-measurement message instead of metadata success.
+Invalid effective VOT ranges no longer fall back to the whole recording.
+Model finish_reason=length is rejected before partial calls execute. Completed
+tool results survive a truncated explanation; raw reasoning is not a final reply.
+Complex, negated and explanatory requests retain normal model planning.
+Files: ai/praat_ai/chat.py, qwen.py, tools.py, new vot_request.py.
+Tests: new test_vot_dispatch.py and verify_vot_dispatch.py.
+Validation: 555 unit tests, 98 real Praat template cases, 5 VOT dispatch cases.
+Live original Sound/editor selection: VOT estimate 29.0 ms; formula displayed.
+Live model truncation: rejected a length-limited response without executing tools.
+Logs: verify-vot-dispatch-unittest.log, verify-vot-dispatch-templates.log,
+verify-vot-dispatch-praat.json, verify-vot-dispatch-model.json,
+verify-vot-dispatch-live.json, verify-vot-dispatch-window.json.
+Source backup: D:\Praat-work\稳定早期版-VOT调用修复备份-20260929-153403.
+No model-setting change or C++ rebuild was required.
+
+Object workflow / API prompt stage: 2026-09-29
+Python: per-step object refresh, type-safe templates, cloud-specific prompts,
+invalid argument rejection, whole-recording selection handling and tool budgets.
+C++: protocol=2; atomically publish context; finish request-id after errors/context.
+Built Praat-fixed.exe with CLANG64, PRAAT_ARCH=x64v3; version command passed.
+SHA256: 31E748DE244059237B72817C3D79C1CE422D34D4D3A49012EBBE33341C1E046F
+Validation: 596/596 AI unittest; 5/5 isolated native callback completion checks.
+Logs: verify-object-workflow-tests.log, verify-object-workflow-build.log,
+verify-callback-completion.log. No live cloud API request or user audio sent.
+User's old Praat.exe (PID 10600 at handoff) was preserved; Praat-fixed.exe has
+not replaced it. Close the old frontend and Praat before loading the new version.
+User requested stage handoff due quota; further integration/review is deferred.
+Current authoritative state and pending work: ai/HANDOFF.md latest 2026-09-29 section.
+Backup: D:\Praat-work\稳定早期版-对象工作流修复备份-20260929.
+
+Native Python workspace startup repair: 2026-10-02
+Low-integrity Praat now uses Windows LocalLow/Praat/Python; ordinary processes
+retain standard TEMP. Known-folder lookup has balanced COM initialization.
+Sources: sys/praat_python.cpp, sys/praat_python_workspace.h, Windows Makefile libs.
+CLANG64 rebuilt Python runner and relinked complete Praat from the prior native
+library baseline. Root Praat.exe and AIPraat-install.exe are synchronized.
+Praat.exe SHA256: 777B54FF1ED57484BE27ABA83F79C22C62B87C3CE8406B2A4F2B0F3B8E7AB37F
+Installer SHA256: 06755D1E88FA452958FA93FCD746A9D17A4A4436AD2F8D7396C864BD0FD629DB
+Validation: 726 AI tests, 21 installer contracts, 5 native integrity/COM tests;
+real low-integrity frontend callback, selected Python, Unicode WAV and Tk window;
+67 payload hashes and embedded ZIP match. No user audio/cloud request used.
+Running original PID 23636 was preserved. Save objects and restart to load fix.
+Acceptance: docs/2026-10-02-前端临时目录修复验收.md
+Backup: backups/frontend-workspace-20261002/
+
+API audio capability diagnostic repair: 2026-10-02
+Errors show short status code and model before preset and audio test status.
+Separate documented/inferred presets, verified/unsupported/unverified/cancelled
+observations and the current manual setting. Generic URL 400 stays unverified.
+Readonly details redact credentials; text connection tests are labeled text-only.
+Saved observations are bound to URL/model/key/adapter; stale callbacks and old
+dialogs cannot overwrite newer runtime corrections. Later manual edits still work.
+Changed Python: api_settings.py, audio_probe.py, model_capabilities.py, config.py;
+added api_diagnostics.py and 22 focused regression tests.
+Validation: 748 AI tests, 21 installer contracts; independent 22-test review;
+selected Python 3.14.8/Tk 9 focused tests and real mainloop/SDK-400 fixture passed.
+69 payload entries / 68 hashes and EXE embedded ZIP match current sources.
+No real cloud API request or user audio used; no native source/build this stage.
+Praat.exe SHA256 remains 777B54FF1ED57484BE27ABA83F79C22C62B87C3CE8406B2A4F2B0F3B8E7AB37F
+Installer SHA256: A0F0EE8CF8234D654C81517BD4E4CDD49DB28917C781F21B0913E54D8815B28D
+Acceptance: docs/2026-10-02-API音频能力状态修复验收.md
+Backup: backups/api-capability-status-20261002/
+Restart the chat frontend, or reopen the standalone API settings window.
+
+Ordinary dialogue latency optimization: 2026-10-02
+API advanced setting force_deep_thinking defaults false and only affects high.
+High ordinary chat uses thinking off unless forced; concept/analysis preserve
+selected effort. Other manual levels retain meaning. Official Qwen3 hybrid
+uses enable_thinking/thinking_budget. Forced fields are not silently discarded.
+Conservative ordinary/concept routing uses one streamed text request and defers
+objects, materials and tool schema. Exact selected/current duration can directly
+use the existing validated tool, unless highest thinking is forced.
+Window-scoped loop/client reuse, bounded SSE tail consumption and timing/usage
+records. Cancelled, truncated, broken and unmarked EOF results are incomplete.
+Independent review findings fixed; final 786 AI tests and 21 contracts passed.
+Selected Python 3.14.8/Tk9 covered 72 tests: one boolean assertion representation
+fixed and 3 UI checks re-passed; other 71 and both real mainloop checks passed.
+Real advanced layout fits 1080 screen; Save remains reachable by scrolling.
+72 payload entries / 71 hashes; EXE embedded ZIP and current sources match.
+No real cloud API or user audio used. No native Praat compilation this stage.
+Praat.exe SHA256: 777B54FF1ED57484BE27ABA83F79C22C62B87C3CE8406B2A4F2B0F3B8E7AB37F
+Installer SHA256: F79C21296BFB68E8C74636CF88EC9F53630803722349171EE7921F677B744AA9
+Acceptance: docs/2026-10-02-普通对话响应优化验收.md
+Backup: backups/dialogue-fastpath-20261002-d5ed1a31/
+Restart the chat frontend and reopen API advanced settings to use the new control.

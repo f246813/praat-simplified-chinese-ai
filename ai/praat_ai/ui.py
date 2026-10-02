@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from .audio import read_wav
 from .bridge import SelectedObject
 from .models import AnalysisRequest, PhoneSpec
-from . import ui_theme, ui_widgets
+from . import ui_theme, ui_widgets, ui_windows
 
 
 @dataclass(slots=True)
@@ -45,7 +45,7 @@ def show_tutor_form(sound_objects: list[SelectedObject]) -> TutorFormValues:
     if len(sound_objects) < 2:
         raise ValueError("AI 纠音需要至少两个已选中的 Sound 对象。")
 
-    root = tk.Tk()
+    root = ui_windows.create_root()
     theme = ui_theme.Theme(root)
     root.title("Praat 本地 AI 纠音")
     root.resizable(False, False)

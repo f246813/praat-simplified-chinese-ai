@@ -87,6 +87,9 @@ class Case:
     custom_script: str = ""
     tool: str = ""
     tags: tuple[str, ...] = field(default_factory=tuple)
+    #: 这个用例**必须失败**（脚本中途 exitScript）。此时不该写出 chat_state.txt，
+    #: ``expect`` 改成在 Praat 的标准输出里找。见 run_case()。
+    expect_error: bool = False
 
 
 def _measure_cases() -> tuple[Case, ...]:
@@ -155,6 +158,16 @@ CASES: tuple[Case, ...] = (
         tool="pitch",
     ),
     Case("pitch_statistics", {}, SOUND, ONE_SOUND, "基频统计"),
+    # 逐帧的稳健取最高/最低值（防倍频误判）也要在真 Praat 里跑一遍：合成纯音上
+    # 中位数就是 220 Hz，上限 330 Hz，不会触发「剔除」那句话，但循环本身必须能跑。
+    Case(
+        "pitch_statistics-robust-extremes",
+        {"from": 0, "to": 1},
+        SOUND,
+        ONE_SOUND,
+        "基频统计",
+        tool="pitch_statistics",
+    ),
     Case("intensity", {}, SOUND, ONE_SOUND, "强度"),
     Case("intensity_statistics", {}, SOUND, ONE_SOUND, "强度统计"),
     Case(
@@ -173,6 +186,24 @@ CASES: tuple[Case, ...] = (
         TEXTGRID,
         ONE_TEXTGRID,
         "标成「b」",
+    ),
+    # from/to 是 start/end 的别名，云端 Prompt 就教模型用 from/to：必须和
+    # start/end 走同一条路（2026-09-29 回归，见 ai/tests/test_range_aliases.py）。
+    Case(
+        "textgrid_set_interval-from-to",
+        {"from": 0.3, "to": 0.7, "label": "b"},
+        TEXTGRID,
+        ONE_TEXTGRID,
+        "标成「b」",
+        tool="textgrid_set_interval",
+    ),
+    Case(
+        "extract_part-from-to",
+        {"from": 0.3, "to": 0.7},
+        SOUND,
+        ONE_SOUND,
+        "已截取片段",
+        tool="extract_part",
     ),
     Case(
         "textgrid_insert_boundary",
@@ -201,7 +232,7 @@ CASES: tuple[Case, ...] = (
         {"burst": 0.3, "voicing": 0.42},
         SOUND,
         ONE_SOUND,
-        "vot_ms\t120\tms\tmeasured",
+        "VOT = 0.1200 秒（120.0 毫秒）",
         tool="vot",
     ),
     Case(
@@ -209,7 +240,7 @@ CASES: tuple[Case, ...] = (
         {"from": 0.25, "to": 0.5},
         VOT_SOUND,
         ONE_SOUND,
-        "vot_candidate_ms",
+        "VOT 估计值 = 0.03",
         tool="vot",
     ),
     Case(
@@ -217,7 +248,7 @@ CASES: tuple[Case, ...] = (
         {},
         VOT_SOUND,
         ONE_SOUND,
-        "vot_candidate_ms",
+        "未指定范围",
         tool="vot",
     ),
     Case(
@@ -225,7 +256,7 @@ CASES: tuple[Case, ...] = (
         {"from": 0.4, "to": 0.9},
         VOT_SOUND,
         ONE_SOUND,
-        "voicing_time_candidate",
+        "已经是浊音",
         tool="vot",
     ),
     Case(
@@ -233,7 +264,7 @@ CASES: tuple[Case, ...] = (
         {"from": 0.25, "to": 1.0},
         TWO_PHONEME_SOUND,
         ONE_SOUND,
-        "second_voicing_time_candidate",
+        "第 2 段浊音",
         tool="vot",
     ),
     Case(
@@ -332,7 +363,9 @@ CASES: tuple[Case, ...] = (
         ONE_SOUND,
         "已读入文件",
     ),
-    # 文件不存在时给中文说明，而不是 Praat 那句英文错误（脚本里用 fileReadable 判断）。
+    # 文件不存在时给中文说明，而不是 Praat 那句英文错误。脚本在 fileReadable 判断
+    # 失败时用 exitScript 直接结束（2026-09-29 起不再「写一条结果、写 done、当成功」），
+    # 所以这里断言的是「脚本失败 + 中文错误出现在输出里 + 没写出 chat_state.txt」。
     Case(
         "read_file-missing",
         {"path": "@WAV@"},
@@ -340,6 +373,7 @@ CASES: tuple[Case, ...] = (
         ONE_SOUND,
         "找不到要读取的文件",
         tool="read_file",
+        expect_error=True,
     ),
     Case(
         "concatenate_sounds",
@@ -484,6 +518,13 @@ def run_case(case: Case, directory: Path) -> tuple[bool, str]:
     )
     output = (completed.stdout + completed.stderr).decode("utf-16-le", "replace")
     output = output.replace("\x00", "").strip().replace("\n", " | ")
+    if case.expect_error:
+        # 预期中途失败：脚本不该写出完成标记，错误说明要在输出里。
+        if state_path.is_file():
+            return False, f"本来应该中途失败，却写出了 chat_state.txt：{output[:300]}"
+        if case.expect and case.expect not in output:
+            return False, f"输出里没有出现「{case.expect}」：{output[:300]}"
+        return True, output[:200]
     if not state_path.is_file():
         return False, output[:400] or "脚本没有写完 chat_state.txt"
     text = (

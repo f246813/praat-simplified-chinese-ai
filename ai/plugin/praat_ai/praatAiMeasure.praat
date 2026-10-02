@@ -78,7 +78,37 @@ if all = 1 or parameter$ = "minimum_pitch"
     selectObject: soundId
     pitchId = To Pitch: 0, 75.000000, 600.000000
     selectObject: pitchId
-    value = Get minimum: start, end, "Hertz", "Parabolic"
+    median = Get quantile: start, end, 0.5, "Hertz"
+    firstFrameTime = Get frame number from time: start
+    lastFrameTime = Get frame number from time: end
+    nFrames = Get number of frames
+    firstFrame = round (firstFrameTime)
+    lastFrame = round (lastFrameTime)
+    if firstFrame < 1
+    firstFrame = 1
+    endif
+    if lastFrame > nFrames
+    lastFrame = nFrames
+    endif
+    if lastFrame < 1
+    lastFrame = 1
+    endif
+    value = undefined
+    if median <> undefined
+    floorValue = median * 0.5
+    lowest = 0
+    for pitchFrame from firstFrame to lastFrame
+    f = Get value in frame: pitchFrame, "Hertz"
+    if f <> undefined and f >= floorValue
+    if lowest = 0 or f < lowest
+    lowest = f
+    endif
+    endif
+    endfor
+    if lowest > 0
+    value = lowest
+    endif
+    endif
     selectObject: tableId
     Append row
     row = Get number of rows
@@ -103,7 +133,35 @@ if all = 1 or parameter$ = "maximum_pitch"
     selectObject: soundId
     pitchId = To Pitch: 0, 75.000000, 600.000000
     selectObject: pitchId
-    value = Get maximum: start, end, "Hertz", "Parabolic"
+    median = Get quantile: start, end, 0.5, "Hertz"
+    firstFrameTime = Get frame number from time: start
+    lastFrameTime = Get frame number from time: end
+    nFrames = Get number of frames
+    firstFrame = round (firstFrameTime)
+    lastFrame = round (lastFrameTime)
+    if firstFrame < 1
+    firstFrame = 1
+    endif
+    if lastFrame > nFrames
+    lastFrame = nFrames
+    endif
+    if lastFrame < 1
+    lastFrame = 1
+    endif
+    value = undefined
+    if median <> undefined
+    ceilingValue = median * 1.5
+    highest = 0
+    for pitchFrame from firstFrame to lastFrame
+    f = Get value in frame: pitchFrame, "Hertz"
+    if f <> undefined and f <= ceilingValue and f > highest
+    highest = f
+    endif
+    endfor
+    if highest > 0
+    value = highest
+    endif
+    endif
     selectObject: tableId
     Append row
     row = Get number of rows

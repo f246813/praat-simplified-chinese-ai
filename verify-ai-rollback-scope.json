@@ -1,0 +1,75 @@
+{
+  "baseline": "2f699d8a5382a3965adf364c9e6561a1bcc90291",
+  "scope": "prompts and acoustic measurement scripts only",
+  "checked_files": [
+    {
+      "path": "ai/praat_ai/qwen.py",
+      "matches_baseline": true,
+      "sha256": "52611bc47458eb29a4daf8812825110a8d5aa9c5bac094c2ae42f7934a77752e"
+    },
+    {
+      "path": "ai/praat_ai/tools.py",
+      "matches_baseline": true,
+      "sha256": "12fac11e5e3b876705230d984f8cd6ae76c12009e4aa6e60daf0a2eab72512ca"
+    },
+    {
+      "path": "ai/praat_ai/measures.py",
+      "matches_baseline": true,
+      "sha256": "5cb0bda10b3a9ed19127920f74a203988dd3912207aebff351b6f5ccf6bcbce9"
+    },
+    {
+      "path": "ai/praat_ai/measures.tsv",
+      "matches_baseline": true,
+      "sha256": "c748bb67f1999cf3c961462febc20ad8cd4b597a00b496110de2eaebb5f00c58"
+    },
+    {
+      "path": "ai/praat_ai/presets.py",
+      "matches_baseline": true,
+      "sha256": "cfad40b662abb38bb75b684cefc090beabf4966aeb7b357899cfce765143db13"
+    },
+    {
+      "path": "ai/plugin/README.zh-CN.md",
+      "matches_baseline": true,
+      "sha256": "215512f7a8a0351fbe535f9526108e4fbf68a5c4dad2664dae56326530114000"
+    },
+    {
+      "path": "ai/plugin/install.ps1",
+      "matches_baseline": true,
+      "sha256": "18ec8c3985d7fbeccbf05c6a99d8005b6579e252a89675e793a51f294230e6aa"
+    },
+    {
+      "path": "ai/plugin/praat_ai/praatAiChat.praat.in",
+      "matches_baseline": true,
+      "sha256": "438488e282b73e126841ae78b01699e7652bf05d1be70c0ed07f007d529f7c50"
+    },
+    {
+      "path": "ai/plugin/praat_ai/praatAiMeasure.praat",
+      "matches_baseline": true,
+      "sha256": "4c19eb94e94085928c9f5baf21c367d898298c74915e3bbbf2d5ee43d2ef4a60"
+    },
+    {
+      "path": "ai/plugin/praat_ai/praatAiMeasureEditor.praat",
+      "matches_baseline": true,
+      "sha256": "d777130cd55f0956c33585c0fd0f65459bdcd8db147d5d50c84cc10683d02137"
+    },
+    {
+      "path": "ai/plugin/praat_ai/setup.praat",
+      "matches_baseline": true,
+      "sha256": "93801243c60069b5dfd197fd20498285a7a9f97814e32fb58d1c00cf23599991"
+    },
+    {
+      "path": "ai/tools/build_plugin.py",
+      "matches_baseline": true,
+      "sha256": "e53cd8e2747f1c4db67a2d37c24cff6c675350d9a69d038c0d461c45aa3f482f"
+    }
+  ],
+  "ui_unchanged_since_task_start": [
+    "ai/praat_ai/chat.py",
+    "ai/praat_ai/api_settings.py",
+    "ai/praat_ai/ui_theme.py",
+    "ai/praat_ai/ui_widgets.py"
+  ],
+  "thinking_level": "medium",
+  "thinking_change_undone": true,
+  "entire_configuration_matches_before_task": true
+}

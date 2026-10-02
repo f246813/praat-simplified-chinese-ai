@@ -1,0 +1,148 @@
+PASS default_exact_C_drive_folder
+
+PASS reject_drive_root_and_relative
+
+PASS optional_empty_paths_are_valid
+
+PASS optional_missing_model_is_invalid
+
+PASS optional_wrong_extension_is_invalid
+
+PASS optional_existing_files_are_accepted
+
+PASS default_config_has_no_developer_paths_or_credentials
+
+PASS configuration_keeps_user_api_and_selected_optional_model
+
+PASS reconfigure_preserves_other_presets_and_model_bindings
+
+PASS python_only_reconfigure_keeps_saved_presets
+
+PASS resume_restores_all_selections_for_retry
+
+PASS wizard_colors_and_pending_probe_generation
+
+PASS resume_accepts_redirected_user_folders_and_rejects_mismatch
+
+PASS preferences_merge_preserves_unrelated_settings
+
+PASS skip_preserves_python_preference
+
+PASS install_reuses_existing_directory_preserves_data_and_reaches_100
+
+PASS archive_traversal_cannot_escape
+
+PASS locked_file_rolls_back_prior_changes
+
+PASS python_missing_path_is_rejected
+
+PASS real_python_capability_probe
+
+PASS real_python_without_dependencies_is_rejected
+
+RESULT 21 passed, 0 failed; artifacts=C:\Users\f2468\AppData\LocalLow\Praat\verification\dialogue-ukx7ywca\AIPraat-contract-1236be9c7afb46be99a92599061c304a
+
+
+oked from within
+
+"ttk::ThemeChanged"
+
+can't invoke "event" command: application has been destroyed
+
+    while executing
+
+"event generate $w <<ThemeChanged>>"
+
+    (procedure "ttk::ThemeChanged" line 6)
+
+    invoked from within
+
+"ttk::ThemeChanged"
+
+can't invoke "event" command: application has been destroyed
+
+    while executing
+
+"event generate $w <<ThemeChanged>>"
+
+    (procedure "ttk::ThemeChanged" line 6)
+
+    invoked from within
+
+"ttk::ThemeChanged"
+
+.....invalid command name "2639297335744flush_messages"
+
+    while executing
+
+"2639297335744flush_messages"
+
+    ("after" script)
+
+invalid command name "2639297334208focus_set"
+
+    while executing
+
+"2639297334208focus_set"
+
+    ("after" script)
+
+invalid command name "2639486633408flush_messages"
+
+    while executing
+
+"2639486633408flush_messages"
+
+    ("after" script)
+
+invalid command name "2639486644608focus_set"
+
+    while executing
+
+"2639486644608focus_set"
+
+    ("after" script)
+
+invalid command name "2639486965760flush_messages"
+
+    while executing
+
+"2639486965760flush_messages"
+
+    ("after" script)
+
+invalid command name "2639486966912focus_set"
+
+    while executing
+
+"2639486966912focus_set"
+
+    ("after" script)
+
+invalid command name "2639503794880flush_messages"
+
+    while executing
+
+"2639503794880flush_messages"
+
+    ("after" script)
+
+invalid command name "2639503802304focus_set"
+
+    while executing
+
+"2639503802304focus_set"
+
+    ("after" script)
+
+...........................................................
+
+----------------------------------------------------------------------
+
+Ran 786 tests in 233.932s
+
+
+
+OK
+
+

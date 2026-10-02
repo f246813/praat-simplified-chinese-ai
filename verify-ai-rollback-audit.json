@@ -1,0 +1,5097 @@
+{
+  "baseline": "2f699d8a5382a3965adf364c9e6561a1bcc90291",
+  "scoped_files_checked": 1009,
+  "exact_baseline_matches": 1006,
+  "preserved_exceptions": [
+    {
+      "path": "ai/praat_ai/chat.py",
+      "matches_baseline": false,
+      "preserved_exception": "composer thinking selector UI"
+    },
+    {
+      "path": "ai/praat_ai/control.py",
+      "matches_baseline": false,
+      "preserved_exception": "missing-configuration startup diagnostic"
+    },
+    {
+      "path": "ai/praat_ai/server.py",
+      "matches_baseline": false,
+      "preserved_exception": "empty-path startup diagnostic"
+    }
+  ],
+  "extra_ai_sources": [
+    "ai/tests/test_startup_config.py"
+  ],
+  "presets": [
+    {
+      "id": "qwen3.5-2b-vision",
+      "thinking_request_fields": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "model_and_mmproj_exist": true
+    },
+    {
+      "id": "qwen3.5-0.8b-fast",
+      "thinking_request_fields": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "model_and_mmproj_exist": true
+    }
+  ],
+  "zero_placeholders_route_to_auto": true,
+  "pitch_uses_original_full_sound": true,
+  "native_zero_placeholder_case": "VOT 估计值 = 0.0320 秒（32.0 毫秒）：爆破 0.300 秒（高频带 2–8 kHz 能量升 36.7 dB）→ 浊音起始 0.332 秒（自相关基频 218.4 Hz，之后 50 毫秒内谐噪比最高 125.0 dB）；范围 0.250–0.500 秒；爆破与浊音起始分开估计，请对着语图核对（按编辑器圈选 0.250–0.500 秒）",
+  "exe_sha256": "6d6020954eab4ad4d08c4a24fd589b72fe5530ad79cce0dd67d5580ef1818eec",
+  "executable_unchanged": true,
+  "files": [
+    {
+      "path": "LPC/CPP.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/CPP.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrum_and_Spectrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrum_and_Spectrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrum_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrumc.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrumc.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Cepstrumc_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantModeler.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantModeler.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantModelerList.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantModelerList.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantModelerList_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantModeler_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantModeler_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPath.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPath.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPathArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPathArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPathArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPathEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPathEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPathEditor_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPath_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPath_to_IntervalTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/FormantPath_to_IntervalTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Formant_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Formant_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Formant_extensions_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_Cepstrumc.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_Cepstrumc.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_Formant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_Formant.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_LFCC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_LFCC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_LineSpectralFrequencies.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_LineSpectralFrequencies.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_Polynomial.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_Polynomial.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_Tube.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_and_Tube.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_to_Spectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_to_Spectrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_to_Spectrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LPC_to_Spectrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LineSpectralFrequencies.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LineSpectralFrequencies.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/LineSpectralFrequencies_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Makefile",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/PowerCepstrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/PowerCepstrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/PowerCepstrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/PowerCepstrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/PowerCepstrumWorkspace.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Roots_and_Formant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Roots_and_Formant.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_and_Cepstrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_and_Cepstrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_and_LPC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_and_LPC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_to_CPP.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_to_CPP.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_to_Formant_mt.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_to_Formant_mt.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_to_PowerCepstrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Sound_to_PowerCepstrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Tube.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Tube.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/Tube_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/VocalTractTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/VocalTractTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/VocalTractTier_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/manual_LPC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/meson.build",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "LPC/praat_LPC_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/Download-MFA-Models.ps1",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/Download-Qwen35.ps1",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/HANDOFF.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/Install-MFA.ps1",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/README.zh-CN.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/ai_config.example.json",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-001-chat-script-delivery.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-002-result-output-contract.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-003-planning-interface.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-004-agent-loop.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-005-table-driven-measurements.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-006-context-process-marker.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-007-cancellable-waits.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-008-context-token-budget.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/ADR-009-cloud-api-backend.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/README.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/docs/adr/template.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/plugin/README.zh-CN.md",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/plugin/install.ps1",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/plugin/praat_ai/praatAiChat.praat.in",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/plugin/praat_ai/praatAiMeasure.praat",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/plugin/praat_ai/praatAiMeasureEditor.praat",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/plugin/praat_ai/setup.praat",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/__init__.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/alignment.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/api_settings.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/audio.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/bridge.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/chat.py",
+      "matches_baseline": false,
+      "preserved_exception": "composer thinking selector UI"
+    },
+    {
+      "path": "ai/praat_ai/config.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/control.py",
+      "matches_baseline": false,
+      "preserved_exception": "missing-configuration startup diagnostic"
+    },
+    {
+      "path": "ai/praat_ai/external_script.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/forced_alignment.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/measures.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/measures.tsv",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/models.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/parent_watch.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/praat_app.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/presets.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/process.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/progress_popup.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/pronunciation.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/qwen.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/report.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/sendpraat.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/server.py",
+      "matches_baseline": false,
+      "preserved_exception": "empty-path startup diagnostic"
+    },
+    {
+      "path": "ai/praat_ai/service_lock.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/tools.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/tutor.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/ui.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/ui_theme.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/ui_widgets.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/praat_ai/vram.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/request.example.json",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/requirements-wav2vec2.txt",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/requirements.txt",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/run_ai_chat.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/run_ai_control.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/run_ai_tutor.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/run_api_settings.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/start_ai_chat.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/start_api_settings.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/progress_window_utils.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_agent_loop.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_alignment.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_api_settings.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_api_transition.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_audio_pipeline.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_bridge_pipeline.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_cancel.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_chat_message_render.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_chat_tools.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_chat_window.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_context_freshness.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_external_script.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_forced_alignment.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_frontend_fallback.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_frontend_model.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_measures.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_model_progress.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_parent_watch.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_planner_tools.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_plugin_build.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_praat_app.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_presets.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_process_termination.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_pronunciation.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_qwen.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_report.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_sendpraat.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_token_budget.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_ui_theme.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_ui_widgets.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/test_vram.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_ai_menu_no_crash.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_api_dialog_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_api_menu_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_api_mode.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_api_switching_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_cancel_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_chat_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_chat_no_popup.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_chat_planning.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_chat_templates.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_chat_window_ui.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_cloud_knowledge_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_context_marker.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_error_dialog.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_external_script.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_frontend_follows_praat.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_model_progress_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_plugin.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_presets_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tests/verify_ui_edges_live.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "ai/tools/build_plugin.py",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/BinaryIndexedTree.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/ChebyshevSeries.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/ChebyshevSeries.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Collection_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Collection_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Command.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Command.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/DataStore.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/DataStore.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/DoublyLinkedList.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/DoublyLinkedList.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Eigen.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Eigen.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Eigen_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/ExtendedReal.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/ExtendedReal.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/ExtendedReal_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/FileInMemory.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/FileInMemory.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/FileInMemory_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/FunctionSeries.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/FunctionSeries.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/FunctionSeries_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Graphics_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Graphics_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Graphics_extensions_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Index.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Index.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Index_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/LegendreSeries.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/LegendreSeries.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/MATTypes_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/MAT_numerics.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/MAT_numerics.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Makefile",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NMF.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NMF.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NMF_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NMF_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUM2.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUM2.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMFourier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMFourier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMFourierTable_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMcomplex.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMcomplex.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMfft_core.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMhuber.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMlapack.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMmachar.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMmachar.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMmathlib.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMselect.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMselect.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMsorting.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMsorting.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/NUMstring.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Permutation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Permutation.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/PermutationInversionCounter.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/PermutationInversionCounter.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Permutation_and_Index.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Permutation_and_Index.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Permutation_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Polynomial.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Polynomial.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Roots.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Roots.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Roots_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/SVD.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/SVD.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/SVD_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/SlopeSelector.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/SlopeSelector.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/SlopeSelector_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Spline.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Spline.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/Spline_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/WorkvectorPool.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/WorkvectorPool.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/WorkvectorPool_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/meson.build",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwsys/strings_sorting_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ActivationList.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ActivationList.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/AffineTransform.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/AffineTransform.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/AffineTransform_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/AnalyticSound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/AnalyticSound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CCA.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CCA.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CCA_and_Correlation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CCA_and_Correlation.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CCA_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CC_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CCs_to_DTW.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CCs_to_DTW.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Categories.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Categories.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CategoriesEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/CategoriesEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Categories_and_Strings.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Categories_and_Strings.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Categories_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ClassificationTable.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ClassificationTable.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ComplexSpectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ComplexSpectrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ComplexSpectrogram_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Configuration.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Configuration.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Configuration_AffineTransform.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Configuration_AffineTransform.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Configuration_and_Procrustes.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Configuration_and_Procrustes.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Configuration_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Confusion.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Confusion.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ConstantQSpectrograms.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ConstantQSpectrograms.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ContingencyTable.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ContingencyTable.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Correlation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Correlation.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Covariance.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Covariance.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DTW.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DTW.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DTW_and_TextGrid.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DTW_and_TextGrid.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DTW_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DataModeler.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DataModeler.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DataModeler_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/DataModeler_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Discriminant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Discriminant.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Discriminant_PatternList_Categories.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Discriminant_PatternList_Categories.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Discriminant_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Distance.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Distance.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/EEG_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/EEG_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/EditDistanceTable.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/EditDistanceTable.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/EditDistanceTable_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Eigen_and_Matrix.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Eigen_and_Matrix.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Eigen_and_Procrustes.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Eigen_and_Procrustes.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Eigen_and_SSCP.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Eigen_and_SSCP.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Eigen_and_TableOfReal.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Eigen_and_TableOfReal.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Excitations.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Excitations.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/FilterBank.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/FilterBank.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/FormantGrid_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/FormantGrid_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/GaussianMixture.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/GaussianMixture.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/GaussianMixture_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/GaussianMixture_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/HMM.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/HMM.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/HMM_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/HMM_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ICA.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/ICA.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Intensity_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Intensity_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGridAreas.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGridAreas.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGridEditors.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGridEditors.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_CollisionPhaseTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_DecibelTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_DoublePulsingTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_FlutterTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_FricationBypassTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_IntensityTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_OpenPhaseTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_PitchTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_Power1TierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_Power2TierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_SpectralTiltTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattGrid_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattTable.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/KlattTable.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/LFCC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/LFCC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/LongSound_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/LongSound_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Ltas_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Ltas_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MDS.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MDS.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MDSVec.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MDSVec.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MDSVec_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MDS_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MFCC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MFCC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Makefile",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Matrix_Categories.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Matrix_Categories.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Matrix_and_NMF.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Matrix_and_NMF.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Matrix_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Matrix_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Minimizers.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Minimizers.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MixingMatrix.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MixingMatrix.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MultiSampledSpectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MultiSampledSpectrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MultiSampledSpectrogram_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/MultiSampled_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/NavigationContext.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/NavigationContext.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/NavigationContext_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/NavigationContext_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/OptimalCeilingTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/OptimalCeilingTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/OptimalCeilingTierArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/OptimalCeilingTierArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/OptimalCeilingTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/OptimalCeilingTierEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/OptimalCeilingTierEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/PCA.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/PCA.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/PCA_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/PatternList.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/PatternList.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Pitch_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Pitch_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Polygon_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Polygon_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Polynomial_to_Spectrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Polynomial_to_Spectrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Procrustes.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Procrustes.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Procrustes_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Proximity.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Proximity.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Proximity_and_Distance.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Proximity_and_Distance.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Resonator.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Resonator.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Roots_to_Spectrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Roots_to_Spectrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SPINET.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SPINET.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SPINET_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SPINET_to_Pitch.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SPINET_to_Pitch.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SSCP.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SSCP.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SSCP_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SSCP_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SoundFrameIntoSampledFrame.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SoundFrames.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SoundFrames.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_MixingMatrix.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_MixingMatrix.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_MultiSampledSpectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_MultiSampledSpectrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_PCA.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_PCA.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_Spectrogram_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_Spectrogram_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_Spectrum_dft.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_Spectrum_dft.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_TextGrid_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_and_TextGrid_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_extensions_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_to_MFCC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_to_MFCC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_to_Pitch2.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_to_Pitch2.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_to_SPINET.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sound_to_SPINET.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sounds_to_DTW.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Sounds_to_DTW.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Spectrogram_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Spectrogram_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Spectrum_and_AnalyticSound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Spectrum_and_AnalyticSound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Spectrum_and_MultiSampledSpectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Spectrum_and_MultiSampledSpectrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Spectrum_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Spectrum_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SpeechSynthesizer.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SpeechSynthesizer.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SpeechSynthesizer_and_TextGrid.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SpeechSynthesizer_and_TextGrid.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/SpeechSynthesizer_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Strings_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Strings_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TableOfReal_and_Discriminant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TableOfReal_and_Discriminant.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TableOfReal_and_Permutation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TableOfReal_and_Permutation.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TableOfReal_and_SVD.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TableOfReal_and_SVD.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TableOfReal_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TableOfReal_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Table_dataSets.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Table_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Table_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGridNavigator.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGridNavigator.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGridNavigator_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGridTierNavigator.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGridTierNavigator.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGridTierNavigator_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGridTierNavigator_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGrid_and_DurationTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGrid_and_DurationTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGrid_and_PitchTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGrid_and_PitchTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGrid_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/TextGrid_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Vector_extensions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Vector_extensions.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/Vector_extensions_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/VowelEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/VowelEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/VowelEditor_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/VowelEditor_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/manual_BSS.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/manual_DataModeler.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/manual_HMM.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/manual_KlattGrid.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/manual_MDS.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/manual_Permutation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/manual_dwtools.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/meson.build",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/praat_BSS_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/praat_DataModeler_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/praat_David_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/praat_HMM_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/praat_KlattGrid_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/praat_MDS_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "dwtools/praat_MultiSampledSpectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/AmplitudeTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/AmplitudeTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/AnyTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/AnyTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Cochleagram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Cochleagram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Cochleagram_and_Excitation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Cochleagram_and_Excitation.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Corpus.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Corpus.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Corpus_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Distributions_and_Transition.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Distributions_and_Transition.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/DurationTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/DurationTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Excitation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Excitation.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Excitation_to_Formant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Excitation_to_Formant.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/ExperimentMFC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/ExperimentMFC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/ExperimentMFC_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Experiment_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Formant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Formant.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FormantGrid.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FormantGrid.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FormantGrid_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FormantTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FormantTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FormantTier_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Formant_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Formant_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FujisakiPitch.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FujisakiPitch.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/FujisakiPitch_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Function.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Function.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Function_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/H1minusH2Tier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/H1minusH2Tier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Harmonicity.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Harmonicity.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Harmonics.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Harmonics_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Image.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Image.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Image_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Intensity.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Intensity.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/IntensityTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/IntensityTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Label.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Label.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/LongSound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/LongSound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Ltas.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Ltas.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Ltas_to_SpectrumTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Ltas_to_SpectrumTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Makefile",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Manipulation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Manipulation.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Manipulation_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix_and_Pitch.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix_and_Pitch.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix_and_PointProcess.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix_and_PointProcess.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix_and_Polygon.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix_and_Polygon.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Matrix_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Movie.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Movie.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Movie_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/ParamCurve.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/ParamCurve.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/ParamCurve_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Photo.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Photo.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Photo_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PitchTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PitchTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PitchTier_to_PointProcess.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PitchTier_to_PointProcess.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PitchTier_to_Sound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PitchTier_to_Sound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_AnyTier_to_PitchTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_AnyTier_to_PitchTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_Intensity.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_Intensity.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_to_PitchTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_to_PitchTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_to_PointProcess.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_to_PointProcess.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_to_Sound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Pitch_to_Sound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PointProcess.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PointProcess.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PointProcess_and_Sound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PointProcess_and_Sound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/PointProcess_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Polygon.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Polygon.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Polygon_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Praat_tests.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Praat_tests.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Praat_tests_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/RealTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/RealTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/RealTier_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sampled.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sampled.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SampledXY.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SampledXY.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SampledXY_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sampled_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SoundSet.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SoundSet.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_PointProcess.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_PointProcess.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_and_Spectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_and_Spectrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_and_Spectrogram_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_and_Spectrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_and_Spectrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_audio.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_enhance.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_files.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Cochleagram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Cochleagram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Formant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Formant.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Harmonicity.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Harmonicity.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Harmonicity_GNE.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Intensity.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Intensity.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Pitch.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_Pitch.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_PointProcess.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Sound_to_PointProcess.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrogram_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SpectrumTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SpectrumTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum_and_Spectrogram.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum_and_Spectrogram.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum_to_Excitation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum_to_Excitation.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum_to_Formant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Spectrum_to_Formant.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SpeechRecognizer.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SpeechRecognizer.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SpeechRecognizer_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SpellingChecker.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SpellingChecker.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/SpellingChecker_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/TextGrid.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/TextGrid.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/TextGrid_Sound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/TextGrid_Sound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/TextGrid_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/TextGrid_files.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Transition.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Transition.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Transition_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Vector.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Vector.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/Vector_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/VocalTract.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/VocalTract.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/VocalTract_to_Spectrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/VocalTract_to_Spectrum.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/VoiceAnalysis.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/VoiceAnalysis.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/WordList.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/WordList.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/WordList_def.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_ExperimentMFC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_Fon.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_Manual.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_Picture.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_Sampling.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_SpeechRecognizer.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_annotation.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_commands.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_demoWindow.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_exampleSound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_exampleSound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_formant.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_formulas.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_functions.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_glossary.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_licenses.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_pitch.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_pointProcess.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_programming.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_references.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_scripting.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_sound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_soundFiles.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_spectrum.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_tutorials.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_voice.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/manual_whatsnew.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/meson.build",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_ExperimentMFC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_ExperimentMFC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_Matrix.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_Matrix.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_Sound.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_Sound.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_SpeechRecognizer.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_SpeechRecognizer.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_TextGrid_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_Tiers.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_Tiers.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_TimeFrameSampled.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_TimeFrameSampled.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_TimeFunction.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_TimeFunction.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_TimeTier.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_TimeTier.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_TimeVector.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_uvafon_init.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "fon/praat_uvafon_init.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/AmplitudeTierArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/AmplitudeTierArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/AmplitudeTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/AmplitudeTierEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/AmplitudeTierEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/CorpusEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/CorpusEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/DurationTierArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/DurationTierArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/DurationTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/DurationTierEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/DurationTierEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FormantGridArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FormantGridArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FormantGridArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FormantGridEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FormantGridEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FunctionArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FunctionArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FunctionArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FunctionEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FunctionEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/FunctionEditor_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/IntensityTierArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/IntensityTierArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/IntensityTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/IntensityTierEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/IntensityTierEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/LongSoundArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/Makefile",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/ManipulationEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/ManipulationEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/ManipulationEditor_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/ManipulationEditor_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/MovieArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/MovieArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/MovieWindow.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/MovieWindow.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchTierArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchTierArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchTierEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PitchTierEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PointArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PointArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PointArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PointEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/PointEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/RealTierArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/RealTierArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/RealTierArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/RealTierEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/RealTierEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/RunnerMFC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/RunnerMFC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundAnalysisArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundAnalysisArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundAnalysisArea_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundAnalysisArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundArea_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundRecorder.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundRecorder.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundRecorder_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SoundRecorder_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrogramArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrogramArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrogramEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrogramEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrumArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrumArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrumArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrumEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrumEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/SpectrumEditor_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/TextGridArea.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/TextGridArea.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/TextGridArea_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/TextGridArea_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/TextGridEditor.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/TextGridEditor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/TextGridEditor_prefs.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "foned/meson.build",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MAT.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MAT.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/Makefile",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderArg.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderCat.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderCat.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderFile.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderFile.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderReadText.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderReadText.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderString.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderString.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderThread.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/MelderThread.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUM.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUM.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMear.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMear.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMfilter.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMfilter.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMinterpol.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMinterpol.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMlinprog.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMlinprog.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMmath.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMmath.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMmetrics.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMmetrics.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMrandom.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMrandom.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMspecfunc.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/NUMspecfunc.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/PAIRWISE_SUM.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/STR.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/STR.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/STRVEC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/STRVEC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/VEC.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/VEC.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/abcio.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/abcio.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/abcio_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/complex.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/complex.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/enums_getText.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/enums_getValue.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/macport_off.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/macport_on.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_alloc.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_alloc.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_app.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_app.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_assert.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_atof.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_atof.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_audio.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_audio.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_audiofiles.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_audiofiles.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_casual.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_casual.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_colour.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_colour.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_console.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_console.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_debug.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_debug.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_enums.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_error.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_error.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_files.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_files.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_ftoa.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_ftoa.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_ftoi.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_help.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_help.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_info.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_info.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_int.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_kar.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_play.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_play.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_pointer.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_progress.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_progress.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_quantity.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_quantity.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_real.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_require.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_search.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_search.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_sort.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_sort.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_sprint.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_str32.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_str32.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_string32.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_strvec.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_sysenv.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_sysenv.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_templates.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_tensor.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_tensorio.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_tensorio.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_textencoding.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_textencoding.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_time.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_time.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_trust.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_trust.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_warning.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/melder_warning.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/meson.build",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/regularExp.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/regularExp.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/winport_off.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "melder/winport_on.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "sys/PraatAiControl.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "sys/PraatAiControl.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "sys/praat_objectMenus.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "sys/praat_python.cpp",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    },
+    {
+      "path": "sys/praat_python.h",
+      "matches_baseline": true,
+      "preserved_exception": ""
+    }
+  ]
+}

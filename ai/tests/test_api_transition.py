@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from praat_ai import api_settings, control
-from praat_ai.chat import ChatWindow
-from praat_ai.config import AppConfig
+from praat_ai import api_settings, chat, control
+from praat_ai.chat import ChatWindow, local_preset_allowed
+from praat_ai.config import AppConfig, ServerPreset, load_config
 from praat_ai.server import QwenServerError
 
 
@@ -32,6 +34,204 @@ def write_config(directory: Path, *, enabled: bool, stop_local: bool = True) -> 
 
 
 class ApiTransitionTests(unittest.TestCase):
+    def test_local_menu_policy_covers_all_lock_and_stop_combinations(self) -> None:
+        for locked in (False, True):
+            for stopped in (False, True):
+                with self.subTest(locked=locked, stopped=stopped):
+                    config = AppConfig()
+                    config.api.enabled = True
+                    config.api.locked = locked
+                    config.api.stop_local_service = stopped
+                    config.api.base_url = "https://example.test/v1"
+                    config.api.model = "remote-model"
+                    self.assertEqual(local_preset_allowed(config), not (locked or stopped))
+                    config.api.enabled = False
+                    self.assertEqual(local_preset_allowed(config), not locked)
+
+    def test_legacy_enabled_api_is_locked_until_user_unlocks_it(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), enabled=True, stop_local=False)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            del payload["api"]["locked"]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertTrue(load_config(path).api.locked)
+            api_settings.save_settings({"locked": False}, path)
+            config = load_config(path)
+            self.assertTrue(config.api.enabled)
+            self.assertFalse(config.api.locked)
+
+    def test_top_bar_can_activate_saved_api_from_local_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), enabled=False, stop_local=False)
+            with patch.object(control, "reconcile_api_transition", return_value={"success": True}):
+                control.activate_api(path)
+            config = load_config(path)
+            self.assertTrue(config.api.enabled)
+            self.assertEqual(config.api.model, "remote-model")
+
+    def test_top_bar_uses_first_provider_if_no_api_was_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "ai_config.json"
+            path.write_text(json.dumps(AppConfig().to_dict()), encoding="utf-8")
+            with patch.object(control, "reconcile_api_transition", return_value={"success": True}):
+                control.activate_api(path)
+            config = load_config(path)
+            self.assertEqual(config.api.label, api_settings.PROVIDERS[0]["label"])
+            self.assertEqual(config.api.base_url, api_settings.PROVIDERS[0]["base_url"])
+            self.assertEqual(config.api.model, api_settings.PROVIDERS[0]["model"])
+
+    def test_lock_and_new_stop_choice_switch_current_local_selection_to_api(self) -> None:
+        for change in ({"locked": True}, {"stop_local_service": True}):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as raw:
+                path = write_config(Path(raw), enabled=False, stop_local=False)
+                api_settings.save_settings(change, path)
+                config = load_config(path)
+                self.assertTrue(config.api.enabled)
+                self.assertEqual(config.api.model, "remote-model")
+                self.assertFalse(local_preset_allowed(config))
+
+    def test_unlocking_keeps_api_selected_and_allows_local_choice(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), enabled=True, stop_local=False)
+            api_settings.save_settings({"locked": True}, path)
+            api_settings.save_settings({"locked": False}, path)
+            config = load_config(path)
+            self.assertTrue(config.api.enabled)
+            self.assertTrue(local_preset_allowed(config))
+
+    def test_partial_custom_api_is_preserved_and_requires_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), enabled=False, stop_local=False)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["api"]["base_url"] = "https://gateway.example.test/v1"
+            payload["api"]["model"] = ""
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                api_settings.save_settings({"locked": True}, path)
+            with self.assertRaises(ValueError):
+                control.activate_api(path)
+            config = load_config(path)
+            self.assertEqual(config.api.base_url, "https://gateway.example.test/v1")
+            self.assertEqual(config.api.model, "")
+            self.assertFalse(config.api.enabled)
+
+    def test_top_menu_grays_local_items_and_keeps_cloud_entry_visible(self) -> None:
+        import tkinter as tk
+        from tkinter import ttk
+
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            path = write_config(directory, enabled=True, stop_local=False)
+            with (
+                patch.dict(os.environ, {"PRAAT_AI_CONFIG_PATH": str(path)}),
+                patch.object(chat, "runtime_dir", return_value=directory),
+                patch.object(chat, "selected_object_label", return_value=""),
+                patch("praat_ai.parent_watch.should_watch", return_value=False),
+            ):
+                try:
+                    window = ChatWindow()
+                except tk.TclError as error:
+                    self.skipTest(f"Tk unavailable: {error}")
+                try:
+                    window.presets = [{"id": "local", "label": "本地测试", "active": True,
+                                       "available": True, "vision": False, "model": "local.gguf",
+                                       "mmproj": "", "context_tokens": 0}]
+                    window.root.update()
+                    self.assertIs(window.preset_menu.master, window.preset_box)
+                    self.assertIn("Menubutton.indicator", repr(ttk.Style(window.root).layout(window.preset_box.cget("style"))))
+                    # Windows 原生菜单的 tk_popup 会等待鼠标选择；这里只截获弹出入口，
+                    # 仍从真正的鼠标绑定触发，避免 Menu.invoke 绕过展开流程。
+                    window.root.tk.call("rename", "tk_popup", "_test_original_tk_popup")
+                    window.root.tk.eval("proc tk_popup {menu args} {set ::test_posted_menu $menu}")
+                    try:
+                        window.preset_box.event_generate("<Enter>")
+                        window.preset_box.event_generate("<ButtonPress-1>", x=10, y=10)
+                        window.root.update()
+                        self.assertEqual(str(window.root.tk.getvar("test_posted_menu")), str(window.preset_menu))
+                    finally:
+                        window.root.tk.call("rename", "tk_popup", "")
+                        window.root.tk.call("rename", "_test_original_tk_popup", "tk_popup")
+                        window.preset_box.state(["!pressed", "!active"])
+                    for locked, stopped, expected in (
+                        (False, False, "normal"),
+                        (True, False, "disabled"),
+                        (False, True, "disabled"),
+                        (True, True, "disabled"),
+                    ):
+                        with self.subTest(locked=locked, stopped=stopped):
+                            window.config.api.locked = locked
+                            window.config.api.stop_local_service = stopped
+                            window.refresh_preset_widgets()
+                            self.assertEqual(window.preset_menu.entrycget(0, "state"), "normal")
+                            self.assertEqual(window.preset_menu.entrycget(1, "state"), expected)
+                            self.assertEqual(window.preset_choice.get(), window.api_choice)
+                    window.config.api.locked = False
+                    window.config.api.stop_local_service = False
+                    window.refresh_preset_widgets()
+                    window.busy = True
+                    window.preset_menu.invoke(1)
+                    self.assertEqual(window.preset_choice.get(), window.api_choice)
+                    window.busy = False
+                    window.config.api.enabled = False
+                    window.config.api.locked = False
+                    window.refresh_preset_widgets()
+                    self.assertEqual(window.preset_menu.entrycget(0, "state"), "normal")
+                    self.assertEqual(window.preset_menu.entrycget(1, "state"), "normal")
+                    self.assertNotEqual(window.preset_choice.get(), window.api_choice)
+                    with patch.object(window, "apply_selected_preset") as switch:
+                        window.preset_menu.invoke(0)
+                        switch.assert_called_once_with()
+                    self.assertEqual(
+                        ttk.Style(window.root).lookup(
+                            window.preset_box.cget("style"), "background"
+                        ),
+                        window.theme.color("surface"),
+                    )
+                finally:
+                    window.close()
+
+    def test_top_menu_selection_really_switches_cloud_local_cloud(self) -> None:
+        import tkinter as tk
+
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            model_path = directory / "local.gguf"
+            model_path.write_bytes(b"stub")
+            config = AppConfig()
+            config.api.enabled = True
+            config.api.locked = False
+            config.api.stop_local_service = False
+            config.api.base_url = "https://example.test/v1"
+            config.api.model = "remote-model"
+            config.server.presets = [ServerPreset(id="local", label="本地测试", model_path=str(model_path))]
+            config.server.active_preset = "local"
+            path = directory / "ai_config.json"
+            path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"PRAAT_AI_CONFIG_PATH": str(path)}),
+                patch.object(chat, "runtime_dir", return_value=directory),
+                patch.object(chat, "selected_object_label", return_value=""),
+                patch("praat_ai.parent_watch.should_watch", return_value=False),
+                patch.object(control, "collect_status", return_value={"success": True}),
+                patch.object(control, "ensure_local_service", return_value={"frontend_preset_label": "本地测试", "frontend_model": "local.gguf"}),
+                patch.object(control, "reconcile_api_transition", return_value={"success": True}),
+            ):
+                try:
+                    window = ChatWindow()
+                except tk.TclError as error:
+                    self.skipTest(f"Tk unavailable: {error}")
+                try:
+                    for index, expected in ((1, False), (0, True)):
+                        window.preset_menu.invoke(index)
+                        deadline = time.monotonic() + 3
+                        while window.busy and time.monotonic() < deadline:
+                            window.flush_messages()
+                            time.sleep(0.01)
+                        self.assertFalse(window.busy)
+                        self.assertEqual(load_config(path).api.enabled, expected)
+                finally:
+                    window.close()
+
     def test_settings_callback_failure_is_visible_after_save(self) -> None:
         dialog = object.__new__(api_settings.ApiSettingsDialog)
         dialog.collect = lambda: {"enabled": False}

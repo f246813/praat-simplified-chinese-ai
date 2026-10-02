@@ -1,0 +1,141 @@
+test_capability_questions_do_not_need_a_greeting_prefix (test_dialogue_fastpath.DialoguePolicyTests.test_capability_questions_do_not_need_a_greeting_prefix) ... ok
+test_concepts_and_analysis_keep_selected_high_level (test_dialogue_fastpath.DialoguePolicyTests.test_concepts_and_analysis_keep_selected_high_level) ... ok
+test_english_identity_and_capability_are_ordinary_dialogue (test_dialogue_fastpath.DialoguePolicyTests.test_english_identity_and_capability_are_ordinary_dialogue) ... 
+  test_english_identity_and_capability_are_ordinary_dialogue (test_dialogue_fastpath.DialoguePolicyTests.test_english_identity_and_capability_are_ordinary_dialogue) (text='What are your capabilities?') ... FAIL
+  test_english_identity_and_capability_are_ordinary_dialogue (test_dialogue_fastpath.DialoguePolicyTests.test_english_identity_and_capability_are_ordinary_dialogue) (text='What is your name?') ... FAIL
+test_force_setting_does_not_upgrade_other_manual_levels (test_dialogue_fastpath.DialoguePolicyTests.test_force_setting_does_not_upgrade_other_manual_levels) ... ok
+test_greetings_identity_and_ordinary_chat (test_dialogue_fastpath.DialoguePolicyTests.test_greetings_identity_and_ordinary_chat) ... ok
+test_high_ordinary_dialogue_relaxes_unless_forced (test_dialogue_fastpath.DialoguePolicyTests.test_high_ordinary_dialogue_relaxes_unless_forced) ... ok
+test_material_and_mixed_requests_are_not_dialogue (test_dialogue_fastpath.DialoguePolicyTests.test_material_and_mixed_requests_are_not_dialogue) ... ok
+test_only_unambiguous_duration_queries_use_direct_measurement (test_dialogue_fastpath.DialoguePolicyTests.test_only_unambiguous_duration_queries_use_direct_measurement) ... ok
+test_pure_concept_discussion (test_dialogue_fastpath.DialoguePolicyTests.test_pure_concept_discussion) ... ok
+test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) ... 
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='你好，复制一份') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='生成一个 1 秒的 220 Hz 正弦音') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='rename object 7 to sample') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='resample to 16000 Hz') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='再做一次') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='它的平均值呢？') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='Explain its average') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='解释它的平均值') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='Hello, plot it') ... FAIL
+  test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='invert channel 1') ... FAIL
+
+======================================================================
+FAIL: test_english_identity_and_capability_are_ordinary_dialogue (test_dialogue_fastpath.DialoguePolicyTests.test_english_identity_and_capability_are_ordinary_dialogue) (text='What are your capabilities?')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 54, in test_english_identity_and_capability_are_ordinary_dialogue
+    with self.subTest(text=text): self.assertEqual(self.classify(text),'conversation')
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'concept' != 'conversation'
+- concept
++ conversation
+
+
+======================================================================
+FAIL: test_english_identity_and_capability_are_ordinary_dialogue (test_dialogue_fastpath.DialoguePolicyTests.test_english_identity_and_capability_are_ordinary_dialogue) (text='What is your name?')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 54, in test_english_identity_and_capability_are_ordinary_dialogue
+    with self.subTest(text=text): self.assertEqual(self.classify(text),'conversation')
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'concept' != 'conversation'
+- concept
++ conversation
+
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='你好，复制一份')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'conversation' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='生成一个 1 秒的 220 Hz 正弦音')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'conversation' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='rename object 7 to sample')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'conversation' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='resample to 16000 Hz')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'conversation' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='再做一次')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'conversation' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='它的平均值呢？')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'conversation' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='Explain its average')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'concept' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='解释它的平均值')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'concept' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='Hello, plot it')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'conversation' is not None
+
+======================================================================
+FAIL: test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) (text='invert channel 1')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_fastpath.py", line 50, in test_unknown_operations_and_references_keep_analysis_pipeline
+    with self.subTest(text=text): self.assertIsNone(self.classify(text))
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'conversation' is not None
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.006s
+
+FAILED (failures=12)

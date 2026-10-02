@@ -58,6 +58,21 @@ class ApiConfigParsingTests(unittest.TestCase):
         self.assertEqual(config.api.base_url, "")
         self.assertFalse(config_module.api_is_active(config))
         self.assertEqual(config.qwen.base_url, "http://127.0.0.1:8000/v1")
+        self.assertTrue(config.qwen.limit_tokens)
+        self.assertFalse(config.api.limit_tokens)
+        self.assertGreaterEqual(config.qwen.max_context_tokens, 32768)
+        self.assertGreaterEqual(config.qwen.plan_max_tokens, 4096)
+
+    def test_legacy_single_custom_limit_is_preserved(self) -> None:
+        payload = {**LOCAL_ONLY, "qwen": {**LOCAL_ONLY["qwen"],
+            "max_context_tokens": 8192, "plan_max_tokens": 5000}}
+        config = self.load(payload)
+        self.assertEqual(config.qwen.max_context_tokens, 8192)
+        self.assertEqual(config.qwen.plan_max_tokens, 5000)
+
+    def test_null_qwen_section_uses_defaults(self) -> None:
+        config = self.load({"qwen": None})
+        self.assertTrue(config.qwen.limit_tokens)
 
     def test_api_section_is_parsed(self) -> None:
         payload = dict(LOCAL_ONLY)
@@ -204,7 +219,20 @@ class ClientPayloadTests(unittest.TestCase):
         body = captured["body"]
         self.assertNotIn("chat_template_kwargs", body)
         self.assertEqual(body["model"], "big-model")
-        self.assertIn("max_tokens", body)
+        self.assertNotIn("max_tokens", body)
+
+    def test_token_limit_can_be_enabled_for_cloud_and_disabled_for_local(self) -> None:
+        self.assertEqual(self.payload_for("api", limit_tokens=True)["body"]["max_tokens"], 1024)
+        self.assertNotIn("max_tokens", self.payload_for("llama.cpp", limit_tokens=False)["body"])
+
+    def test_gemini_3_omits_sampling_fields(self) -> None:
+        body = self.payload_for(
+            "api",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            model="gemini-3.8-flash",
+        )["body"]
+        for field in ("temperature", "top_p", "presence_penalty"):
+            self.assertNotIn(field, body)
 
     def test_local_provider_keeps_chat_template_kwargs(self) -> None:
         captured = self.payload_for("llama.cpp")
@@ -461,8 +489,10 @@ class WorldKnowledgeTests(unittest.TestCase):
         config = self.cloud(use_world_knowledge=False)
         self.assertEqual(config.qwen.knowledge_mode, "strict")
         prompt = qwen.planner_instructions(config.qwen)
-        self.assertIn(qwen.TOOL_PLANNER_INSTRUCTIONS, prompt)
-        self.assertNotIn("语言学", prompt)
+        self.assertIn(qwen.CLOUD_WORKFLOW_INSTRUCTIONS, prompt)
+        self.assertIn(qwen.CLOUD_STRICT_KNOWLEDGE_INSTRUCTIONS, prompt)
+        self.assertNotIn(qwen.TOOL_PLANNER_INSTRUCTIONS, prompt)
+        self.assertNotIn(qwen.WORLD_KNOWLEDGE_INSTRUCTIONS, prompt)
 
     def test_api_mode_carries_the_thinking_level_into_qwen(self) -> None:
         config = self.cloud(thinking_level="high")
@@ -583,6 +613,35 @@ class SettingsValidationTests(unittest.TestCase):
         # 本地 llama-server 的配置不许被写坏（关掉 API 还要能回去用）。
         self.assertEqual(payload["server"]["model_path"], LOCAL_ONLY["server"]["model_path"])
 
+    def test_advanced_limits_round_trip_for_each_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), LOCAL_ONLY)
+            api_settings.save_settings({
+                "enabled": True, "base_url": "https://api.example.com/v1", "model": "big-model",
+                "limit_tokens": True, "max_context_tokens": 64000, "plan_max_tokens": 6000,
+                "local_limit_tokens": False, "local_max_context_tokens": 48000,
+                "local_plan_max_tokens": 5000,
+            }, path)
+            config = load_config(path)
+            values = api_settings.settings_from_config(config)
+        self.assertTrue(config.api.limit_tokens)
+        self.assertTrue(config.qwen.limit_tokens)
+        self.assertFalse(config.local_qwen.limit_tokens)
+        self.assertEqual(values["local_max_context_tokens"], 48000)
+        self.assertEqual(values["local_plan_max_tokens"], 5000)
+        self.assertFalse(values["local_limit_tokens"])
+
+    def test_partial_api_save_preserves_existing_local_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            payload = {**LOCAL_ONLY, "qwen": {**LOCAL_ONLY["qwen"],
+                "limit_tokens": False, "max_context_tokens": 48000, "plan_max_tokens": 5000}}
+            path = write_config(Path(raw), payload)
+            api_settings.save_settings({"enabled": False, "model": "changed"}, path)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertFalse(saved["qwen"]["limit_tokens"])
+        self.assertEqual(saved["qwen"]["max_context_tokens"], 48000)
+        self.assertEqual(saved["qwen"]["plan_max_tokens"], 5000)
+
     def test_saving_refuses_invalid_values(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = write_config(Path(raw), LOCAL_ONLY)
@@ -593,6 +652,9 @@ class SettingsValidationTests(unittest.TestCase):
         labels = [item["label"] for item in api_settings.PROVIDERS]
         self.assertIn("DeepSeek", labels)
         self.assertIn("OpenAI", labels)
+        gemini = next(item for item in api_settings.PROVIDERS if item["label"] == "Google Gemini")
+        self.assertEqual(gemini["base_url"], "https://generativelanguage.googleapis.com/v1beta/openai")
+        self.assertEqual(gemini["model"], "gemini-3.8-flash")
         self.assertTrue(all(item.get("base_url") for item in api_settings.PROVIDERS))
 
     def test_settings_round_trip_thinking_and_knowledge(self) -> None:
@@ -724,6 +786,36 @@ class StopLocalServiceOptionTests(unittest.TestCase):
             api_settings.save_settings(clean, path)
             payload = json.loads(path.read_text(encoding="utf-8"))
         self.assertTrue(payload["api"]["stop_local_service"])
+
+
+class ApiSettingsLayoutTests(unittest.TestCase):
+    def test_knowledge_option_sits_below_stop_without_thinking_control(self) -> None:
+        import tkinter as tk
+        from tkinter import ttk
+
+        try:
+            dialog = api_settings.ApiSettingsDialog(None, config=config_module.AppConfig())
+        except tk.TclError as error:
+            self.skipTest(f"Tk unavailable: {error}")
+        try:
+            def descendants(widget):
+                for child in widget.winfo_children():
+                    yield child
+                    yield from descendants(child)
+
+            widgets = list(descendants(dialog.window))
+            checks = [item for item in widgets if isinstance(item, ttk.Checkbutton)]
+            self.assertTrue(any(item.cget("text").startswith("锁定云端 API") for item in checks))
+            self.assertFalse(any(item.cget("text").startswith("使用云端 API 模型") for item in checks))
+            stop = next(item for item in checks if item.cget("text").startswith("启用 API 时顺手停掉"))
+            knowledge = next(item for item in checks if item.cget("text").startswith("允许云端 API 用自己的知识"))
+            self.assertIs(knowledge.master, stop.master)
+            self.assertGreater(int(knowledge.grid_info()["row"]), int(stop.grid_info()["row"]))
+            self.assertFalse(any("思考档位" in str(item.cget("text")) for item in widgets if isinstance(item, (tk.Label, ttk.Checkbutton))))
+            self.assertFalse(hasattr(dialog, "thinking_choice"))
+            self.assertEqual(dialog.collect()["thinking_level"], "medium")
+        finally:
+            dialog.close()
 
 
 class ProbeTests(unittest.TestCase):

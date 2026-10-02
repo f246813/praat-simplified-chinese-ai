@@ -1,0 +1,12 @@
+test_chinese_composition_matches_each_input_at_all_scales (test_ime.NativeImeTests.test_chinese_composition_matches_each_input_at_all_scales) ... ok
+test_frontend_renders_without_windows_bitmap_scaling (test_ime.NativeImeTests.test_frontend_renders_without_windows_bitmap_scaling) ... ok
+test_initial_window_fits_the_dpi_scaled_controls (test_ime.NativeImeTests.test_initial_window_fits_the_dpi_scaled_controls) ... ok
+test_japanese_composition_matches_each_input_at_all_scales (test_ime.NativeImeTests.test_japanese_composition_matches_each_input_at_all_scales) ... ok
+test_finished_composition_allows_normal_send_and_shift_newline (test_ime_keys.CompositionKeysTests.test_finished_composition_allows_normal_send_and_shift_newline) ... ok
+test_missing_context_or_non_windows_does_not_block_normal_typing (test_ime_keys.CompositionKeysTests.test_missing_context_or_non_windows_does_not_block_normal_typing) ... ok
+test_preedit_return_neither_sends_nor_inserts_a_newline (test_ime_keys.CompositionKeysTests.test_preedit_return_neither_sends_nor_inserts_a_newline) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 5.645s
+
+OK

@@ -16,7 +16,6 @@ Free-form scripts remain available as a validated fallback.
 from __future__ import annotations
 
 import json
-import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -100,25 +99,22 @@ TIME_DOMAIN_CLASSES = frozenset(
         "Harmonicity",
         "Spectrogram",
         "BarkSpectrogram",
-        "Cochleagram",
-        "Excitation",
         "MFCC",
-        "Manipulation",
         "PointProcess",
         "TextGrid",
         "TextTier",
-        "IntervalTier",
         "DurationTier",
         "PitchTier",
         "IntensityTier",
         "AmplitudeTier",
         "FormantTier",
-        "Polygon",
+        "PowerCepstrogram",
     }
 )
 
-# 只有 Sound 类对象有 Play / 采样率 / 通道数。
+# 两类声音均可查询采样率、保存 WAV；分析转换只对内存中的 Sound 可用。
 SOUND_CLASSES = frozenset({"Sound", "LongSound"})
+ANALYSIS_SOUND_CLASSES = frozenset({"Sound"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,9 +181,14 @@ class ToolContext:
         for row in self.objects:
             if text == str(row.id):
                 return row
-        for row in self.objects:
-            if text in {row.name, f"{row.class_name} {row.name}", row.label}:
-                return row
+        exact = [
+            row for row in self.objects
+            if text in {row.name, f"{row.class_name} {row.name}", row.label}
+        ]
+        if len(exact) == 1:
+            return exact[0]
+        if len(exact) > 1:
+            self._ambiguous_objects(text, exact)
         normalized = _normalize_text(text)
         # 「2 号」「#2」「id 2」都当成 id 处理。
         identifier = re.fullmatch(r"(?:id\s*)?#?(\d+)\s*(?:号|对象)?", normalized)
@@ -196,9 +197,11 @@ class ToolContext:
             for row in self.objects:
                 if row.id == wanted:
                     return row
-        for row in self.objects:
-            if normalized in row.name_variants():
-                return row
+        matches = [row for row in self.objects if normalized in row.name_variants()]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            self._ambiguous_objects(text, matches)
         # 模型常把 "Sound tone" 简写成 "tone"，或反过来只写类名加编号；
         # 唯一命中就接受，多个候选就让用户挑，避免猜错对象。
         partial = [
@@ -212,9 +215,12 @@ class ToolContext:
         if len(partial) == 1:
             return partial[0]
         if len(partial) > 1:
-            options = "、".join(f"{row.id}: {row.name}" for row in partial)
-            raise ToolError(f"“{text}”对应多个对象，请用对象 id 指定：{options}")
+            self._ambiguous_objects(text, partial)
         raise ToolError(f"对象列表里没有“{text}”，请先确认 Praat 中选中的对象。")
+
+    def _ambiguous_objects(self, requested: str, rows: Sequence[ObjectRow]) -> None:
+        options = "、".join(f"{row.id}: {row.class_name} {row.name}" for row in rows)
+        raise ToolError(f"“{requested}”对应多个对象，请用对象 id 指定：{options}")
 
     def require_class(
         self,
@@ -223,8 +229,12 @@ class ToolContext:
         description: str,
     ) -> None:
         if row.class_name not in classes:
+            conversion_hint = (
+                "请先用截取片段将 LongSound 提取成 Sound，再进行分析。"
+                if row.class_name == "LongSound" and "Sound" in classes else ""
+            )
             raise ToolError(
-                f"{description}（对象 {row.id} 是 {row.class_name}）。"
+                f"{description}（对象 {row.id} 是 {row.class_name}）。{conversion_hint}"
             )
 
     def resolve_by_class(
@@ -233,20 +243,25 @@ class ToolContext:
         classes: frozenset[str],
         description: str,
     ) -> ObjectRow:
-        """按对象类取对象：点错了类型而列表里只有一个候选时，直接用那个候选。
+        """显式指定的对象必须支持命令；默认选择才允许按类型找唯一候选。"""
 
-        用户说「这个 TextGrid」时，模型有时候会把当前选中的 Sound 填进 ``object``。
-        这类工具本来就只对该类型的对象有效，所以只要列表里恰有一个合格对象，
-        就用它，而不是把一句中文错误丢给用户。
-        """
-
-        row = self.resolve_object(requested)
-        if row.class_name in classes:
+        if requested not in (None, ""):
+            row = self.resolve_object(requested)
+            self.require_class(row, classes, description)
             return row
+        selected = [item for item in self.objects if item.selected and item.class_name in classes]
+        if len(selected) == 1:
+            return selected[0]
+        if len(selected) > 1:
+            self._ambiguous_objects("当前选择", selected)
         candidates = [item for item in self.objects if item.class_name in classes]
         if len(candidates) == 1:
             return candidates[0]
-        raise ToolError(f"{description}（对象 {row.id} 是 {row.class_name}）。")
+        if len(candidates) > 1:
+            self._ambiguous_objects("当前操作", candidates)
+        row = self.default_object()
+        self.require_class(row, classes, description)
+        return row
 
 
 def parse_object_context(text: str) -> tuple[ObjectRow, ...]:
@@ -394,8 +409,7 @@ def _clamp_range_lines() -> list[str]:
         "    tmax = duration",
         "endif",
         "if tmin > tmax",
-        "    tmin = 0",
-        "    tmax = duration",
+        '    exitScript: "查询范围无效或超出对象时长，请在对象内重新指定起止时间。"',
         "endif",
     ]
 
@@ -473,7 +487,10 @@ def _formant_lines(
     label: str,
     with_bandwidth: bool = False,
 ) -> list[str]:
-    row = context.resolve_object(arguments.get("object"))
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Formant"}),
+        "共振峰分析需要 Sound 或 Formant 对象",
+    )
     formatns = _formant_numbers(arguments)
     unit = _unit_literal(arguments, "hertz")
     unit_text = _unit_display(arguments, "hertz")
@@ -587,8 +604,10 @@ def _build_formant_frequency(arguments: Mapping[str, Any], context: ToolContext)
 
 
 def _build_pitch(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做基频分析")
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Pitch"}),
+        "基频分析需要 Sound 或 Pitch 对象",
+    )
     temporary = row.class_name != "Pitch"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     if temporary:
@@ -618,12 +637,94 @@ def _build_pitch(arguments: Mapping[str, Any], context: ToolContext) -> str:
     return _assemble(lines, context)
 
 
+def _pitch_extreme_lines() -> list[str]:
+    """算出**不会被倍频误判劫持**的最高/最低基频与最高点时刻。
+
+    为什么要自己遍历帧，而不是 ``Get maximum: tmin, tmax, "Hertz"``
+    （2026-09-30 用户报的「峰值 598.5 Hz」）：
+
+    ``Get maximum`` 取的是区间内**最高的那一帧**，一帧就定了结论。而自相关在
+    **浊音起始**（第一帧有声的地方）很容易把 121 Hz 听成 496 Hz——约 4 倍的倍频
+    误判。实测：``test/fon/examples/sounds/a.wav`` 裸最大值 496.65 Hz @ 0.222 s，
+    真实基频只有 ~121.6 Hz（95 分位 121.61），而那正是第一个有声帧。用户录音里
+    「159.9 Hz 的段落冒出 598.5 Hz @ 0.061 s」是同一个形状（≈3.7 倍，且 0.061 s
+    在文件起头）。
+
+    纯噪声**不会**造成这个：Praat 在噪声段直接给 ``--undefined--``。所以这不是
+    「没做降噪」，而是「倍频误判 + 用最大值当结论」。
+
+    修法：把候选限制在 **中位数的 1.5 倍**以内再取最大。倍频误判必然是 2 倍以上，
+    1.5 倍的上限够宽，不会误伤真实的高基频（实测另外三段音频的取值一字未变）。
+    如果原始最大值超过了这个上限，说明确实发生了误判，脚本会写出一句说明，
+    让用户和模型都知道这个数被修正过、以及原始值是哪个——不静默改数。
+    """
+
+    return [
+        'median = Get quantile: tmin, tmax, 0.5, "Hertz"',
+        "minimum = undefined",
+        "maximum = undefined",
+        "maxtime = undefined",
+        "pitchLimit$ = \"\"",
+        "if median <> undefined",
+        # 注意两点：① Get frame number from time 返回的是**小数**（0.25 秒 → 31.5），
+        # 而 Get value in frame 要整数，必须 round；② Praat **不允许把命令嵌在公式里**
+        # （``round (Get frame number from time: tmin)`` 会报 Unknown symbol），
+        # 所以先取值再取整。整段分析时两端恰好落在整数帧上，圈选（0.25–0.5 秒）
+        # 就会直接报「should be a whole number」。
+        "    firstFrameTime = Get frame number from time: tmin",
+        "    lastFrameTime = Get frame number from time: tmax",
+        "    firstFrame = round (firstFrameTime)",
+        "    lastFrame = round (lastFrameTime)",
+        "    if firstFrame < 1",
+        "        firstFrame = 1",
+        "    endif",
+        "    if lastFrame > nFrames",
+        "        lastFrame = nFrames",
+        "    endif",
+        "    if lastFrame < 1",
+        "        lastFrame = 1",
+        "    endif",
+        # 上限：中位数的 1.5 倍；下限：中位数的一半（次谐波误判）。
+        "    ceilingValue = median * 1.5",
+        "    floorValue = median * 0.5",
+        "    highest = 0",
+        "    lowest = 0",
+        "    for pitchFrame from firstFrame to lastFrame",
+        '        frameValue = Get value in frame: pitchFrame, "Hertz"',
+        "        if frameValue <> undefined and frameValue <= ceilingValue and frameValue > highest",
+        "            highest = frameValue",
+        "            maxtime = Get time from frame number: pitchFrame",
+        "        endif",
+        "        if frameValue <> undefined and frameValue >= floorValue",
+        "            if lowest = 0 or frameValue < lowest",
+        "                lowest = frameValue",
+        "            endif",
+        "        endif",
+        "    endfor",
+        "    if highest > 0",
+        "        maximum = highest",
+        "    endif",
+        "    if lowest > 0",
+        "        minimum = lowest",
+        "    endif",
+        "endif",
+        'rawMaximum = Get maximum: tmin, tmax, "Hertz", "Parabolic"',
+        "if rawMaximum <> undefined and median <> undefined and rawMaximum > median * 1.5",
+        '    pitchLimit$ = "（该区间有一帧被自相关误判成 " + fixed$ (rawMaximum, 1)'
+        ' + " Hz，约为中位数 " + fixed$ (median, 1) + " Hz 的 "'
+        ' + fixed$ (rawMaximum / median, 1) + " 倍，已按倍频误判剔除）"',
+        "endif",
+    ]
+
+
 def _build_pitch_statistics(
     arguments: Mapping[str, Any],
     context: ToolContext,
 ) -> str:
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做基频分析")
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Pitch"}),
+        "基频分析需要 Sound 或 Pitch 对象",
+    )
     temporary = row.class_name != "Pitch"
     # 注意：Praat 里 from / to / end 都是保留字，变量名只能用 tmin / tmax。
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
@@ -637,12 +738,11 @@ def _build_pitch_statistics(
                 f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
             ]
         )
+    lines.extend(['nFrames = Get number of frames'])
+    lines.extend(_pitch_extreme_lines())
     lines.extend(
         [
             'mean = Get mean: tmin, tmax, "Hertz"',
-            'minimum = Get minimum: tmin, tmax, "Hertz", "Parabolic"',
-            'maximum = Get maximum: tmin, tmax, "Hertz", "Parabolic"',
-            'maxtime = Get time of maximum: tmin, tmax, "Hertz", "Parabolic"',
             "if mean = undefined",
             _write_result(
                 context,
@@ -653,6 +753,22 @@ def _build_pitch_statistics(
                     "fixed$ (tmax, 3)",
                     quote(" 秒）无法计算：该区间没有周期性声源（可能是无声段或清音）"),
                     "rangeNote$",
+                ],
+            ),
+            "else",
+            "if minimum = undefined or maximum = undefined",
+            _write_result(
+                context,
+                [
+                    quote("基频统计（"),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒）：平均 "),
+                    "fixed$ (mean, 3)",
+                    quote(" Hz（这一段里没有可信的最高/最低值）"),
+                    "rangeNote$",
+                    "pitchLimit$",
                 ],
             ),
             "else",
@@ -673,8 +789,10 @@ def _build_pitch_statistics(
                     "fixed$ (maxtime, 3)",
                     quote(" 秒"),
                     "rangeNote$",
+                    "pitchLimit$",
                 ],
             ),
+            "endif",
             "endif",
         ]
     )
@@ -684,8 +802,10 @@ def _build_pitch_statistics(
 
 
 def _build_intensity(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做强度分析")
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Intensity"}),
+        "强度分析需要 Sound 或 Intensity 对象",
+    )
     temporary = row.class_name != "Intensity"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     if temporary:
@@ -715,8 +835,10 @@ def _build_intensity_statistics(
     arguments: Mapping[str, Any],
     context: ToolContext,
 ) -> str:
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做强度分析")
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Intensity"}),
+        "强度分析需要 Sound 或 Intensity 对象",
+    )
     temporary = row.class_name != "Intensity"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     lines.extend(_range_lines(arguments, row))
@@ -760,16 +882,23 @@ def _build_object_info(arguments: Mapping[str, Any], context: ToolContext) -> st
     lines = [f"selectObject: {row.id}"]
     if has_duration:
         lines.append("duration = Get total duration")
+    if row.class_name == "Sound":
+        lines.append("channels = Get number of channels")
     if is_sound:
-        lines.extend(["channels = Get number of channels", "rate = Get sampling frequency"])
+        lines.append("rate = Get sampling frequency")
     fragments = [quote(f"{row.class_name}「{row.name}」（id {row.id}）")]
     if has_duration:
         fragments.extend([quote("：时长 "), "fixed$ (duration, 3)", quote(" 秒")])
-    if is_sound:
+    if row.class_name == "Sound":
         fragments.extend(
             [
                 quote("，通道数 "),
                 "fixed$ (channels, 0)",
+            ]
+        )
+    if is_sound:
+        fragments.extend(
+            [
                 quote("，采样率 "),
                 "fixed$ (rate, 0)",
                 quote(" Hz"),
@@ -878,11 +1007,11 @@ def _range_lines(
         lines.append('rangeNote$ = ""')
         if arguments.get("from", arguments.get("start", None)) not in (None, ""):
             lines.append(
-                f"tmin = {_number(arguments, 'from', 0.0, 0.0, 36000.0):.6f}"
+                f"tmin = {_number({'from': arguments.get('from', arguments.get('start'))}, 'from', 0.0, 0.0, 36000.0):.6f}"
             )
         if arguments.get("to", arguments.get("end", None)) not in (None, ""):
             lines.append(
-                f"tmax = {_number(arguments, 'to', 0.0, 0.0, 36000.0):.6f}"
+                f"tmax = {_number({'to': arguments.get('to', arguments.get('end'))}, 'to', 0.0, 0.0, 36000.0):.6f}"
             )
     lines.extend(_clamp_range_lines())
     return lines
@@ -903,8 +1032,10 @@ def _build_formant_statistics(
 ) -> str:
     """一段时间内的共振峰平均值与标准差（「共振峰平均是多少」用这个）。"""
 
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做共振峰分析")
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Formant"}),
+        "共振峰分析需要 Sound 或 Formant 对象",
+    )
     formatns = _formant_numbers(arguments)
     unit = _unit_literal(arguments, "hertz")
     unit_text = _unit_display(arguments, "hertz")
@@ -951,8 +1082,10 @@ def _build_harmonicity_statistics(
 ) -> str:
     """谐噪比 HNR（Praat 的 Harmonicity，单位 dB）。"""
 
-    row = context.resolve_object(arguments.get("object"))
-    context.require_class(row, TIME_DOMAIN_CLASSES, "这个对象没有时长，无法做谐噪比分析")
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Harmonicity"}),
+        "谐噪比分析需要 Sound 或 Harmonicity 对象",
+    )
     temporary = row.class_name != "Harmonicity"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     lines.extend(_range_lines(arguments, row))
@@ -1007,7 +1140,7 @@ def _build_spectrogram(arguments: Mapping[str, Any], context: ToolContext) -> st
     """从 Sound 生成频谱图对象（「做成频谱图」用这个）。"""
 
     row = context.resolve_by_class(
-        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以做频谱图"
+        arguments.get("object"), ANALYSIS_SOUND_CLASSES, "频谱图分析需要 Sound 对象"
     )
     window_length = _number(arguments, "window_length", 0.005, 0.0001, 1.0)
     maximum_frequency = _number(arguments, "max_frequency", 5000.0, 100.0, 96000.0)
@@ -1206,8 +1339,14 @@ def _build_textgrid_set_interval(
 ) -> str:
     row = _textgrid_row(arguments, context)
     tier = _tier_number(arguments)
-    start = _number(arguments, "start", 0.0, 0.0, 36000.0)
-    raw_end = arguments.get("end", arguments.get("finish", None))
+    # from/to 是 start/end 的别名，必须和 extract_part 一致：云端 Prompt 教模型对
+    # 整段请求写 from=0、终点写实际 duration，两个工具用不同的名字会把用户明确
+    # 给出的时间丢掉（2026-09-29 回归）。
+    start = _number(
+        {"start": arguments.get("start", arguments.get("from"))},
+        "start", 0.0, 0.0, 36000.0,
+    )
+    raw_end = arguments.get("end", arguments.get("to", arguments.get("finish", None)))
     if raw_end in (None, ""):
         # 「把这一段标成 x」：结束时间没给时用编辑器里圈出来的选区。
         selection = _selection_range(arguments, row)
@@ -1335,10 +1474,101 @@ def _build_textgrid_insert_boundary(
     return _assemble(lines, context)
 
 
+def _build_vot_explicit(arguments: Mapping[str, Any], context: ToolContext) -> str:
+    """VOT（嗓音起始时间）= 浊音起始时刻 − 爆破/除阻时刻。
+
+    这里不做自动检测：VOT 依赖"爆破"和"浊音起始"这两个点的判断，靠脚本猜很容易
+    给出看起来精确、其实错得离谱的数字。所以要么用用户/标注给出的两个时刻相减，
+    要么由 TextGrid 的边界来定，并把用的两个时刻写进结果，让用户能核对。
+    """
+
+    row = context.resolve_by_class(
+        arguments.get("object"),
+        frozenset({"TextGrid", "Sound"}),
+        "算 VOT 需要一个 TextGrid（按层补边界）或 Sound（直接按两个时刻相减）",
+    )
+    if arguments.get("burst", None) in (None, ""):
+        raise ToolError(
+            "算 VOT 需要 burst 参数：爆破/除阻时刻（秒）。"
+            "前端不做自动检测，请先看波形或标出这个点。"
+        )
+    if arguments.get("voicing", arguments.get("onset", None)) in (None, ""):
+        raise ToolError("算 VOT 需要 voicing 参数：浊音起始时刻（秒）。")
+    burst = _number(arguments, "burst", 0.0, 0.0, 36000.0)
+    voicing = _number(
+        {"voicing": arguments.get("voicing", arguments.get("onset", None))},
+        "voicing",
+        0.0,
+        0.0,
+        36000.0,
+    )
+    if voicing <= burst:
+        raise ToolError(
+            f"浊音起始必须晚于爆破时刻（现在 burst={burst:.3f} 秒、"
+            f"voicing={voicing:.3f} 秒）。"
+        )
+    tier = _tier_number(arguments)
+    lines = [
+        f"selectObject: {row.id}",
+        f"t1 = {burst:.6f}",
+        f"t2 = {voicing:.6f}",
+        "vot = t2 - t1",
+    ]
+    if row.class_name == "TextGrid":
+        lines.extend(
+            [
+                "duration = Get total duration",
+                f"tier = {tier}",
+                "inserted = 0",
+                *_insert_boundary_block(tier, "t1", "inserted", "v1"),
+                *_insert_boundary_block(tier, "t2", "inserted", "v2"),
+                'note$ = ""',
+                "if inserted > 0",
+                '    note$ = "，并在该层补上了边界"',
+                "endif",
+                _write_result(
+                    context,
+                    [
+                        quote("VOT = "),
+                        "fixed$ (vot, 4)",
+                        quote(" 秒（"),
+                        "fixed$ (vot * 1000, 1)",
+                        quote(" 毫秒）：第 "),
+                        "fixed$ (tier, 0)",
+                        quote(" 层 "),
+                        "fixed$ (t1, 3)",
+                        quote(" 秒（爆破）→ "),
+                        "fixed$ (t2, 3)",
+                        quote(" 秒（浊音起始）"),
+                        "note$",
+                    ],
+                ),
+            ]
+        )
+    else:
+        lines.append(
+            _write_result(
+                context,
+                [
+                    quote("VOT = "),
+                    "fixed$ (vot, 4)",
+                    quote(" 秒（"),
+                    "fixed$ (vot * 1000, 1)",
+                    quote(" 毫秒）："),
+                    "fixed$ (t1, 3)",
+                    quote(" 秒（爆破）→ "),
+                    "fixed$ (t2, 3)",
+                    quote(" 秒（浊音起始）；按给出的两个时刻相减，未做自动检测"),
+                ],
+            )
+        )
+    return _assemble(lines, context)
+
+
 def _echoes_editor_selection(
     start: Any, end: Any, selection: tuple[float, float]
 ) -> bool:
-    """Keep provenance when the model repeats a range already selected in Praat."""
+    """模型把编辑器里的圈选原样抄进 from/to 时，数值上应该和选区对得上。"""
 
     if start in (None, "") and end in (None, ""):
         return False
@@ -1354,155 +1584,354 @@ def _echoes_editor_selection(
     return True
 
 
-def _build_vot_explicit(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    """Send complete explicit boundaries to the shared C++ VOT action."""
-
-    burst = _vot_time(arguments, "burst")
-    voicing = _vot_time(arguments, "voicing", alias="onset")
-    if burst is None:
-        raise ToolError("算 VOT 需要 burst 参数：爆破/除阻时刻（秒）。")
-    if voicing is None:
-        raise ToolError("算 VOT 需要 voicing 参数：浊音起始时刻（秒）。")
-    row = context.resolve_by_class(
-        arguments.get("object"),
-        frozenset({"TextGrid", "Sound", "LongSound"}),
-        "算 VOT 需要 TextGrid、Sound 或 LongSound 对象",
-    )
-    if row.class_name == "TextGrid":
-        return _build_vot_textgrid_explicit(arguments, context, row, burst, voicing)
-    return _vot_action_script(arguments, context, row, burst, voicing, candidate_mode=False)
-
-
-def _build_vot_textgrid_explicit(
-    arguments: Mapping[str, Any],
-    context: ToolContext,
-    row: ObjectRow,
-    burst: float,
-    voicing: float,
-) -> str:
-    """Keep the existing TextGrid boundary insertion workflow for manual labels."""
-
-    tier = _tier_number(arguments)
-    lines = [
-        f"selectObject: {row.id}",
-        f"t1 = {burst:.6f}",
-        f"t2 = {voicing:.6f}",
-        "vot = t2 - t1",
-        "duration = Get total duration",
-        f"tier = {tier}",
-        "inserted = 0",
-        *_insert_boundary_block(tier, "t1", "inserted", "v1"),
-        *_insert_boundary_block(tier, "t2", "inserted", "v2"),
-        'note$ = ""',
-        "if inserted > 0",
-        '    note$ = "，并在该层补上了边界"',
-        "endif",
-        _write_result(
-            context,
-            [
-                quote("VOT = "),
-                "fixed$ (vot, 4)",
-                quote(" 秒（"),
-                "fixed$ (vot * 1000, 1)",
-                quote(" 毫秒）：第 "),
-                "fixed$ (tier, 0)",
-                quote(" 层 "),
-                "fixed$ (t1, 3)",
-                quote(" 秒（爆破）→ "),
-                "fixed$ (t2, 3)",
-                quote(" 秒（浊音起始）"),
-                "note$",
-            ],
-        ),
-    ]
-    return _assemble(lines, context)
-
-
-def _vot_action_script(
-    arguments: Mapping[str, Any],
-    context: ToolContext,
-    row: ObjectRow,
-    burst: float | None,
-    voicing: float | None,
-    *,
-    candidate_mode: bool,
-) -> str:
-    """Build one script action call and copy the core's TSV into the AI result file."""
-
-    burst_db = _number(arguments, "burst_db", 6.0, 3.0, 30.0)
-    pitch_floor = _number(arguments, "pitch_floor", 75.0, 40.0, 500.0)
-    selection = _selection_range(arguments, row)
-    start_arg = arguments.get("from", arguments.get("start", None))
-    end_arg = arguments.get("to", arguments.get("end", None))
-    analysis_path = context.result_path.with_suffix(".vot.tsv")
-    lines = [f"selectObject: {row.id}", "tmin = Get start time", "tmax = Get end time"]
-    if selection is not None:
-        lines.extend(
-            [
-                f"tmin = {selection[0]:.6f}",
-                f"tmax = {selection[1]:.6f}",
-                _range_note(selection),
-            ]
-        )
-    else:
-        lines.append('rangeNote$ = "（按对象时间范围搜索）"')
-        if start_arg not in (None, ""):
-            lines.append(f"tmin = {_seconds_argument(start_arg, 'from'):.6f}")
-        if end_arg not in (None, ""):
-            lines.append(f"tmax = {_seconds_argument(end_arg, 'to'):.6f}")
-        if start_arg not in (None, "") or end_arg not in (None, ""):
-            lines.append(
-                'rangeNote$ = "（使用明确范围 " + fixed$ (tmin, 3) + "–" '
-                '+ fixed$ (tmax, 3) + " 秒）"'
-            )
-    burst_arg = "undefined" if burst is None else f"{burst:.6f}"
-    voicing_arg = "undefined" if voicing is None else f"{voicing:.6f}"
-    lines.extend(
-        [
-            f"Write VOT analysis to file: tmin, tmax, {burst_arg}, {voicing_arg}, "
-            f"{burst_db:.6f}, {pitch_floor:.6f}, {quote(analysis_path)}",
-            f"votTsv$ = readFile$ ({quote(analysis_path)})",
-            _write_result(
-                context,
-                [
-                    quote(
-                        "VOT 候选（C++ 自动估计，需人工确认）"
-                        if candidate_mode
-                        else "VOT 测量（使用给定边界）"
-                    ),
-                    "rangeNote$",
-                ],
-            ),
-            f"appendFile: {quote(context.result_path)}, votTsv$",
-        ]
-    )
-    return _assemble(lines, context)
-
-
 def _seconds_argument(value: Any, key: str) -> float:
     try:
         number = float(value)
     except (TypeError, ValueError) as error:
         raise ToolError(f"参数 {key} 必须是数字，收到：{value!r}") from error
-    if not math.isfinite(number) or not -36000.0 <= number <= 36000.0:
-        raise ToolError(f"参数 {key} 必须是 -36000 到 36000 之间的有限秒数。")
-    return number
+    return min(max(number, 0.0), 36000.0)
+
+
+def _rise_onset_lines(prefix: str, env_var: str) -> list[str]:
+    """在强度包络里找最陡的一段上升沿，写进 ``<prefix>Onset``/``<prefix>Rise``。
+
+    判定靠"升幅 + 上升沿之前那段低能量"，不用"区间峰值 − x dB"：范围里只要还夹着
+    别的强段（比如后面的元音），后者就会漂，同一个音两次能差好几毫秒。
+    """
+
+    return [
+        f"selectObject: {env_var}",
+        f"{prefix}N = Get number of frames",
+        f"{prefix}Rise = -1000",
+        f"{prefix}Best = -1",
+        f"for i from 1 to {prefix}N",
+        "    ft = Get time from frame number: i",
+        "    back = i - 3",
+        "    if back >= 1 and ft >= tmin and ft <= tmax",
+        "        bt = Get time from frame number: back",
+        "        if bt >= tmin",
+        "            v = Get value in frame: i",
+        "            v0 = Get value in frame: back",
+        "            later = v",
+        "            j = i + 5",
+        f"            if j <= {prefix}N",
+        "                later = Get value in frame: j",
+        "            endif",
+        # 上升沿之后能量要守得住才算一次真瞬态：被硬切出来的爆音"来了就走"，
+        # 用它当爆破会把 VOT 报大几十毫秒。
+        f"            if later >= v - 10 and v - v0 > {prefix}Rise",
+        f"                {prefix}Rise = v - v0",
+        f"                {prefix}Best = i",
+        "            endif",
+        "        endif",
+        "    endif",
+        "endfor",
+        f"{prefix}Onset = tmin",
+        f"if {prefix}Best >= 1",
+        f"    {prefix}Onset = Get time from frame number: {prefix}Best",
+        f"    {prefix}Ref = Get value in frame: {prefix}Best",
+        f"    k = {prefix}Best - 1",
+        "    found = 0",
+        "    while k >= 1 and found = 0",
+        "        vt = Get time from frame number: k",
+        "        v = Get value in frame: k",
+        f"        if vt < tmin or v < {prefix}Ref - 8",
+        "            found = 1",
+        "        else",
+        f"            {prefix}Onset = vt",
+        "            k = k - 1",
+        "        endif",
+        "    endwhile",
+        "endif",
+    ]
 
 
 def _build_vot_auto(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    """Request editable C++ candidate estimates in the chosen Sound interval."""
+    """在用户圈出的大概范围里自动估计 VOT（爆破 → 浊音起始）。
+
+    爆破和浊音起始分成两步测，结果里分别写清楚，好让人判断是哪一步不稳：
+
+    1. 爆破（释放瞬态）：把声音带通到 2–8 kHz 再算强度包络（1 ms 步长、3.2 ms
+       窗口，比全频段窗口短，免得把爆破点平均到前面去），取最陡的一段上升沿，
+       再退到这段上升沿之前的低能量帧。升幅不到 ``burst_db``（默认 6 dB）就换
+       全频段包络兜底，两个都不够就报"找不到爆破瞬态"。不用"区间峰值 − x dB"
+       当阈值：范围里只要还夹着别的强段，这个阈值就会漂。
+    2. 浊音起始：``To Pitch (ac)``（2 ms 步长、默认浊音阈值，走的就是短时自相关）
+       连续 3 帧（6 ms）都判出基频才算声带开始振动；谐噪比只截起点之后 50 ms
+       那一小段算峰值，当谐波结构的依据写进结果——整段声音做交叉相关太慢
+       （10 秒的声音上要 0.3 秒，用户能感觉出卡）。
+       注意：``To Harmonicity (cc)`` 的 periodsPerWindow 给 0.5 会让 Praat 7.0.02
+       直接在 Sound_to_Pitch.cpp 断言崩溃，只能 ≥ 1；而 4 ms 的窗口（minPitch 250）
+       在 220 Hz 上会判成"全是噪声"，所以窗口就用 1/minPitch。
+    3. VOT = 浊音起始 − 爆破时刻。
+
+    范围整段都在浊音里时报"起点已是浊音"；范围内后面还有第二段浊音（中间隔了
+    ≥20 毫秒的低谐噪比段）时只报第一个候选，并提示范围偏大。
+
+    范围来自用户话里的 from/to，或者他在波形上手动拖出来的选区
+    （``chat_context.tsv`` 的 ``sel_start``/``sel_end``）；模型把圈选抄成
+    from/to 时结果里仍注明"按编辑器圈选"。
+
+    这是估计值，不是人工标注：结果里写明两步各自的依据、范围和时间分辨率。
+    """
 
     row = context.resolve_by_class(
-        arguments.get("object"), SOUND_CLASSES, "自动估计 VOT 需要 Sound 或 LongSound 对象"
+        arguments.get("object"), ANALYSIS_SOUND_CLASSES, "自动检测 VOT 需要一个 Sound 对象"
     )
-    return _vot_action_script(arguments, context, row, None, None, candidate_mode=True)
+    burst_db = _number(arguments, "burst_db", 6.0, 3.0, 30.0)
+    pitch_floor = _number(arguments, "pitch_floor", 75.0, 40.0, 500.0)
+    start_arg = arguments.get("from", arguments.get("start", None))
+    end_arg = arguments.get("to", arguments.get("end", None))
+    editor_selection = row.selection
+    # 模型常把编辑器里的圈选原样抄进 from/to；数值对得上就还按圈选报，
+    # 否则回话里会丢掉「这段范围是用户自己在波形上圈的」这个出处。
+    if editor_selection is not None and _echoes_editor_selection(
+        start_arg, end_arg, editor_selection
+    ):
+        start_arg = None
+        end_arg = None
+    had_range = start_arg not in (None, "") or end_arg not in (None, "")
+    if had_range:
+        editor_selection = None
+    lines = [
+        f"selectObject: {row.id}",
+        "duration = Get total duration",
+        "tmin = 0",
+        "tmax = duration",
+    ]
+    if editor_selection is not None:
+        lines.append(f"tmin = {editor_selection[0]:.6f}")
+        lines.append(f"tmax = {editor_selection[1]:.6f}")
+    elif start_arg not in (None, ""):
+        lines.append(f"tmin = {_seconds_argument(start_arg, 'from'):.6f}")
+    if editor_selection is None and end_arg not in (None, ""):
+        lines.append(f"tmax = {_seconds_argument(end_arg, 'to'):.6f}")
+    if editor_selection is not None:
+        note_lines = [
+            f'rangeNote$ = "（按编辑器圈选 {editor_selection[0]:.3f}–'
+            f'{editor_selection[1]:.3f} 秒）"'
+        ]
+    else:
+        note_lines = [
+            'rangeNote$ = "（未指定范围，按整个对象搜索）"',
+            "if tmin > 0 or tmax < duration",
+            '    rangeNote$ = ""',
+            "endif",
+        ]
+    lines.extend(
+        [
+            "if tmin < 0",
+            "    tmin = 0",
+            "endif",
+            "if tmax > duration",
+            "    tmax = duration",
+            "endif",
+            "if tmin > tmax - 0.002",
+            _write_result(context, [quote(
+                "自动检测失败：搜索范围无效、超出声音时长或不足 2 毫秒。"
+                "请在声音内重新圈选爆破和浊音起始附近的范围；未改用整个声音。"
+            )]),
+            "else",
+            *note_lines,
+            # ① 爆破（释放瞬态）：带通到 2–8 kHz 再求强度包络的最陡上升沿
+            f"selectObject: {row.id}",
+            f'To Harmonicity (cc): 0.002, {pitch_floor:.6f}, 0.1, 1.0',
+            'hnrId = selected ("Harmonicity")',
+            f"selectObject: {row.id}",
+            "Filter (pass Hann band): 2000, 8000, 100",
+            'hfSound = selected ("Sound")',
+            'To Intensity: 2000, 0.001, "yes"',
+            'hfEnv = selected ("Intensity")',
+            *_rise_onset_lines("hf", "hfEnv"),
+            f"selectObject: {row.id}",
+            'To Intensity: 1000, 0.001, "yes"',
+            'bbEnv = selected ("Intensity")',
+            *_rise_onset_lines("bb", "bbEnv"),
+            "burstTime = -1",
+            "burstRise = 0",
+            'burstBand$ = ""',
+            f"if hfRise >= {burst_db:.1f}",
+            "    burstTime = hfOnset",
+            "    burstRise = hfRise",
+            '    burstBand$ = "高频带 2–8 kHz"',
+            f"elsif bbRise >= {burst_db:.1f}",
+            "    burstTime = bbOnset",
+            "    burstRise = bbRise",
+            '    burstBand$ = "全频段"',
+            "endif",
+            "selectObject: hfEnv",
+            "plusObject: bbEnv",
+            "plusObject: hfSound",
+            "Remove",
+            # ② 浊音起始：自相关基频连续 3 帧（6 ms）成立；谐噪比另取一小段当佐证
+            f"selectObject: {row.id}",
+            f'To Pitch (ac): 0.002, {pitch_floor:.6f}, 15, "no", 0.03, '
+            '0.45, 0.01, 0.35, 0.14, 600',
+            "pn = Get number of frames",
+            "voicingTime = -1",
+            "f0Onset = 0",
+            "firstVoicedTime = -1",
+            "run = 0",
+            "runStart = -1",
+            "runStartF0 = 0",
+            "lastVoiced = -1",
+            "candTime = -1",
+            "secondVoicingTime = -1",
+            "for i from 1 to pn",
+            "    ft = Get time from frame number: i",
+            "    if ft >= tmin and ft <= tmax",
+            '        v = Get value in frame: i, "Hertz"',
+            "        if v <> undefined",
+            "            run = run + 1",
+            "            if run = 1",
+            "                runStart = ft",
+            "                runStartF0 = v",
+            "            endif",
+            "            if firstVoicedTime < 0",
+            "                firstVoicedTime = ft",
+            "            endif",
+            "            if voicingTime < 0 and run >= 3 and runStart >= burstTime",
+            "                voicingTime = runStart",
+            "                f0Onset = runStartF0",
+            "            endif",
+            "            if candTime >= 0",
+            "                if secondVoicingTime < 0",
+            "                    secondVoicingTime = candTime",
+            "                endif",
+            "            elsif lastVoiced >= 0 and voicingTime >= 0 and ft - lastVoiced >= 0.02",
+            "                candTime = ft",
+            "            endif",
+            "            lastVoiced = ft",
+            "        else",
+            "            run = 0",
+            "            candTime = -1",
+            "        endif",
+            "    endif",
+            "endfor",
+            "Remove",
+            "if firstVoicedTime >= 0 and firstVoicedTime <= tmin + 0.01",
+            _write_result(
+                context,
+                [
+                    quote("自动检测失败：范围起点附近（"),
+                    "fixed$ (firstVoicedTime, 3)",
+                    quote(" 秒）已经是浊音（自相关基频连续成立），"
+                          "说明爆破不在这个范围里。请把 from 提前到闭音段"
+                          "（爆破之前），或直接给出 burst 和 voicing 两个时刻。"),
+                    "rangeNote$",
+                ],
+            ),
+            "elsif burstTime < 0",
+            _write_result(
+                context,
+                [
+                    quote("自动检测失败："),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(f" 秒里高频带和全频段能量都没有 {burst_db:.0f} dB 以上的陡升，"
+                          "找不到爆破瞬态。请把范围收紧到爆破附近，"
+                          "或直接给出 burst 和 voicing 两个时刻。"),
+                    "rangeNote$",
+                ],
+            ),
+            "elsif voicingTime < 0",
+            _write_result(
+                context,
+                [
+                    quote("自动检测失败：爆破点 "),
+                    "fixed$ (burstTime, 3)",
+                    quote(" 秒之后没有连续 3 帧以上的浊音（自相关基频），"
+                          "范围里可能没有浊音段。"),
+                    "rangeNote$",
+                ],
+            ),
+            "else",
+            # 谐噪比只当佐证，就只算起点之后 50 ms 那一小段：整段声音做交叉相关
+            # 在 10 秒的声音上要 0.3 秒，用户能感觉出卡。
+            "    hnrEnd = voicingTime + 0.05",
+            "    if hnrEnd > duration",
+            "        hnrEnd = duration",
+            "    endif",
+            "    hnrMax = 0",
+            "    if hnrEnd - voicingTime >= 0.03",
+            f"        selectObject: {row.id}",
+            '        Extract part: voicingTime, hnrEnd, "rectangular", 1, "no"',
+            '        ex = selected ("Sound")',
+            f'        To Harmonicity (cc): 0.002, {pitch_floor:.6f}, 0.1, 1.0',
+            "        hn = Get number of frames",
+            "        if hn >= 1",
+            "            for i from 1 to hn",
+            "                hv = Get value in frame: i",
+            "                if hv > hnrMax",
+            "                    hnrMax = hv",
+            "                endif",
+            "            endfor",
+            "        endif",
+            "        Remove",
+            "        selectObject: ex",
+            "        Remove",
+            "    endif",
+            "    vot = voicingTime - burstTime",
+            '    caution$ = ""',
+            "    if vot < 0.005",
+            '        caution$ = "（不到 5 毫秒：可能范围起点已在浊音里，'
+            '也可能是不送气塞音，请核对）"',
+            "    endif",
+            '    secondNote$ = ""',
+            "    if secondVoicingTime >= 0",
+            '        secondNote$ = "；范围偏大：后面还有第 2 段浊音从 " + '
+            'fixed$ (secondVoicingTime, 3) + " 秒开始，本次只报了第一个候选，建议收紧范围"',
+            "    endif",
+            _write_result(
+                context,
+                [
+                    quote("VOT 估计值 = "),
+                    "fixed$ (vot, 4)",
+                    quote(" 秒（"),
+                    "fixed$ (vot * 1000, 1)",
+                    quote(" 毫秒）：爆破 "),
+                    "fixed$ (burstTime, 3)",
+                    quote(" 秒（"),
+                    "burstBand$",
+                    quote(" 能量升 "),
+                    "fixed$ (burstRise, 1)",
+                    quote(" dB）→ 浊音起始 "),
+                    "fixed$ (voicingTime, 3)",
+                    quote(" 秒（自相关基频 "),
+                    "fixed$ (f0Onset, 1)",
+                    quote(" Hz，之后 50 毫秒内谐噪比最高 "),
+                    "fixed$ (hnrMax, 1)",
+                    quote(" dB）；范围 "),
+                    "fixed$ (tmin, 3)",
+                    quote("–"),
+                    "fixed$ (tmax, 3)",
+                    quote(" 秒；爆破与浊音起始分开估计，请对着语图核对"),
+                    "caution$",
+                    "secondNote$",
+                    "rangeNote$",
+                ],
+            ),
+            "endif",
+            "endif",  # valid search range
+        ]
+    )
+    return _assemble(lines, context)
 
 
 def _build_vot(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    """Pass a complete manual boundary pair, or request C++ candidate estimation."""
+    """给了爆破/浊音两个时刻就相减，否则在大概范围里自动估计。
+
+    ``burst`` / ``voicing`` 是可选字段，但模型（尤其走原生 tool calling 之后）会把
+    可选字段"填满"，给两个 ``0``。两条都是 0 的 VOT 本来就没有意义，所以这里把它
+    当成"没给"，继续走自动估计——比拿它报「浊音起始必须晚于爆破时刻」更贴近用户
+    的意图（实测「提取这段语音的 vot」就是这么被卡住的）。
+    """
 
     burst = _vot_time(arguments, "burst")
     voicing = _vot_time(arguments, "voicing", alias="onset")
+    if burst == 0.0 and voicing == 0.0:
+        burst = voicing = None
     if burst is not None and voicing is not None:
         return _build_vot_explicit(arguments, context)
     if burst is not None or voicing is not None:
@@ -1522,12 +1951,9 @@ def _vot_time(
     if raw in (None, ""):
         return None
     try:
-        number = float(raw)
+        return float(raw)
     except (TypeError, ValueError):
         raise ToolError(f"参数 {key} 必须是数字（秒），收到：{raw!r}") from None
-    if not math.isfinite(number) or not -36000.0 <= number <= 36000.0:
-        raise ToolError(f"参数 {key} 必须是 -36000 到 36000 之间的有限秒数。")
-    return number
 
 
 def _build_select(arguments: Mapping[str, Any], context: ToolContext) -> str:
@@ -1555,7 +1981,7 @@ def _build_play(arguments: Mapping[str, Any], context: ToolContext) -> str:
     )
     lines = [
         f"selectObject: {row.id}",
-        "Play",
+        "Play part: 0, 0" if row.class_name == "LongSound" else "Play",
         _write_result(context, [quote("已播放："), quote(row.name)]),
     ]
     return _assemble(lines, context)
@@ -1628,12 +2054,12 @@ def _build_create_sound(arguments: Mapping[str, Any], context: ToolContext) -> s
 
 def _build_concatenate(arguments: Mapping[str, Any], context: ToolContext) -> str:
     first = context.resolve_by_class(
-        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以拼接"
+        arguments.get("object"), ANALYSIS_SOUND_CLASSES, "拼接需要 Sound 对象"
     )
     other = arguments.get("object2", arguments.get("other", None))
     if other in (None, ""):
         raise ToolError("拼接需要 object2 参数，指出第二个声音对象。")
-    second = context.resolve_by_class(other, SOUND_CLASSES, "只有声音对象可以拼接")
+    second = context.resolve_by_class(other, ANALYSIS_SOUND_CLASSES, "拼接需要 Sound 对象")
     if first.id == second.id:
         raise ToolError("拼接需要两个不同的声音对象。")
     name = _new_name(arguments, "拼接结果")
@@ -1662,8 +2088,11 @@ def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> s
     row = context.resolve_by_class(
         arguments.get("object"), SOUND_CLASSES, "只有声音对象可以截取片段"
     )
-    start = _number(arguments, "start", 0.0, 0.0, 36000.0)
-    raw_end = arguments.get("end", arguments.get("finish", None))
+    start = _number(
+        {"start": arguments.get("start", arguments.get("from"))},
+        "start", 0.0, 0.0, 36000.0,
+    )
+    raw_end = arguments.get("end", arguments.get("to", arguments.get("finish", None)))
     if raw_end in (None, ""):
         # 「把这段截出来」：结束时间没给时用编辑器里圈出来的选区。
         selection = _selection_range(arguments, row)
@@ -1694,7 +2123,8 @@ def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> s
         "if t1 < 0",
         "    t1 = 0",
         "endif",
-        'newId = Extract part: t1, t2, "rectangular", 1, "no"',
+        ('newId = Extract part: t1, t2, "no"' if row.class_name == "LongSound"
+         else 'newId = Extract part: t1, t2, "rectangular", 1, "no"'),
         f"Rename: {quote(name)}",
         "duration = Get total duration",
         _write_result(
@@ -1736,24 +2166,25 @@ def _build_read_file(arguments: Mapping[str, Any], context: ToolContext) -> str:
     path = praat_path(Path(raw))
     lines = [
         f"if not fileReadable ({quote(path)})",
-        _write_result(
-            context,
-            [quote("找不到要读取的文件："), quote(path), quote("（请检查路径是否存在）")],
-        ),
+        f"exitScript: {quote('找不到要读取的文件：' + path + '（请检查路径是否存在）')}",
         "else",
-        f"readAiObject__ = Read from file: {quote(path)}",
-        "selectObject: readAiObject__",
-        "readAiName$ = selected$ ()",
+        f"Read from file: {quote(path)}",
+        "readAiCount__ = numberOfSelected ()",
+        "for readAiIndex__ from 1 to readAiCount__",
+        "readAiObject__ = selected (readAiIndex__)",
+        "readAiName$ = selected$ (readAiIndex__)",
         _write_result(
             context,
             [
                 quote("已读入文件："),
                 "readAiName$",
+                _id_fragment("readAiObject__"),
                 quote("（"),
                 quote(path),
                 quote("）"),
             ],
         ),
+        "endfor",
         "endif",
     ]
     return _assemble(lines, context)
@@ -1791,7 +2222,7 @@ def _build_save_sound(arguments: Mapping[str, Any], context: ToolContext) -> str
 
 def _build_resample(arguments: Mapping[str, Any], context: ToolContext) -> str:
     row = context.resolve_by_class(
-        arguments.get("object"), SOUND_CLASSES, "只有声音对象可以改变采样率"
+        arguments.get("object"), ANALYSIS_SOUND_CLASSES, "改变采样率需要 Sound 对象"
     )
     rate = _integer(arguments, "rate", 16000, 1000, 768000)
     lines = [
@@ -1849,7 +2280,7 @@ def _build_spectral_emphasis(
     """
 
     row = context.resolve_by_class(
-        arguments.get("object"), SOUND_CLASSES, "谱强调需要声音对象"
+        arguments.get("object"), ANALYSIS_SOUND_CLASSES, "谱强调需要 Sound 对象"
     )
     multiplier = _number(arguments, "multiplier", 1.5, 0.1, 10.0)
     smoothing = _number(arguments, "smoothing", 20.0, 0.1, 5000.0)
@@ -1899,7 +2330,10 @@ def _build_hl_ratio(arguments: Mapping[str, Any], context: ToolContext) -> str:
     （默认 0–4000 Hz 与 4000–8000 Hz）。输入是 Sound 时先做 ``To Spectrum``。
     """
 
-    row = context.resolve_object(arguments.get("object"))
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Spectrum"}),
+        "H/L 需要 Sound 或 Spectrum 对象",
+    )
     low_from = _number(arguments, "low_from", 0.0, 0.0, 96000.0)
     low_to = _number(arguments, "low_to", 4000.0, 1.0, 96000.0)
     high_from = _number(arguments, "high_from", 4000.0, 1.0, 96000.0)
@@ -1907,10 +2341,6 @@ def _build_hl_ratio(arguments: Mapping[str, Any], context: ToolContext) -> str:
     if low_to > high_from:
         raise ToolError("低频段上限不能高于高频段下限（默认 0–4000 与 4000–8000 Hz）。")
     temporary = row.class_name != "Spectrum"
-    if temporary:
-        context.require_class(
-            row, SOUND_CLASSES, "H/L 需要声音对象，或者现成的 Spectrum 对象"
-        )
     lines = [f"selectObject: {row.id}"]
     if temporary:
         lines.extend(['To Spectrum: "yes"', f"Rename: {quote(TEMPORARY_OBJECT_NAME)}"])
@@ -1953,17 +2383,16 @@ def _build_hammarberg_index(
     见 Hammarberg et al. (1980)。输入是 Sound 时先做 ``To Ltas``。
     """
 
-    row = context.resolve_object(arguments.get("object"))
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Ltas"}),
+        "Hammarberg 指数需要 Sound 或 Ltas 对象",
+    )
     low_from = _number(arguments, "low_from", 0.0, 0.0, 96000.0)
     low_to = _number(arguments, "low_to", 2000.0, 1.0, 96000.0)
     high_from = _number(arguments, "high_from", 2000.0, 1.0, 96000.0)
     high_to = _number(arguments, "high_to", 5000.0, 2.0, 96000.0)
     bandwidth = _number(arguments, "bandwidth", 100.0, 1.0, 1000.0)
     temporary = row.class_name != "Ltas"
-    if temporary:
-        context.require_class(
-            row, SOUND_CLASSES, "Hammarberg 指数需要声音对象，或者现成的 Ltas 对象"
-        )
     lines = [f"selectObject: {row.id}"]
     if temporary:
         lines.extend([f"To Ltas: {bandwidth:.6f}", f"Rename: {quote(TEMPORARY_OBJECT_NAME)}"])
@@ -2001,11 +2430,10 @@ def _build_pitch_peak_latency(
     （峰值时刻 − 区间起点）÷ 区间时长，0.5 表示峰值正好在区间中间。
     """
 
-    row = context.resolve_object(arguments.get("object"))
-    # 只有声音能现做 Pitch、或者直接给 Pitch；TextGrid 这类有时长但没有「To Pitch」
-    # 命令的对象要在这里拦住，不然 Praat 会弹一句英文错误框，还会挡住后面的消息。
-    if row.class_name not in SOUND_CLASSES:
-        context.require_class(row, frozenset({"Pitch"}), "基频峰值延迟需要声音对象或 Pitch 对象")
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Pitch"}),
+        "基频峰值延迟需要 Sound 或 Pitch 对象",
+    )
     temporary = row.class_name != "Pitch"
     floor = _number(arguments, "pitch_floor", 75.0, 20.0, 1000.0)
     ceiling = _number(arguments, "pitch_ceiling", 600.0, 50.0, 2000.0)
@@ -2018,9 +2446,13 @@ def _build_pitch_peak_latency(
                 f"Rename: {quote(TEMPORARY_OBJECT_NAME)}",
             ]
         )
+    lines.extend(['nFrames = Get number of frames'])
+    # 峰值时刻同样要防倍频误判：裸 Get time of maximum 会被浊音起始那一帧引偏，
+    # 于是「峰值延迟」也跟着偏（2026-09-30 与 pitch_statistics 同一处修正）。
+    lines.extend(_pitch_extreme_lines())
     lines.extend(
         [
-            'peakTime = Get time of maximum: tmin, tmax, "Hertz", "Parabolic"',
+            "peakTime = maxtime",
             "if peakTime = undefined",
             _write_result(
                 context,
@@ -2071,7 +2503,7 @@ def _build_peak_to_average_ratio(
     """
 
     row = context.resolve_by_class(
-        arguments.get("object"), SOUND_CLASSES, "峰值/平均值比需要声音对象"
+        arguments.get("object"), ANALYSIS_SOUND_CLASSES, "峰值/平均值比需要 Sound 对象"
     )
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     lines.extend(_range_lines(arguments, row))
@@ -2127,11 +2559,10 @@ def _build_intensity_slope(arguments: Mapping[str, Any], context: ToolContext) -
     范围默认整段；给了 from/to（或编辑器圈选）时，先按这个范围把声音截出来再分析。
     """
 
-    row = context.resolve_object(arguments.get("object"))
-    if row.class_name not in SOUND_CLASSES:
-        context.require_class(
-            row, frozenset({"Intensity"}), "强度斜率需要声音对象或 Intensity 对象"
-        )
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset({"Sound", "Intensity"}),
+        "强度斜率需要 Sound 或 Intensity 对象",
+    )
     method = str(arguments.get("method", "local") or "local").strip().casefold()
     if method not in {"local", "global", "局部", "整体"}:
         raise ToolError("method 只能是 local（局部）或 global（整体）。")
@@ -2140,7 +2571,8 @@ def _build_intensity_slope(arguments: Mapping[str, Any], context: ToolContext) -
     time_step = _number(arguments, "time_step", 0.001, 0.0001, 1.0)
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     extracted = ""
-    if row.class_name in SOUND_CLASSES:
+    temporary = row.class_name == "Sound"
+    if temporary:
         # 整段分析时不会截片段，所以先给 extractedId 一个初值（0 = 没截）。
         lines.append("extractedId = 0")
         lines.extend(_range_lines(arguments, row))
@@ -2166,12 +2598,16 @@ def _build_intensity_slope(arguments: Mapping[str, Any], context: ToolContext) -
                 "要按时间范围算，请直接对声音对象用这个工具。"
             )
         lines.extend(["tmin = 0", "tmax = duration", 'rangeNote$ = ""'])
+    lines.append(
+        f'intensityId = To Intensity: {pitch_floor:.6f}, {time_step:.6f}, "yes"'
+        if temporary else f"intensityId = {row.id}"
+    )
     lines.extend(
         [
-            f'intensityId = To Intensity: {pitch_floor:.6f}, {time_step:.6f}, "yes"',
             "Down to Matrix",
             'matrixId = selected ("Matrix")',
             "colsNum = Get number of columns",
+            "timeStep = Get column distance",
         ]
     )
     if local:
@@ -2187,7 +2623,9 @@ def _build_intensity_slope(arguments: Mapping[str, Any], context: ToolContext) -
                     "fixed$ (slope, 2)",
                     quote(" dB/s（"),
                     "fixed$ (colsNum, 0)",
-                    quote(f" 个点，步长 {time_step:g} 秒）"),
+                    quote(" 个点，步长 "),
+                    "fixed$ (timeStep, 6)",
+                    quote(" 秒）"),
                     "rangeNote$",
                 ],
             ),
@@ -2217,8 +2655,9 @@ def _build_intensity_slope(arguments: Mapping[str, Any], context: ToolContext) -
     # 收尾：把中间对象删掉，恢复用户原来的选中对象。
     lines.append("selectObject: matrixId")
     lines.append("Remove")
-    lines.append("selectObject: intensityId")
-    lines.append("Remove")
+    if temporary:
+        lines.append("selectObject: intensityId")
+        lines.append("Remove")
     if extracted:
         # extractedId = 0 表示这次没截片段（整段分析），别去删一个不存在的对象。
         lines.append(f"if {extracted} <> 0")
@@ -2447,9 +2886,20 @@ def _build_measure(arguments: Mapping[str, Any], context: ToolContext) -> str:
 
     queries = [entry for entry in entries if entry.kind == "query"]
     editor_only = [entry for entry in entries if entry.kind == "editor"]
-    row = context.resolve_object(arguments.get("object"))
+    required_sources = {
+        key for entry in queries for key in measures.source_keys(entry.source)
+    }
+    supported_classes = {"Sound"}
+    supported_classes.update(
+        class_name for class_name, alias in _MEASURE_CLASS_DERIVATIONS.items()
+        if required_sources and required_sources <= {alias}
+    )
+    row = context.resolve_by_class(
+        arguments.get("object"), frozenset(supported_classes),
+        "这些测量需要 Sound 声音对象，或对应的已有分析对象",
+    )
     variables: dict[str, str] = {}
-    if row.class_name in SOUND_CLASSES:
+    if row.class_name == "Sound":
         variables["sound"] = str(row.id)
     else:
         alias = _MEASURE_CLASS_DERIVATIONS.get(row.class_name)
@@ -2779,7 +3229,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="formant_statistics",
         summary="统计一段时间的共振峰平均值和标准差。要「共振峰平均/F1 平均」时用这个。",
-        signature="formant（默认 1，可写 1,2）、from、to（秒，默认整个对象）、unit（hertz/Bark）、object（可选）",
+        signature="formant（默认 2，可写 1,2）、from、to（秒，默认整个对象）、unit（hertz/Bark）、object（可选）",
         build=_build_formant_statistics,
     ),
     Tool(
@@ -2827,7 +3277,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="textgrid_set_interval",
         summary="给 TextGrid 的某一层在指定时间区间写上标签（需要时自动插入边界）。要「把 0.2–0.5 秒标成 a」时用这个。",
-        signature="start、end（秒）、label（写入的文字）、tier（层号，默认 1）、object（可选）",
+        signature="start、end、from、to、finish（都是时间参数，秒，from/to/finish 是 start/end 的别名）、label（写入的文字）、tier（层号，默认 1）、object（可选）",
         build=_build_textgrid_set_interval,
     ),
     Tool(
@@ -2838,8 +3288,8 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="vot",
-        summary="分析 VOT：给 burst（爆破）和 voicing（浊音起始）时由 C++ 核心测量，支持零和负 VOT；省略两者时返回需人工确认的 C++ 候选及质量状态。",
-        signature="burst、voicing（秒，必须同时给出；允许相等或 voicing 更早）、from、to（分析范围）、burst_db（默认 6）、pitch_floor（默认 75）、tier（TextGrid 层号，默认 1）、object（Sound、LongSound 或 TextGrid）",
+        summary="算 VOT（嗓音起始时间）：给了 burst（爆破）和 voicing（浊音起始）就直接相减；只给 from/to 就在这个大概范围里自动估计（结果标注是估计值）。",
+        signature="burst、voicing（秒，给全就相减）、from、to（秒，自动估计的范围）、burst_db（默认 6，爆破最小升幅 dB）、pitch_floor（默认 75）、tier（默认 1）、object（可选）",
         build=_build_vot,
     ),
     Tool(
@@ -2887,7 +3337,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="extract_part",
         summary="按时间区间从一个 Sound 里截取片段（生成新对象）。",
-        signature="start、end（秒）、name（可选）、object（可选）",
+        signature="start、end、from、to、finish（都是时间参数，秒，from/to/finish 是 start/end 的别名）、name（可选）、object（可选）",
         build=_build_extract_part,
     ),
     Tool(
@@ -3029,6 +3479,14 @@ def _integer_arg(description: str) -> dict[str, Any]:
     return {"type": "integer", "description": description}
 
 
+def _formants_arg(description: str) -> dict[str, Any]:
+    return {"description":description, "anyOf":[
+        {"type":"integer", "minimum":1, "maximum":20},
+        {"type":"string", "pattern":r"^\s*\d+(?:\s*[,，、;\s]\s*\d+)*\s*$"},
+        {"type":"array", "items":{"type":"integer", "minimum":1, "maximum":20}, "minItems":1, "maxItems":6},
+    ]}
+
+
 def _text_arg(description: str) -> dict[str, Any]:
     return {"type": "string", "description": description}
 
@@ -3062,7 +3520,7 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "formant_bandwidth": {
         "type": "object",
         "properties": {
-            "formant": _integer_arg('第几共振峰，可写 2 或 "1,2"（最多 6 条）'),
+            "formant": _formants_arg('第几共振峰，默认 2，可写 2 或 "1,2"（最多 6 条）'),
             "time": _times_arg("秒，默认对象中点"),
             "unit": _unit_arg(),
             "object": _object_arg(),
@@ -3072,7 +3530,7 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "formant_frequency": {
         "type": "object",
         "properties": {
-            "formant": _integer_arg('第几共振峰，可写 2 或 "1,2"（最多 6 条）'),
+            "formant": _formants_arg('第几共振峰，默认 2，可写 2 或 "1,2"（最多 6 条）'),
             "time": _times_arg('秒，可写多个时刻，如 "0.25,0.75"'),
             "unit": _unit_arg(),
             "object": _object_arg(),
@@ -3082,7 +3540,7 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "formant_statistics": {
         "type": "object",
         "properties": {
-            "formant": _integer_arg('第几共振峰，可写 1 或 "1,2"'),
+            "formant": _formants_arg('第几共振峰，默认 2，可写 1 或 "1,2"'),
             "from": _seconds_arg("起点（秒），不填就是整个对象"),
             "to": _seconds_arg("终点（秒），不填就是整个对象"),
             "unit": _unit_arg(),
@@ -3160,8 +3618,10 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "textgrid_set_interval": {
         "type": "object",
         "properties": {
-            "start": _seconds_arg("区间起点（秒）"),
-            "end": _seconds_arg("区间终点（秒）"),
+            "start": _seconds_arg("区间起点（秒）；from 是同一个意思"),
+            "end": _seconds_arg("区间终点（秒）；to / finish 是同一个意思"),
+            "from": _seconds_arg("区间起点（秒），start 的别名"),
+            "to": _seconds_arg("区间终点（秒），end 的别名"),
             "label": _text_arg("要写入的文字（空字符串表示清空）"),
             "tier": _integer_arg("层号，默认 1"),
             "object": _object_arg("TextGrid 对象"),
@@ -3246,8 +3706,10 @@ TOOL_PARAMETERS: dict[str, dict[str, Any]] = {
     "extract_part": {
         "type": "object",
         "properties": {
-            "start": _seconds_arg("起点（秒）"),
-            "end": _seconds_arg("终点（秒）"),
+            "start": _seconds_arg("起点（秒）；from 是同一个意思"),
+            "end": _seconds_arg("终点（秒）；to / finish 是同一个意思"),
+            "from": _seconds_arg("起点（秒），start 的别名"),
+            "to": _seconds_arg("终点（秒），end 的别名"),
             "name": _text_arg("片段对象的名字"),
             "object": _object_arg(),
         },
@@ -3510,13 +3972,19 @@ def plan_actions(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
         if not name:
             return
         raw = item.get("arguments")
-        actions.append(
-            {
-                "tool": name,
-                "arguments": dict(raw) if isinstance(raw, Mapping) else {},
-                "script": str(item.get("script", "") or ""),
-            }
-        )
+        action = {
+            "tool": name,
+            "arguments": dict(raw) if isinstance(raw, Mapping) else {},
+            "script": str(item.get("script", "") or ""),
+        }
+        if "id" in item:
+            action["id"] = item["id"]
+        invalid = item.get("invalid_arguments")
+        if invalid:
+            action["invalid_arguments"] = str(invalid)
+        elif raw is not None and not isinstance(raw, Mapping):
+            action["invalid_arguments"] = "工具参数 arguments 必须是 JSON 对象，未执行默认对象上的操作。"
+        actions.append(action)
 
     raw_actions = plan.get("actions")
     if isinstance(raw_actions, Sequence) and not isinstance(raw_actions, (str, bytes)):

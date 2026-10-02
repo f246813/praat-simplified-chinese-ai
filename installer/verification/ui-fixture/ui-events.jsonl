@@ -1,0 +1,70 @@
+{"time":"2026-09-29T13:02:52.8659088Z","next_enabled":true,"next_color":-16777216,"next_text":"下一步","progress":0,"title":"准备安装"}
+{"time":"2026-09-29T13:05:56.6153243Z","next_enabled":false,"next_color":-5592406,"next_text":"下一步","progress":0,"title":"准备安装"}
+{"time":"2026-09-29T13:06:13.9987234Z","next_enabled":true,"next_color":-16777216,"next_text":"下一步","progress":0,"title":"准备安装"}
+{"time":"2026-09-29T13:07:44.3650640Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":0,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.3849220Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":5,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.4179211Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":8,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.4899753Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":12,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.5225358Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":17,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.5669655Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":21,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.6119499Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":23,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.6709473Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":25,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.7019917Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":28,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.7618796Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":30,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.7938521Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":32,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.8663652Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":35,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.8963818Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":37,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.9559548Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":40,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:44.9869600Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":42,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:45.0459331Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":44,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:45.0768588Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":47,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:45.2528787Z","next_enabled":false,"next_color":-5592406,"next_text":"重试","progress":88,"title":"正在安装 AIPraat"}
+{"time":"2026-09-29T13:07:45.2868607Z","next_enabled":true,"next_color":-16777216,"next_text":"完成","progress":100,"title":"安装已完成"}
+{"time":"2026-09-29T13:14:28.4792815Z","next_enabled":true,"next_color":-16777216,"next_text":"下一步","progress":0,"title":"准备安装","step":0}
+{"time":"2026-09-29T13:15:26.7372863Z","next_enabled":true,"next_color":-16777216,"next_text":"下一步","progress":0,"title":"准备安装","step":1}
+{"time":"2026-09-29T13:15:43.5671353Z","next_enabled":false,"next_color":-5592406,"next_text":"下一步","progress":0,"title":"准备安装","step":1}
+{"time":"2026-09-29T13:15:44.3630392Z","next_enabled":true,"next_color":-16777216,"next_text":"下一步","progress":0,"title":"准备安装","step":1}
+{"time":"2026-09-29T13:16:46.4848065Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":0,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.5307308Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":5,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.5595651Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":7,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.6192860Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":9,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.6636904Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":14,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.7235828Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":20,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.7555651Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":22,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.8144731Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":24,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.8445634Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":26,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.9036298Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":28,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:46.9346017Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":31,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.0085984Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":33,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.0396115Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":36,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.0985934Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":38,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.1306240Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":41,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.1886359Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":43,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.2225909Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":46,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.2785760Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":47,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.4165504Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":77,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.4744644Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":88,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.4966312Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":95,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:16:47.5774433Z","next_enabled":true,"next_color":-16777216,"next_text":"完成","progress":100,"title":"安装已完成","step":2}
+{"time":"2026-09-29T13:21:06.6019545Z","next_enabled":true,"next_color":-16777216,"next_text":"下一步","progress":0,"title":"准备安装","step":0}
+{"time":"2026-09-29T13:22:30.8394336Z","next_enabled":true,"next_color":-16777216,"next_text":"下一步","progress":0,"title":"准备安装","step":1}
+{"time":"2026-09-29T13:22:37.7787217Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":0,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:37.8106363Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":5,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:37.8716749Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":8,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:37.9026792Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":11,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:37.9766531Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":16,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.0077024Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":21,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.0526653Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":23,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.1155950Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":26,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.1476172Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":28,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.2066897Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":30,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.2391242Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":32,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.2968396Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":34,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.3276838Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":37,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.3866227Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":39,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.4186825Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":42,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.4917204Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":45,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.5237496Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":47,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.6585928Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":62,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.7026855Z","next_enabled":false,"next_color":-5592406,"next_text":"安装中","progress":88,"title":"正在安装 AIPraat","step":2}
+{"time":"2026-09-29T13:22:38.7625910Z","next_enabled":true,"next_color":-16777216,"next_text":"完成","progress":100,"title":"安装已完成","step":2}

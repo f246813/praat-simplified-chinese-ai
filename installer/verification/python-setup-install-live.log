@@ -1,0 +1,26 @@
+配置所选 Python：C:\Users\f2468\Desktop\Praat\稳定早期版\installer\verification\python_setup_missing\Scripts\python.exe
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+NameError: name 'pip' is not defined. Did you mean: 'zip'?
+正在配置 pip…
+Looking in links: c:\Users\f2468\AppData\Local\Temp\tmpx53dj8qd
+Processing c:\users\f2468\appdata\local\temp\tmpx53dj8qd\pip-25.0.1-py3-none-any.whl
+Installing collected packages: pip
+Successfully installed pip-25.0.1
+正在安装 Pillow >= 10、NumPy >= 2…
+Collecting Pillow>=10
+  Downloading pillow-12.3.0-cp312-cp312-win_amd64.whl.metadata (9.3 kB)
+Collecting numpy>=2
+  Downloading numpy-2.5.3-cp312-cp312-win_amd64.whl.metadata (6.6 kB)
+Downloading pillow-12.3.0-cp312-cp312-win_amd64.whl (7.2 MB)
+   ---------------------------------------- 7.2/7.2 MB 9.9 MB/s eta 0:00:00
+Downloading numpy-2.5.3-cp312-cp312-win_amd64.whl (12.6 MB)
+   ---------------------------------------- 12.6/12.6 MB 11.4 MB/s eta 0:00:00
+Installing collected packages: Pillow, numpy
+Successfully installed Pillow-12.3.0 numpy-2.5.3
+正在复检 Tk、Pillow、NumPy…
+  File "<string>", line 1
+    import tkinter,numpy,PIL; assert int(numpy.__version__.split(.)[0])>=2; assert int(PIL.__version__.split(.)[0])>=10; r=tkinter.Tk(); r.withdraw(); r.destroy(); print(Tk
+                                                                 ^
+SyntaxError: invalid syntax
+配置未完成：复检未通过，请查看上方信息，补齐 Tcl/Tk 或其他依赖后重试。

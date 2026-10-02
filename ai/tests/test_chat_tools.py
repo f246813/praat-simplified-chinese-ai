@@ -223,11 +223,9 @@ class BorrowedMeasurementTests(unittest.TestCase):
         self.assertIn("Remove", script)
         self.assertIn("selectObject: 1", script)
 
-    def test_spectral_emphasis_falls_back_to_the_only_sound(self) -> None:
-        """指错类型但列表里只有一个 Sound 时按它算（guide §8.4 的按类型兜底）。"""
-
-        script = self.render("spectral_emphasis", object=2)
-        self.assertIn("selectObject: 1", script)
+    def test_spectral_emphasis_rejects_explicit_wrong_object(self) -> None:
+        with self.assertRaises(tools.ToolError):
+            self.render("spectral_emphasis", object=2)
 
     def test_hl_ratio_rejects_overlapping_bands(self) -> None:
         with self.assertRaises(tools.ToolError):
@@ -245,7 +243,10 @@ class BorrowedMeasurementTests(unittest.TestCase):
 
     def test_pitch_peak_latency_rejects_objects_without_pitch(self) -> None:
         script = self.render("pitch_peak_latency", object=1)
-        self.assertIn('peakTime = Get time of maximum: tmin, tmax, "Hertz", "Parabolic"', script)
+        # 峰值时刻走防倍频误判的稳健取法（见 2026-09-30 的 598.5 Hz 问题）。
+        self.assertIn("peakTime = maxtime", script)
+        self.assertIn("ceilingValue = median * 1.5", script)
+        self.assertNotIn('peakTime = Get time of maximum', script)
         self.assertIn("latency = (peakTime - tmin) / (tmax - tmin)", script)
         # TextGrid 有时长但没有 To Pitch：要在这里拦住，而不是让 Praat 弹英文错误框。
         with self.assertRaises(tools.ToolError):
@@ -432,7 +433,9 @@ class ObjectMatchingTests(unittest.TestCase):
         )
 
     def test_name_without_class_prefix_matches(self) -> None:
-        self.assertEqual(self.context.resolve_object("思い出す").id, 1)
+        with self.assertRaises(tools.ToolError):
+            self.context.resolve_object("思い出す")
+        self.assertEqual(self.context.resolve_object("Sound 思い出す").id, 1)
 
     def test_short_name_matches_full_name(self) -> None:
         self.assertEqual(self.context.resolve_object("tone").id, 2)
@@ -648,8 +651,12 @@ class NewToolTests(unittest.TestCase):
             self.context,
         )
         self.assertIn('Get mean: tmin, tmax, "Hertz"', script)
-        self.assertIn('Get minimum: tmin, tmax, "Hertz", "Parabolic"', script)
-        self.assertIn('Get maximum: tmin, tmax, "Hertz", "Parabolic"', script)
+        # 最低/最高不再直接问 Praat（裸 Get minimum/maximum 会被倍频误判劫持），
+        # 改成逐帧、按中位数的 0.5–1.5 倍限幅后再取极值。
+        self.assertNotIn('minimum = Get minimum', script)
+        self.assertNotIn('maximum = Get maximum', script)
+        self.assertIn("minimum = lowest", script)
+        self.assertIn("maximum = highest", script)
         self.assertIn("tmin = 0.100000", script)
         self.assertIn("tmax = 0.600000", script)
 
@@ -700,7 +707,10 @@ class NewToolTests(unittest.TestCase):
 
     def test_pitch_statistics_reports_time_of_maximum(self) -> None:
         script = tools.render("pitch_statistics", {}, self.context)
-        self.assertIn('Get time of maximum: tmin, tmax, "Hertz", "Parabolic"', script)
+        # 最高点时刻必须来自「稳健的逐帧循环」，不能是裸的 Get time of maximum：
+        # 自相关在浊音起始常把真实基频听成 2–4 倍（2026-09-30 用户报的 598.5 Hz）。
+        self.assertNotIn("maxtime = Get time of maximum", script)
+        self.assertIn("maxtime = Get time from frame number: pitchFrame", script)
         self.assertIn("最高点出现在", script)
 
 
@@ -781,10 +791,9 @@ class TextGridToolTests(unittest.TestCase):
             ("textgrid_set_interval", {"object": 1, "start": 0.1, "end": 0.2, "label": "a"}),
             ("textgrid_insert_boundary", {"object": 1, "time": 0.5}),
         ):
-            # 这个上下文里有两个 Sound、一个 TextGrid：模型把 object 填成 Sound 时
-            # 应该自动改用那个唯一的 TextGrid，而不是报错。
-            script = tools.render(name, arguments, sound_context)
-            self.assertIn("selectObject: 3", script, name)
+            # 明确编号指向 Sound 时不能偷偷换成另一个 TextGrid。
+            with self.assertRaises(tools.ToolError, msg=name):
+                tools.render(name, arguments, sound_context)
 
     def test_class_fallback_needs_a_unique_candidate(self) -> None:
         two_grids = tools.ToolContext(
@@ -829,18 +838,17 @@ class VotToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.directory.cleanup()
 
-    def test_zero_times_are_passed_as_explicit_boundaries(self) -> None:
-        """Zero is a valid boundary value and must not select candidate estimation."""
+    def test_placeholder_zero_times_fall_back_to_auto(self) -> None:
+        """模型会给可选字段填两个 0（"填满"），这该按「没给」处理，走自动估计。"""
 
         script = tools.render(
             "vot",
             {"burst": 0, "voicing": 0, "object": 1},
             self.sound_context,
         )
-        self.assertIn("Write VOT analysis to file", script)
-        self.assertIn("0.000000, 0.000000", script)
-        self.assertIn("VOT 测量（使用给定边界）", script)
-        self.assertNotIn("undefined, undefined", script)
+        # 没有按「两个时刻相减」那条路走（那会写 t1/t2），而是进了自动估计。
+        self.assertNotIn("vot = t2 - t1", script)
+        self.assertIn("appendFileLine", script)
 
     def test_only_one_time_is_still_an_error(self) -> None:
         with self.assertRaises(tools.ToolError):
@@ -866,18 +874,15 @@ class VotToolTests(unittest.TestCase):
         self.assertIn("秒（爆破）", script)
         self.assertIn("并在该层补上了边界", script)
 
-    def test_sound_path_uses_shared_cpp_analysis_action(self) -> None:
+    def test_sound_path_only_subtracts(self) -> None:
         script = tools.render(
             "vot",
             {"burst": 0.30, "voicing": 0.42},
             self.sound_context,
         )
-        self.assertIn("Write VOT analysis to file", script)
-        self.assertIn("0.300000, 0.420000", script)
-        self.assertIn("readFile$", script)
-        self.assertIn("appendFile:", script)
+        self.assertIn("vot = t2 - t1", script)
         self.assertNotIn("Insert boundary", script)
-        self.assertNotIn("To Pitch (ac)", script)
+        self.assertIn("未做自动检测", script)
 
     def test_missing_or_bad_times_are_rejected(self) -> None:
         # 两个时刻都不给 = 自动估计模式；只给一个才是参数错误。
@@ -886,10 +891,9 @@ class VotToolTests(unittest.TestCase):
         with self.assertRaises(tools.ToolError) as caught:
             tools.render("vot", {"burst": 0.3}, self.grid_context)
         self.assertIn("voicing", str(caught.exception))
-        negative = tools.render(
-            "vot", {"burst": 0.4, "voicing": 0.3}, self.sound_context
-        )
-        self.assertIn("0.400000, 0.300000", negative)
+        with self.assertRaises(tools.ToolError) as caught:
+            tools.render("vot", {"burst": 0.4, "voicing": 0.3}, self.grid_context)
+        self.assertIn("必须晚于", str(caught.exception))
 
     def test_onset_alias_works(self) -> None:
         script = tools.render(
@@ -897,7 +901,7 @@ class VotToolTests(unittest.TestCase):
             {"burst": 0.1, "onset": 0.25},
             self.sound_context,
         )
-        self.assertIn("0.100000, 0.250000", script)
+        self.assertIn("t2 = 0.250000", script)
 
     def test_auto_mode_detects_within_the_given_range(self) -> None:
         script = tools.render(
@@ -907,11 +911,17 @@ class VotToolTests(unittest.TestCase):
         )
         self.assertIn("tmin = 0.250000", script)
         self.assertIn("tmax = 0.500000", script)
-        self.assertIn("Write VOT analysis to file", script)
-        self.assertIn("undefined, undefined", script)
-        self.assertIn("6.000000, 75.000000", script)
-        self.assertIn("VOT 候选（C++ 自动估计，需人工确认）", script)
-        self.assertNotIn("Filter (pass Hann band)", script)
+        # 爆破和浊音起始分开测：前者看 2–8 kHz 带通包络的上升沿，后者看谐噪比。
+        self.assertIn("Filter (pass Hann band): 2000, 8000, 100", script)
+        self.assertIn('To Intensity: 2000, 0.001, "yes"', script)
+        self.assertIn('To Harmonicity (cc): 0.002, 75.000000', script)
+        self.assertIn('To Pitch (ac): 0.002, 75.000000', script)
+        self.assertIn("burstTime", script)
+        self.assertIn("burstRise", script)
+        self.assertIn("firstVoicedTime", script)
+        self.assertIn("VOT 估计值", script)
+        self.assertIn("爆破与浊音起始分开估计", script)
+        self.assertIn("请对着语图核对", script)
 
     def test_editor_selection_note_survives_the_model_echoing_it(self) -> None:
         # 模型把圈选原样抄进 from/to 时，回话里仍要写清楚这段范围是圈出来的。
@@ -924,11 +934,12 @@ class VotToolTests(unittest.TestCase):
         self.assertIn("按编辑器圈选 0.250–0.500 秒", script)
         self.assertNotIn("未指定范围", script)
 
-    def test_auto_mode_delegates_wide_range_quality_to_cpp_core(self) -> None:
-        # C++ core emits the second-run quality row when the range spans multiple phones.
+    def test_auto_mode_warns_when_the_range_holds_two_phonemes(self) -> None:
+        # 圈大了（后面还有第二个音素）时不能静默只报第一个。
         script = tools.render("vot", {"from": 0.25, "to": 1.0}, self.sound_context)
-        self.assertIn("Write VOT analysis to file", script)
-        self.assertIn("readFile$", script)
+        self.assertIn("secondVoicingTime", script)
+        self.assertIn("第 2 段浊音", script)
+        self.assertIn("建议收紧范围", script)
 
     def test_auto_mode_uses_the_range_dragged_in_the_editor(self) -> None:
         context = tools.ToolContext(
@@ -991,11 +1002,14 @@ class EditorSelectionRangeTests(unittest.TestCase):
             self.assertIn("tmax = 0.500000", script, name)
             self.assertIn("按编辑器圈选 0.250–0.500 秒", script, name)
             self.assertIn("appendFileLine:", script, name)
-            # 回话的最后一句就是范围出处，不能只写数字。
+            # 回话里必须带范围出处，不能只写数字。pitch_statistics 还会在末尾追加
+            # 一句「剔除了倍频误判」的说明（见 2026-09-30 的 598.5 Hz 问题），
+            # 所以这里只要求 rangeNote$ 出现在这一行、且它是最后一个内容项之前。
             written = [
                 line for line in script.splitlines() if "chat_result.tsv" in line
             ]
-            self.assertTrue(written[-1].endswith("rangeNote$"), name)
+            self.assertTrue(written, name)
+            self.assertIn("rangeNote$", written[-1], name)
 
     def test_statistics_note_survives_the_model_echoing_the_selection(self) -> None:
         # 模型把 sel_start/sel_end 抄成 from/to 时，回话里仍要写清范围出处。

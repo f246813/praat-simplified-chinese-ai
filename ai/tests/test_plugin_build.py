@@ -47,6 +47,22 @@ class GeneratedScriptTests(unittest.TestCase):
         self.assertNotIn("tmin", script)
         self.assertNotIn("tmax", script)
 
+    def test_pitch_extremes_are_guarded_against_octave_errors(self) -> None:
+        """插件里的最高/最低基频也要防倍频误判（和会话模板同一处修正）。
+
+        2026-09-30：``Get maximum`` 取区间内最高的那一帧，自相关在浊音起始常把
+        真实基频听成 2–4 倍。会话里的 ``pitch_statistics`` 和 ``measure`` 都改成
+        逐帧限幅了，插件这份生成物必须跟着走，否则两条路给出不同的数。
+        """
+
+        script = build_plugin.render_measure_script()
+        self.assertNotIn('value = Get maximum: start, end, "Hertz"', script)
+        self.assertNotIn('value = Get minimum: start, end, "Hertz"', script)
+        self.assertIn("ceilingValue = median * 1.5", script)
+        self.assertIn("floorValue = median * 0.5", script)
+        # 插件没有 tmin/tmax（用 start/end），逐帧取值必须走 start/end。
+        self.assertIn("Get frame number from time: start", script)
+
     def test_script_never_opens_the_info_window(self) -> None:
         """插件也不该往 Praat Info 里写（结果进 Table；guide §8.5 的约定）。"""
 

@@ -213,6 +213,26 @@ class MeasureRenderingTests(unittest.TestCase):
         self.assertNotIn("rangeNote$", script)
         self.assertNotIn("tmin", script)
 
+    def test_pitch_extremes_are_guarded_against_octave_errors(self) -> None:
+        """``maximum_pitch`` / ``minimum_pitch`` 不许用裸 Get maximum/minimum。
+
+        和 ``pitch_statistics`` 同一个问题（2026-09-30 用户报的 598.5 Hz 峰值）：
+        ``Get maximum`` 取区间内最高的**那一帧**，自相关在浊音起始常把真实基频
+        听成 2–4 倍。实测 ``a.wav`` 裸最大值 496.65 Hz，真实只有 ~121.6 Hz。
+        """
+
+        for parameter, guard, variable in (
+            ("maximum_pitch", "ceilingValue = median * 1.5", "highest"),
+            ("minimum_pitch", "floorValue = median * 0.5", "lowest"),
+        ):
+            with self.subTest(parameter=parameter):
+                script = self.render(parameter=parameter)
+                self.assertNotIn('value = Get maximum: tmin', script)
+                self.assertNotIn('value = Get minimum: tmin', script)
+                self.assertIn("median = Get quantile: tmin, tmax, 0.5", script)
+                self.assertIn(guard, script)
+                self.assertIn(f"value = {variable}", script)
+
     def test_every_parameter_renders(self) -> None:
         for parameter in measures.load_table().parameters():
             with self.subTest(parameter=parameter):

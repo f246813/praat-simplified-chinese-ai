@@ -1,0 +1,16 @@
+test_qwen_off_is_in_actual_request_and_first_text_precedes_finish (test_dialogue_protocol.DialogueProtocolTests.test_qwen_off_is_in_actual_request_and_first_text_precedes_finish) ... ok
+test_rejected_forced_high_is_not_silently_disabled_and_retried (test_dialogue_protocol.DialogueProtocolTests.test_rejected_forced_high_is_not_silently_disabled_and_retried) ... ok
+test_same_socket_reused_and_changed_force_setting_applies_immediately (test_dialogue_protocol.DialogueProtocolTests.test_same_socket_reused_and_changed_force_setting_applies_immediately) ... FAIL
+
+======================================================================
+FAIL: test_same_socket_reused_and_changed_force_setting_applies_immediately (test_dialogue_protocol.DialogueProtocolTests.test_same_socket_reused_and_changed_force_setting_applies_immediately)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_protocol.py", line 76, in test_same_socket_reused_and_changed_force_setting_applies_immediately
+    self.assertEqual(len(set(ports)),1)
+AssertionError: 3 != 1
+
+----------------------------------------------------------------------
+Ran 3 tests in 2.752s
+
+FAILED (failures=1)

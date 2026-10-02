@@ -1,0 +1,19 @@
+PRAAT_PROGRESS	0.0500	检查显卡与运行参数…
+PRAAT_PROGRESS	0.0800	准备启动本地模型服务…
+PRAAT_PROGRESS	0.1000	检查本机是否已在运行模型服务…
+PRAAT_PROGRESS	0.1500	正在启动 llama-server（读取模型文件）…
+PRAAT_PROGRESS	0.2000	正在加载模型…（已等待 0 秒）
+PRAAT_PROGRESS	0.2236	正在加载模型…（已等待 1 秒）
+PRAAT_PROGRESS	0.2353	正在加载模型…（已等待 1 秒）
+PRAAT_PROGRESS	0.2471	正在加载模型…（已等待 1 秒）
+PRAAT_PROGRESS	0.2588	正在加载模型…（已等待 1 秒）
+PRAAT_PROGRESS	0.2706	正在加载模型…（已等待 2 秒）
+PRAAT_PROGRESS	0.2823	正在加载模型…（已等待 2 秒）
+PRAAT_PROGRESS	0.9500	模型服务已就绪。
+PRAAT_PROGRESS	1.0000	模型服务已就绪。
+{"cold_start_ok": true, "port": 62649, "model": "Qwen3.5-0.8B-Q4_K_M.gguf"}
+PRAAT_PROGRESS	0.1000	正在停止模型服务…
+PRAAT_PROGRESS	0.6000	等待端口释放…
+PRAAT_PROGRESS	1.0000	已停止。
+{"isolated_service_stopped": true}
+{"configured_start_ok": true, "model": "Qwen3.5-0.8B-Q4_K_M.gguf", "active_preset": "qwen3.5-0.8b-fast"}

@@ -275,6 +275,36 @@ class PresetParsingTests(PresetFixture):
 
 
 class PresetApplyTests(PresetFixture):
+    def test_top_selection_can_switch_local_cloud_local_cloud(self) -> None:
+        self.write_config(base_url="http://127.0.0.1:9/v1")
+        control.update_config({"api": {
+            "label": "Configured API", "base_url": "https://example.test/v1",
+            "model": "remote-model", "stop_local_service": False, "locked": False,
+        }}, self.config_path)
+        with (
+            patch.object(control, "reconcile_api_transition", return_value={"success": True}),
+            patch.object(control, "ensure_local_service", return_value={"success": True}),
+        ):
+            control.activate_api(self.config_path)
+            self.assertTrue(load_config(self.config_path).api.enabled)
+            control.apply_preset("small", self.config_path)
+            self.assertFalse(load_config(self.config_path).api.enabled)
+            control.activate_api(self.config_path)
+            self.assertTrue(load_config(self.config_path).api.enabled)
+
+    def test_locked_or_stopped_cloud_rejects_local_preset(self) -> None:
+        self.write_config(base_url="http://127.0.0.1:9/v1")
+        for api_values in (
+            {"enabled": True, "locked": True, "stop_local_service": False},
+            {"enabled": True, "locked": False, "stop_local_service": True},
+        ):
+            with self.subTest(api_values=api_values):
+                control.update_config({"api": {
+                    **api_values, "base_url": "https://example.test/v1", "model": "remote-model",
+                }}, self.config_path)
+                with self.assertRaises(PresetError):
+                    control.apply_preset("small", self.config_path)
+
     def test_apply_preset_updates_config_when_service_is_stopped(self) -> None:
         self.write_config(base_url="http://127.0.0.1:9/v1")
         # 端口空着 → 必须真的把服务起起来（以前只改配置，下一条消息就是 WinError 10061）。

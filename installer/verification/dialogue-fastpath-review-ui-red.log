@@ -1,0 +1,16 @@
+test_late_delta_after_final_is_ignored (test_dialogue_ui.StreamUiTests.test_late_delta_after_final_is_ignored) ... ok
+test_partial_text_is_visible_and_replaced_by_one_final_message (test_dialogue_ui.StreamUiTests.test_partial_text_is_visible_and_replaced_by_one_final_message) ... ok
+test_real_process_hints_survive_stream_finalization_and_collapse (test_dialogue_ui.StreamUiTests.test_real_process_hints_survive_stream_finalization_and_collapse) ... FAIL
+
+======================================================================
+FAIL: test_real_process_hints_survive_stream_finalization_and_collapse (test_dialogue_ui.StreamUiTests.test_real_process_hints_survive_stream_finalization_and_collapse)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_dialogue_ui.py", line 61, in test_real_process_hints_survive_stream_finalization_and_collapse
+    self.assertIn('first process hint',text)
+AssertionError: 'first process hint' not found in 'existing user message\n已完成，用时0分1秒  ▾\nfinal answer\n\n'
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.791s
+
+FAILED (failures=1)

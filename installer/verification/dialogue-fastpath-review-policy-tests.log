@@ -1,0 +1,16 @@
+test_capability_questions_do_not_need_a_greeting_prefix (test_dialogue_fastpath.DialoguePolicyTests.test_capability_questions_do_not_need_a_greeting_prefix) ... ok
+test_concept_prefix_does_not_override_operations_targets_or_ranges (test_dialogue_fastpath.DialoguePolicyTests.test_concept_prefix_does_not_override_operations_targets_or_ranges) ... ok
+test_concepts_and_analysis_keep_selected_high_level (test_dialogue_fastpath.DialoguePolicyTests.test_concepts_and_analysis_keep_selected_high_level) ... ok
+test_english_identity_and_capability_are_ordinary_dialogue (test_dialogue_fastpath.DialoguePolicyTests.test_english_identity_and_capability_are_ordinary_dialogue) ... ok
+test_force_setting_does_not_upgrade_other_manual_levels (test_dialogue_fastpath.DialoguePolicyTests.test_force_setting_does_not_upgrade_other_manual_levels) ... ok
+test_greetings_identity_and_ordinary_chat (test_dialogue_fastpath.DialoguePolicyTests.test_greetings_identity_and_ordinary_chat) ... ok
+test_high_ordinary_dialogue_relaxes_unless_forced (test_dialogue_fastpath.DialoguePolicyTests.test_high_ordinary_dialogue_relaxes_unless_forced) ... ok
+test_material_and_mixed_requests_are_not_dialogue (test_dialogue_fastpath.DialoguePolicyTests.test_material_and_mixed_requests_are_not_dialogue) ... ok
+test_only_unambiguous_duration_queries_use_direct_measurement (test_dialogue_fastpath.DialoguePolicyTests.test_only_unambiguous_duration_queries_use_direct_measurement) ... ok
+test_pure_concept_discussion (test_dialogue_fastpath.DialoguePolicyTests.test_pure_concept_discussion) ... ok
+test_unknown_operations_and_references_keep_analysis_pipeline (test_dialogue_fastpath.DialoguePolicyTests.test_unknown_operations_and_references_keep_analysis_pipeline) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.002s
+
+OK

@@ -1,0 +1,14 @@
+{
+  "interpreter": "C:/Program Files/WindowsApps/PythonSoftwareFoundation.PythonManager_26.3.240.0_x64__3847v3x7pw1km/python.exe",
+  "exit_codes": {
+    "tests": 1,
+    "live": 0,
+    "api-live": 0
+  },
+  "ui_followup": {
+    "tk86": 0,
+    "tk9": 0
+  },
+  "initial_test_failure": "Tk 9 test boolean representation (1 versus string 1), assertion fixed",
+  "all_current_checks_pass": true
+}

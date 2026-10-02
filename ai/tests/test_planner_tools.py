@@ -157,10 +157,11 @@ class ToolCallParsingTests(unittest.TestCase):
 
     def test_broken_arguments_do_not_crash(self) -> None:
         message = {"tool_calls": [{"function": {"name": "pitch", "arguments": "not json"}}]}
-        self.assertEqual(
-            qwen.extract_tool_actions(message),
-            [{"tool": "pitch", "arguments": {}, "id": "call-1"}],
-        )
+        actions = qwen.extract_tool_actions(message)
+        self.assertEqual(actions[0]["tool"], "pitch")
+        self.assertEqual(actions[0]["arguments"], {})
+        self.assertEqual(actions[0]["id"], "call-1")
+        self.assertTrue(actions[0]["invalid_arguments"])
 
     def test_message_without_calls_has_no_actions(self) -> None:
         self.assertEqual(qwen.extract_tool_actions({"content": "你好"}), [])

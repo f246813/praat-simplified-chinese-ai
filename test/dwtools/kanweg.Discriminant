@@ -1,0 +1,391 @@
+File type = "ooTextFile"
+Object class = "Discriminant 2"
+
+eigen? <exists> 
+numberOfEigenvalues = 3 
+dimension = 3 
+eigenvalues []: 
+    eigenvalues [1] = 0.682885387656189 
+    eigenvalues [2] = 4.35529581712075 
+    eigenvalues [3] = 21.139001553325855 
+eigenvectors [] []: 
+    eigenvectors [1] []:
+        eigenvectors [1] [1] = -0.4968246733001893 
+        eigenvectors [1] [2] = 0.7929232798703868 
+        eigenvectors [1] [3] = -0.3527575884934987 
+    eigenvectors [2] []:
+        eigenvectors [2] [1] = -0.02269652739427462 
+        eigenvectors [2] [2] = 0.39446208680854455 
+        eigenvectors [2] [3] = 0.918631879326474 
+    eigenvectors [3] []:
+        eigenvectors [3] [1] = 0.8675540972437403 
+        eigenvectors [3] [2] = 0.4644053556002953 
+        eigenvectors [3] [3] = -0.17798189246482962 
+onlyReals = <true> 
+numberOfGroups = 12 
+groups? <exists> 
+size = 12 
+item []: 
+    item [1]:
+        class = "SSCP" 
+        name = "\as" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.13713220728805037	0.06507801179217897	-0.011074735561417198
+row [2]: "F2"	0.06507801179217897	0.07640416821463863	-0.0019956280460737227
+row [3]: "F3"	-0.011074735561417198	-0.0019956280460737227	0.04095240135530773
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.8290418215125155 
+            centroid [2] = 3.0200046382498935 
+            centroid [3] = 3.417161993975625 
+    item [2]:
+        class = "SSCP" 
+        name = "\ct" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.0906730201238982	0.037168825307058506	0.010895111765093163
+row [2]: "F2"	0.037168825307058506	0.06623815158562134	-0.008040088713702428
+row [3]: "F3"	0.010895111765093163	-0.008040088713702428	0.04751413789657192
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.7164753792040877 
+            centroid [2] = 2.9358032337839095 
+            centroid [3] = 3.428957254834133 
+    item [3]:
+        class = "SSCP" 
+        name = "\ep" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.12325126739884948	0.007977535637010603	0.014713593912108806
+row [2]: "F2"	0.007977535637010603	0.08256097042007346	0.05045318851511985
+row [3]: "F3"	0.014713593912108806	0.05045318851511985	0.07438879619774627
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.763135965884447 
+            centroid [2] = 3.2349692064700704 
+            centroid [3] = 3.3911627112129725 
+    item [4]:
+        class = "SSCP" 
+        name = "\ic" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.17647612299370094	-0.020633026281749456	-0.005697855587989546
+row [2]: "F2"	-0.020633026281749456	0.0746064771294859	0.04961464343617181
+row [3]: "F3"	-0.005697855587989546	0.04961464343617181	0.051090633611486226
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.5850185188145063 
+            centroid [2] = 3.300037334753792 
+            centroid [3] = 3.4089942174330887 
+    item [5]:
+        class = "SSCP" 
+        name = "\o/" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.09908822912163283	0.015541819671631842	0.013775375020258196
+row [2]: "F2"	0.015541819671631842	0.056684926460000826	0.025520496405190694
+row [3]: "F3"	0.013775375020258196	0.025520496405190694	0.035279313672993313
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.6439229746956676 
+            centroid [2] = 3.1740393211604387 
+            centroid [3] = 3.3533684319629176 
+    item [6]:
+        class = "SSCP" 
+        name = "\yc" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.11604848853561103	0.004638097797573033	0.014234726305389024
+row [2]: "F2"	0.004638097797573033	0.08910829880242499	0.05772847540761409
+row [3]: "F3"	0.014234726305389024	0.05772847540761409	0.05953523254185857
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.6388146822879546 
+            centroid [2] = 3.1732312476628675 
+            centroid [3] = 3.3702977370451315 
+    item [7]:
+        class = "SSCP" 
+        name = "a" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.13373820303933762	0.04391889591302132	0.00948392677750633
+row [2]: "F2"	0.04391889591302132	0.07185378889695217	0.01794630042988463
+row [3]: "F3"	0.00948392677750633	0.01794630042988463	0.0569740255478559
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.897183461187283 
+            centroid [2] = 3.112694772108942 
+            centroid [3] = 3.4077765488566425 
+    item [8]:
+        class = "SSCP" 
+        name = "e" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.16197482567602944	0.002298374666522601	0.012604046776579043
+row [2]: "F2"	0.002298374666522601	0.061562730940411106	0.041160043544549975
+row [3]: "F3"	0.012604046776579043	0.041160043544549975	0.04322368511051531
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.6061651522814047 
+            centroid [2] = 3.3033427054078994 
+            centroid [3] = 3.4061648464530725 
+    item [9]:
+        class = "SSCP" 
+        name = "i" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.15428266876841684	0.013276386826015096	0.01232030978536554
+row [2]: "F2"	0.013276386826015096	0.05551008364271842	0.03784952638535777
+row [3]: "F3"	0.01232030978536554	0.03784952638535777	0.050060275850387526
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.464795953065796 
+            centroid [2] = 3.3427245505456606 
+            centroid [3] = 3.440757962651372 
+    item [10]:
+        class = "SSCP" 
+        name = "o" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.06861045715394577	0.0350932231370043	-0.002360682210274902
+row [2]: "F2"	0.0350932231370043	0.09021650740495564	0.006512208041729323
+row [3]: "F3"	-0.002360682210274902	0.006512208041729323	0.07700471610942111
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.685583564250099 
+            centroid [2] = 2.9572369144661246 
+            centroid [3] = 3.3928254721615616 
+    item [11]:
+        class = "SSCP" 
+        name = "u" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.16999997796140906	0.02188567518354325	0.0161142422435738
+row [2]: "F2"	0.02188567518354325	0.1039591160562141	-0.0020015338088896243
+row [3]: "F3"	0.0161142422435738	-0.0020015338088896243	0.07540959694619889
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.5268057305429337 
+            centroid [2] = 2.9058781887555085 
+            centroid [3] = 3.364336443608739 
+    item [12]:
+        class = "SSCP" 
+        name = "y" 
+        numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+        numberOfRows = 3 
+row [1]: "F1"	0.18909356327139412	0.014010234547664282	0.020273089008566517
+row [2]: "F2"	0.014010234547664282	0.07349408617071806	0.05486460756328074
+row [3]: "F3"	0.020273089008566517	0.05486460756328074	0.08826214244880347
+        numberOfObservations = 50 
+        centroid []: 
+            centroid [1] = 2.4797538722099297 
+            centroid [2] = 3.2363608717661925 
+            centroid [3] = 3.341855942791658 
+total? <exists> 
+numberOfColumns = 3 
+columnLabels []: 
+"F1"	"F2"	"F3"	
+numberOfRows = 3 
+row [1]: "F1"	11.435147363533115	-3.802877201183571	0.7254293171774207
+row [2]: "F2"	-3.802877201183571	13.851776134183867	0.49324322718990704
+row [3]: "F3"	0.7254293171774207	0.49324322718990704	1.2160403917859737
+numberOfObservations = 600 
+centroid []: 
+    centroid [1] = 2.6530580896613856 
+    centroid [2] = 3.1413602487609413 
+    centroid [3] = 3.3936382969155763 
+aprioriProbabilities []: 
+    aprioriProbabilities [1] = 0.08333333333333333 
+    aprioriProbabilities [2] = 0.08333333333333333 
+    aprioriProbabilities [3] = 0.08333333333333333 
+    aprioriProbabilities [4] = 0.08333333333333333 
+    aprioriProbabilities [5] = 0.08333333333333333 
+    aprioriProbabilities [6] = 0.08333333333333333 
+    aprioriProbabilities [7] = 0.08333333333333333 
+    aprioriProbabilities [8] = 0.08333333333333333 
+    aprioriProbabilities [9] = 0.08333333333333333 
+    aprioriProbabilities [10] = 0.08333333333333333 
+    aprioriProbabilities [11] = 0.08333333333333333 
+    aprioriProbabilities [12] = 0.08333333333333333 
+costs [] []: 
+    costs [1] []:
+        costs [1] [1] = 0 
+        costs [1] [2] = 1 
+        costs [1] [3] = 1 
+        costs [1] [4] = 1 
+        costs [1] [5] = 1 
+        costs [1] [6] = 1 
+        costs [1] [7] = 1 
+        costs [1] [8] = 1 
+        costs [1] [9] = 1 
+        costs [1] [10] = 1 
+        costs [1] [11] = 1 
+        costs [1] [12] = 1 
+    costs [2] []:
+        costs [2] [1] = 1 
+        costs [2] [2] = 0 
+        costs [2] [3] = 1 
+        costs [2] [4] = 1 
+        costs [2] [5] = 1 
+        costs [2] [6] = 1 
+        costs [2] [7] = 1 
+        costs [2] [8] = 1 
+        costs [2] [9] = 1 
+        costs [2] [10] = 1 
+        costs [2] [11] = 1 
+        costs [2] [12] = 1 
+    costs [3] []:
+        costs [3] [1] = 1 
+        costs [3] [2] = 1 
+        costs [3] [3] = 0 
+        costs [3] [4] = 1 
+        costs [3] [5] = 1 
+        costs [3] [6] = 1 
+        costs [3] [7] = 1 
+        costs [3] [8] = 1 
+        costs [3] [9] = 1 
+        costs [3] [10] = 1 
+        costs [3] [11] = 1 
+        costs [3] [12] = 1 
+    costs [4] []:
+        costs [4] [1] = 1 
+        costs [4] [2] = 1 
+        costs [4] [3] = 1 
+        costs [4] [4] = 0 
+        costs [4] [5] = 1 
+        costs [4] [6] = 1 
+        costs [4] [7] = 1 
+        costs [4] [8] = 1 
+        costs [4] [9] = 1 
+        costs [4] [10] = 1 
+        costs [4] [11] = 1 
+        costs [4] [12] = 1 
+    costs [5] []:
+        costs [5] [1] = 1 
+        costs [5] [2] = 1 
+        costs [5] [3] = 1 
+        costs [5] [4] = 1 
+        costs [5] [5] = 0 
+        costs [5] [6] = 1 
+        costs [5] [7] = 1 
+        costs [5] [8] = 1 
+        costs [5] [9] = 1 
+        costs [5] [10] = 1 
+        costs [5] [11] = 1 
+        costs [5] [12] = 1 
+    costs [6] []:
+        costs [6] [1] = 1 
+        costs [6] [2] = 1 
+        costs [6] [3] = 1 
+        costs [6] [4] = 1 
+        costs [6] [5] = 1 
+        costs [6] [6] = 0 
+        costs [6] [7] = 1 
+        costs [6] [8] = 1 
+        costs [6] [9] = 1 
+        costs [6] [10] = 1 
+        costs [6] [11] = 1 
+        costs [6] [12] = 1 
+    costs [7] []:
+        costs [7] [1] = 1 
+        costs [7] [2] = 1 
+        costs [7] [3] = 1 
+        costs [7] [4] = 1 
+        costs [7] [5] = 1 
+        costs [7] [6] = 1 
+        costs [7] [7] = 0 
+        costs [7] [8] = 1 
+        costs [7] [9] = 1 
+        costs [7] [10] = 1 
+        costs [7] [11] = 1 
+        costs [7] [12] = 1 
+    costs [8] []:
+        costs [8] [1] = 1 
+        costs [8] [2] = 1 
+        costs [8] [3] = 1 
+        costs [8] [4] = 1 
+        costs [8] [5] = 1 
+        costs [8] [6] = 1 
+        costs [8] [7] = 1 
+        costs [8] [8] = 0 
+        costs [8] [9] = 1 
+        costs [8] [10] = 1 
+        costs [8] [11] = 1 
+        costs [8] [12] = 1 
+    costs [9] []:
+        costs [9] [1] = 1 
+        costs [9] [2] = 1 
+        costs [9] [3] = 1 
+        costs [9] [4] = 1 
+        costs [9] [5] = 1 
+        costs [9] [6] = 1 
+        costs [9] [7] = 1 
+        costs [9] [8] = 1 
+        costs [9] [9] = 0 
+        costs [9] [10] = 1 
+        costs [9] [11] = 1 
+        costs [9] [12] = 1 
+    costs [10] []:
+        costs [10] [1] = 1 
+        costs [10] [2] = 1 
+        costs [10] [3] = 1 
+        costs [10] [4] = 1 
+        costs [10] [5] = 1 
+        costs [10] [6] = 1 
+        costs [10] [7] = 1 
+        costs [10] [8] = 1 
+        costs [10] [9] = 1 
+        costs [10] [10] = 0 
+        costs [10] [11] = 1 
+        costs [10] [12] = 1 
+    costs [11] []:
+        costs [11] [1] = 1 
+        costs [11] [2] = 1 
+        costs [11] [3] = 1 
+        costs [11] [4] = 1 
+        costs [11] [5] = 1 
+        costs [11] [6] = 1 
+        costs [11] [7] = 1 
+        costs [11] [8] = 1 
+        costs [11] [9] = 1 
+        costs [11] [10] = 1 
+        costs [11] [11] = 0 
+        costs [11] [12] = 1 
+    costs [12] []:
+        costs [12] [1] = 1 
+        costs [12] [2] = 1 
+        costs [12] [3] = 1 
+        costs [12] [4] = 1 
+        costs [12] [5] = 1 
+        costs [12] [6] = 1 
+        costs [12] [7] = 1 
+        costs [12] [8] = 1 
+        costs [12] [9] = 1 
+        costs [12] [10] = 1 
+        costs [12] [11] = 1 
+        costs [12] [12] = 0 

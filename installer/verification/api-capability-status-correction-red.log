@@ -1,0 +1,37 @@
+test_400_error_code_and_model_precede_preset_and_test_state (test_api_capability_status.CapabilityDialogTests.test_400_error_code_and_model_precede_preset_and_test_state) ... ok
+test_cancelled_probe_preserves_setting (test_api_capability_status.CapabilityDialogTests.test_cancelled_probe_preserves_setting) ... ok
+test_changed_key_invalidates_previous_success_and_blocks_inflight_result (test_api_capability_status.CapabilityDialogTests.test_changed_key_invalidates_previous_success_and_blocks_inflight_result) ... ok
+test_connection_is_text_only_and_does_not_mark_audio_verified (test_api_capability_status.CapabilityDialogTests.test_connection_is_text_only_and_does_not_mark_audio_verified) ... ok
+test_details_are_read_only_and_hide_credentials (test_api_capability_status.CapabilityDialogTests.test_details_are_read_only_and_hide_credentials) ... ok
+test_explicit_rejection_displays_unsupported_and_disables_audio (test_api_capability_status.CapabilityDialogTests.test_explicit_rejection_displays_unsupported_and_disables_audio) ... ok
+test_model_change_invalidates_previous_error_and_details (test_api_capability_status.CapabilityDialogTests.test_model_change_invalidates_previous_error_and_details) ... ok
+test_official_preset_displays_support_and_unverified_state (test_api_capability_status.CapabilityDialogTests.test_official_preset_displays_support_and_unverified_state) ... ok
+test_runtime_rejection_replaces_saved_verified_observation (test_api_capability_status.CapabilityDialogTests.test_runtime_rejection_replaces_saved_verified_observation) ... FAIL
+test_saved_failed_test_reopens_and_new_credentials_invalidate_it (test_api_capability_status.CapabilityDialogTests.test_saved_failed_test_reopens_and_new_credentials_invalidate_it) ... ok
+test_saving_failed_probe_cannot_undo_later_runtime_correction (test_api_capability_status.CapabilityDialogTests.test_saving_failed_probe_cannot_undo_later_runtime_correction) ... FAIL
+test_timeout_has_explicit_unverified_status_without_fake_http_code (test_api_capability_status.CapabilityDialogTests.test_timeout_has_explicit_unverified_status_without_fake_http_code) ... ok
+test_unknown_gateway_does_not_claim_official_support (test_api_capability_status.CapabilityDialogTests.test_unknown_gateway_does_not_claim_official_support) ... ok
+test_unverified_preserves_manual_enabled_setting (test_api_capability_status.CapabilityDialogTests.test_unverified_preserves_manual_enabled_setting) ... ok
+test_verified_reports_basic_validation_and_enables_audio (test_api_capability_status.CapabilityDialogTests.test_verified_reports_basic_validation_and_enables_audio) ... ok
+test_real_audio_probe_retains_code_without_claiming_unsupported (test_api_capability_status.ProbeDiagnosticTests.test_real_audio_probe_retains_code_without_claiming_unsupported) ... ok
+
+======================================================================
+FAIL: test_runtime_rejection_replaces_saved_verified_observation (test_api_capability_status.CapabilityDialogTests.test_runtime_rejection_replaces_saved_verified_observation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 176, in test_runtime_rejection_replaces_saved_verified_observation
+    self.assertIn('�ӿ���ȷ��֧����Ƶ����',other.audio_hint.get())
+AssertionError: '�ӿ���ȷ��֧����Ƶ����' not found in 'ģ��Ԥ�裺��֧��ֱ����Ƶ���루�ٷ��ĵ���\n��Ƶʵ�⣺������Ƶ��֤ͨ������������ȷ������ϸ΢�����ж�׼ȷ\n��ǰ���ã�ֱ����Ƶ�����ѹر�'
+
+======================================================================
+FAIL: test_saving_failed_probe_cannot_undo_later_runtime_correction (test_api_capability_status.CapabilityDialogTests.test_saving_failed_probe_cannot_undo_later_runtime_correction)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 190, in test_saving_failed_probe_cannot_undo_later_runtime_correction
+    self.assertFalse(load_config(self.path).api.audio_input_enabled)
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 16 tests in 3.296s
+
+FAILED (failures=2)

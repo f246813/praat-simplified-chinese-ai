@@ -1,0 +1,510 @@
+--- before/cloud_agent.py
++++ ai/praat_ai/cloud_agent.py
+@@ -17,7 +17,7 @@
+ from jsonschema import Draft202012Validator
+ from pydantic import BaseModel, Field
+ from pydantic_ai import Agent, BinaryContent, ModelRetry, PromptedOutput, Tool
+-from pydantic_ai.messages import ModelResponse, ToolCallPart
++from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
+ from pydantic_ai.usage import RunUsage, UsageLimits
+ from pydantic_graph import GraphBuilder, StepContext
+ 
+@@ -29,11 +29,79 @@
+     item: str
+     status: Literal['complete', 'partial', 'missing']
+     explanation: str = Field(min_length=8)
++    missing_evidence: list[Literal['audio', 'measurement', 'reference']] = Field(default_factory=list)
+ 
+ 
+ class AnalysisReport(BaseModel):
+     analysis: str = Field(min_length=30, description='解释原始目标的中文 Markdown 报告，不能仅有统计表')
+     coverage: list[Coverage]
++
++
++REPORT_INSTRUCTIONS = (
++    '\n你正在独立分析，无执行工具。实际解释 original_goal 的每个交付项，给出对比、依据、限制和下一步。'
++    'coverage.item 必须逐项原样对应 deliveries；状态为 complete/partial/missing。'
++    '缺口用 missing_evidence 标记 audio（需要原始音频）、measurement（专业测量）、reference（参照资料）；仅列影响交付的缺口。'
++    '不要把成功执行或覆盖结构当作结论正确。仅统计表或“已完成”不算解释。'
++    '引用证据工具、参数、范围；区分测量、转写、模型音频分析、一般知识和推断。'
++    'audio_observations 是此前模型对原音频的定性观察，引用时注明原模型和材料来源，不能当作专业测量。'
++    'audio_input 为 false 时不得声称本轮重新听过录音；没有原音频或此前音频观察时，不能判断具体录音缺陷。')
++
++
++def report_context(state, *, audio=False):
++    rows = tools.parse_object_context(state.context_text)
++    target = [{'id':row.id, 'class':row.class_name, 'name':row.name, 'selection':row.selection}
++              for row in rows if row.selected][:20] if rows else state.context_text[:1200]
++    context = {
++        'original_goal':state.goal, 'deliveries':state.deliveries, 'direction':state.direction,
++        'target_material':target, 'evidence':[asdict(e) for e in state.evidence],
++        'missing_reason':state.reason, 'paused_branches':dict(state.failures), 'audio_input':audio,
++        'previous_report':state.previous_report[:4000],
++        'previous_coverage':[{**item, 'explanation':item['explanation'][:400]} for item in state.previous_coverage],
++        'audio_observations':[{**item, 'analysis':item['analysis'][:2000]} for item in state.audio_observations[-3:]],
++        'visible_dialogue':[dict(item) for item in state.dialogue_context] if state.mode == 'L4' else [],
++    }
++    if state.audio_observations and state.previous_report == state.audio_observations[-1]['analysis']:
++        context['previous_report'] = ''
++        context['previous_report_source'] = 'audio_observations 最后一项（同一报告，避免重复）'
++    for evidence in context['evidence']:
++        evidence['rows'] = [row[:1200] for row in evidence['rows'][:40]]
++    return context
++
++
++def compact_report_context(context, token_limit):
++    """Excerpt copies for a fresh request; never truncate the retained records."""
++    while qwen.estimate_tokens(json.dumps(context, ensure_ascii=False)) > token_limit:
++        if len(context['evidence']) > 1:
++            context['evidence'].pop()
++        else:
++            excerpts = [(context, 'previous_report', 128), (context, 'missing_reason', 128)]
++            excerpts += [(item, 'analysis', 128) for item in context['audio_observations']]
++            excerpts += [(item, 'explanation', 64) for item in context['previous_coverage']]
++            excerpts += [(item, 'content', 100) for item in context['visible_dialogue']]
++            reducible = [(owner, key, minimum) for owner, key, minimum in excerpts if len(owner[key]) > minimum]
++            if reducible:
++                owner, key, minimum = max(reducible, key=lambda item:len(item[0][item[1]]))
++                owner[key] = owner[key][:max(minimum, len(owner[key]) // 2)]
++            elif len(context['audio_observations']) > 1:
++                context['audio_observations'].pop(0)
++            elif context['evidence'] and len(context['evidence'][0]['rows']) > 1:
++                context['evidence'][0]['rows'].pop()
++            elif context['evidence'] and context['evidence'][0]['rows'] and len(context['evidence'][0]['rows'][0]) > 128:
++                row = context['evidence'][0]['rows'][0]
++                context['evidence'][0]['rows'][0] = row[:max(128, len(row) // 2)]
++            else:
++                break  # Original goal and provenance cannot be removed to fake fit.
++        context['excerpt_note'] = '本请求只含上下文可容纳的摘录；完整记录仍保留，未提供部分不能推测'
++    return json.dumps(context, ensure_ascii=False)
++
++
++def minimum_continuation_tokens(config, state, *, mode='', direction=''):
++    candidate = state.continued(direction or '解释已有证据及剩余缺口', mode=mode)
++    candidate.mode = candidate.continuation_mode
++    prompt = compact_report_context(report_context(candidate), 400)
++    instruction = qwen.analysis_instructions(config.qwen) + REPORT_INSTRUCTIONS
++    schema = json.dumps(AnalysisReport.model_json_schema(), ensure_ascii=False)
++    return qwen.estimate_tokens(prompt + instruction + schema) + 256
+ 
+ 
+ def entry_mode(goal: str, context_text: str, *, audio_requested: bool = False) -> str:
+@@ -138,15 +206,31 @@
+                         raise BranchExit('最小报告上下文与输出预留无法容纳，请缩小范围或增加上下文设置')
+                     if self.state.requests >= self.state.budget.request_limit:
+                         raise BranchExit('本轮模型请求总预算已用完')
++                    if tool_phase:
++                        self.state.planning_rounds += 1
++                    contains_audio = any(
++                        isinstance(part, UserPromptPart) and isinstance(part.content, (list, tuple))
++                        and any(isinstance(item, BinaryContent) for item in part.content)
++                        for message in messages for part in message.parts)
+                     for attempt in range(2):
+                         self.check()
+                         self.state.requests += 1
++                        if contains_audio:
++                            # A request attempt is a fact even if transport or output
++                            # validation fails; server acceptance requires a response.
++                            self.state.audio_sent = True
++                            self.state.events.append({'mode':'L3', 'reason':'audio_request_attempt',
++                                                      'request':self.state.requests})
+                         try:
+                             if self.stream:
+                                 async with node.stream(run.ctx) as stream:
+                                     async for _ in stream:
+                                         self.check()
+                             next_node = await run.next(node)
++                            if contains_audio:
++                                self.state.audio_received = True
++                                self.state.events.append({'mode':'L3', 'reason':'audio_response_received',
++                                                          'request':self.state.requests})
+                             self.record_responses(run.all_messages())
+                             break
+                         except Exception as error:
+@@ -211,13 +295,13 @@
+                 raise ModelRetry('JSON Schema 校验失败：' + reason + '。仅允许一次有区别的纠正。')
+             # Existing mutation policy applies to cloud too.
+             from .chat import ANALYSIS_PREPARATION_TOOLS, wants_second_step
+-            if (self.state.requests > 1 and tools.is_mutating(name)
++            if (self.state.planning_rounds > 1 and tools.is_mutating(name)
+                     and name not in ANALYSIS_PREPARATION_TOOLS and not wants_second_step(self.state.goal)):
+                 self.state.attempts.append({'tool':name, 'arguments':arguments, 'status':'not_executed', 'reason':'未授权追加对象操作'})
+                 return {'status':'not_executed', 'reason':'用户未要求追加对象操作，请用已有证据报告'}
+             self.tool_running = True
+             try:
+-                step = await asyncio.to_thread(self.execute_action, name, arguments, self.state.requests)
++                step = await asyncio.to_thread(self.execute_action, name, arguments, self.state.planning_rounds)
+             except BaseException:
+                 self.tool_running = False
+                 raise
+@@ -270,19 +354,29 @@
+             self.state.reason = caps.safe_error(error, self.config.api.api_key)
+             self.event('L2', '专用执行结束：' + self.state.reason)
+ 
+-    def report_target(self):
+-        rows = tools.parse_object_context(self.state.context_text)
+-        selected = [row for row in rows if row.selected]
+-        if rows:
+-            return [{'id':row.id, 'class':row.class_name, 'name':row.name,
+-                     'selection':row.selection} for row in selected[:20]]
+-        return self.state.context_text[:1200]
+-
+-    async def report(self):
++    def should_escalate_audio(self):
++        state = self.state
++        if (state.continuation or state.mode != 'L2' or self.config.api.limit_tokens
++                or not self.config.api.audio_input_enabled or self.materials is None
++                or self.materials.closed or self.cancel.is_set()
++                or state.requests > state.budget.request_limit - 2):
++            return False
++        available = bool(self.materials.audio_path and self.materials.audio_path.is_file()) or (
++            self.prepare_audio is not None and not self.materials.snapshot_attempted)
++        if not available:
++            return False
++        for item in state.coverage:
++            if item['status'] != 'complete' and ('audio' in item.get('missing_evidence', [])
++                    or re.search(r'(?:缺少|缺乏|未提供|需要).{0,12}(?:原始音频|录音听感|听感证据)', item['explanation'])):
++                return True
++        return False
++
++    async def report(self, *, force_audio=False, allow_escalation=True):
+         self.check()
+         state = self.state
+         original_mode = state.mode
+-        audio_candidate = (original_mode == 'L3' or (not self.config.api.limit_tokens and state.reason))
++        audio_candidate = (force_audio or original_mode == 'L3' or (
++            not state.continuation and original_mode != 'L4' and not self.config.api.limit_tokens and state.reason))
+         audio = None
+         if audio_candidate and self.config.api.audio_input_enabled:
+             try:
+@@ -299,31 +393,13 @@
+             self.settings.setdefault('extra_body', {})['modalities'] = ['text']
+             self.event('L3', '输入原目标临时音频；模型定性分析与专业测量分别注明来源')
+         else:
+-            mode = 'L4' if original_mode == 'L4' or (not self.config.api.limit_tokens and not state.evidence and state.reason) else 'L2'
++            mode = 'L4' if original_mode == 'L4' or (not state.continuation and not self.config.api.limit_tokens
++                                                   and not state.evidence and state.reason) else 'L2'
+             self.event(mode, '重建独立分析上下文，解释原始目标及证据缺口')
+         state.can_continue = bool(state.reason or self.config.api.limit_tokens)
+-        context = {
+-            'original_goal':state.goal, 'deliveries':state.deliveries, 'direction':state.direction,
+-            'target_material':self.report_target(),
+-            'evidence':[asdict(e) for e in state.evidence],
+-            'missing_reason':state.reason, 'paused_branches':state.failures,
+-            'audio_input': audio is not None,
+-            'visible_dialogue':state.dialogue_context if original_mode == 'L4' else [],
+-        }
+-        # Keep full evidence in state/store. Bound report excerpt deterministically.
+-        for evidence in context['evidence']:
+-            evidence['rows'] = [row[:1200] for row in evidence['rows'][:40]]
+-        prompt = json.dumps(context, ensure_ascii=False)
+-        while qwen.estimate_tokens(prompt) > max(400, state.budget.context_tokens - state.budget.reserve - 1800) and len(context['evidence']) > 1:
+-            context['evidence'].pop()
+-            context['excerpt_note'] = '上下文有限，本请求仅含部分证据；完整记录已保存，未提供部分不能推测'
+-            prompt = json.dumps(context, ensure_ascii=False)
+-        instruction = (qwen.analysis_instructions(self.config.qwen)
+-                       + '\n你正在独立分析，无执行工具。实际解释 original_goal 的每个交付项，给出对比、依据、限制和下一步。'
+-                       + 'coverage.item 必须逐项原样对应 deliveries；状态为 complete/partial/missing。'
+-                       + '不要把成功执行或覆盖结构当作结论正确。仅统计表或“已完成”不算解释。'
+-                       + '引用证据工具、参数、范围；区分测量、转写、模型音频分析、一般知识和推断。'
+-                       + 'audio_input 为 false 时不得声称听过录音或判断未提供录音的具体缺陷。')
++        context = report_context(state, audio=audio is not None)
++        prompt = compact_report_context(context, max(400, state.budget.context_tokens - state.budget.reserve - 1800))
++        instruction = qwen.analysis_instructions(self.config.qwen) + REPORT_INSTRUCTIONS
+         agent = Agent(self.model, system_prompt=instruction, output_type=PromptedOutput(AnalysisReport),
+                       retries={'tools':0, 'output':1}, name='independent_analysis')
+ 
+@@ -338,11 +414,18 @@
+ 
+         try:
+             result = await self.drive(agent, [prompt, BinaryContent(audio, media_type='audio/wav')] if audio else prompt)
+-            state.audio_received = audio is not None
+             state.report = result.analysis
+             state.coverage = [item.model_dump() for item in result.coverage]
+             state.status = 'complete' if all(item.status == 'complete' for item in result.coverage) else 'partial'
+             state.can_continue = state.can_continue or state.status != 'complete'
++            if audio is not None:
++                state.audio_report_completed = True
++                state.audio_observations.append({'kind':'model_audio', 'model':self.config.api.model,
++                                                'source':self.materials.provenance(), 'analysis':result.analysis})
++            if allow_escalation and self.should_escalate_audio():
++                state.previous_report, state.previous_coverage = state.report, state.coverage
++                self.progress('交付仍缺原始音频证据，沿用当前预算补充一次原目标音频分析')
++                await self.report(force_audio=True, allow_escalation=False)
+         except Exception as error:
+             detail = caps.safe_error(error, self.config.api.api_key)
+             status = getattr(error, 'status_code', None)
+@@ -350,7 +433,6 @@
+                 self.config.api.audio_input_enabled = False
+                 if 'extra_body' in self.settings:
+                     self.settings['extra_body'].pop('modalities', None)
+-                state.audio_received = False
+                 self.event('L2', '当前 API 路径不接受音频，已关闭本轮直接音频能力，改用已有证据分析')
+                 if self.correct_audio:
+                     try:
+@@ -368,7 +450,11 @@
+                     detail += '；证据报告失败：' + caps.safe_error(redirected, self.config.api.api_key)
+             state.reason = (state.reason + '；' if state.reason else '') + detail
+             state.status, state.can_continue = 'partial', True
+-            state.report = state.fallback_report()
++            if force_audio and state.previous_report:
++                state.report, state.coverage = state.previous_report, state.previous_coverage
++                state.report += '\n\n补充音频分析未完成：' + detail
++            else:
++                state.report = state.fallback_report()
+ 
+ 
+ async def _run(session):
+@@ -378,13 +464,14 @@
+     async def route(ctx: StepContext[AnalysisState, None, None]) -> str:
+         session.check()
+         state = ctx.state
+-        state.mode = entry_mode(state.direction or state.goal, state.context_text,
++        if state.continuation:
++            state.mode = state.continuation_mode or ('L4' if '一般' in state.direction else ('L3' if wants_audio(state.direction) else 'L2'))
++            return state.mode
++        state.mode = entry_mode(state.goal, state.context_text,
+                                 audio_requested=wants_audio(state.direction or state.goal)
+                                 or (session.materials is not None and session.materials.audio_path is not None
+                                     and session.materials.source_kind == 'file'
+                                     and session.config.api.audio_input_enabled and not state.direction))
+-        if state.continuation and state.evidence and not wants_audio(state.direction):
+-            state.mode = 'L2' if '一般' not in state.direction else 'L4'
+         return state.mode
+ 
+     @g.step
+--- before/cloud_workflow.py
++++ ai/praat_ai/cloud_workflow.py
+@@ -24,6 +24,27 @@
+     original_ids = {row.id for row in original.objects}
+     return replace(original, objects=tuple(original.objects) + tuple(
+         replace(row, selected=False) for row in fresh if row.id not in original_ids))
++
++
++def renamed_context(original: tools.ToolContext, fresh_text: str, identifier: int) -> tools.ToolContext:
++    """Adopt one app-confirmed rename; retain original selection and range."""
++    fresh = {row.id:row for row in tools.parse_object_context(fresh_text)}
++    previous = original.resolve_object(identifier)
++    current = fresh.get(identifier)
++    if current is None or current.class_name != previous.class_name:
++        raise BranchExit('重命名后原目标 ID/class 无法确认，禁止后续投递')
++    updated = replace(original, objects=tuple(
++        replace(row, name=current.name) if row.id == identifier else row for row in original.objects))
++    return bound_context(updated, fresh_text)
++
++
++def object_context_text(objects, previous_text: str) -> str:
++    metadata = [line for line in previous_text.splitlines()[1:] if not line.split('\t',1)[0].isdigit()]
++    lines = ['id\tclass\tname\tselected\tsel_start\tsel_end']
++    lines.extend('\t'.join([str(row.id),row.class_name,row.name,'1' if row.selected else '0',
++                            str(row.selection_start) if row.selection_start is not None else '',
++                            str(row.selection_end) if row.selection_end is not None else '']) for row in objects)
++    return '\n'.join(lines + metadata) + '\n'
+ 
+ 
+ def explicit_wav(goal: str) -> Path | None:
+@@ -56,12 +77,7 @@
+     bound = [replace(row, selected=row.id in selected_ids,
+                      selection_start=selection[0] if selection and row.id in selected_ids else row.selection_start,
+                      selection_end=selection[1] if selection and row.id in selected_ids else row.selection_end) for row in rows]
+-    metadata = [line for line in text.splitlines()[1:] if not line.split('\t',1)[0].isdigit()]
+-    lines = ['id\tclass\tname\tselected\tsel_start\tsel_end']
+-    lines.extend('\t'.join([str(row.id),row.class_name,row.name,'1' if row.selected else '0',
+-                            str(row.selection_start) if row.selection_start is not None else '',
+-                            str(row.selection_end) if row.selection_end is not None else '']) for row in bound)
+-    return '\n'.join(lines + metadata) + '\n'
++    return object_context_text(bound, text)
+ 
+ 
+ def process_cloud(window, text: str):
+@@ -142,6 +158,7 @@
+         return (False, chat._read_results(), failure) if failure else (True, chat._read_results(), '')
+ 
+     def execute_action(name, arguments, index):
++        nonlocal original, ready, execution_unknown
+         try:
+             ensure_praat()
+             context = bound_context(original, chat.object_context())
+@@ -149,7 +166,29 @@
+             return chat.AgentStep(index, name, arguments, False, str(error))
+         environment = tools.LocalEnvironment(execute=execute, praat_executable=chat.praat_executable(),
+                                              runtime_directory=chat.runtime_dir(), cancelled=window.cancel_event.is_set)
+-        return chat._execute_action({'tool':name, 'arguments':arguments}, context, execute, index, environment)
++        step = chat._execute_action({'tool':name, 'arguments':arguments}, context, execute, index, environment)
++        if step.ok and name == 'rename_object':
++            row = context.resolve_object(arguments.get('object'))
++            try:
++                # Refresh directly: the previous binding still carries the old name.
++                executable = chat.praat_executable()
++                ids = chat.praat_process_ids(executable)
++                if original_pid and original_pid not in (ids or []):
++                    raise BranchExit('重命名后原 Praat 进程已退出')
++                ok, note = chat.refresh_object_context(executable, ids, assume_fresh=False)
++                if not ok:
++                    raise BranchExit('重命名后状态无法确认：' + note)
++                original = renamed_context(context, chat.object_context(), row.id)
++                state.context_text = object_context_text(original.objects, state.context_text)
++                ready = True
++                state.events.append({'mode':'binding', 'reason':'app_confirmed_rename', 'id':row.id,
++                                     'previous_name':row.name, 'name':original.resolve_object(row.id).name})
++            except (BranchExit, tools.ToolError, OSError) as error:
++                # The rename succeeded, but its identity cannot safely be used again.
++                execution_unknown = True
++                state.reason = str(error)
++                state.events.append({'mode':'binding', 'reason':str(error)})
++        return step
+ 
+     def prepare_audio():
+         if materials.audio_path is not None:
+@@ -222,7 +261,10 @@
+             'goal':state.goal, 'report':state.report, 'coverage':state.coverage, 'status':state.status,
+             'evidence':[asdict(e) for e in state.evidence], 'attempts':state.attempts, 'events':state.events,
+             'target':state.context_text, 'materials':materials.provenance(), 'requests':state.requests,
+-            'audio_input':state.audio_received, 'model':config.api.model, 'api_path':caps.path_identity(config.api),
++            'audio_input':state.audio_sent, 'audio_response_received':state.audio_received,
++            'audio_report_completed':state.audio_report_completed, 'audio_observations':state.audio_observations,
++            'previous_report':state.previous_report, 'previous_coverage':state.previous_coverage,
++            'model':config.api.model, 'api_path':caps.path_identity(config.api),
+         })
+         if state.can_continue and state.status != 'cancelled':
+             window.messages.put(('choices', ''))
+--- before/escape_policy.py
++++ ai/praat_ai/escape_policy.py
+@@ -49,19 +49,26 @@
+     attempts: list[dict[str, Any]] = field(default_factory=list)
+     events: list[dict[str, Any]] = field(default_factory=list)
+     report: str = ''
+-    coverage: list[dict[str, str]] = field(default_factory=list)
++    coverage: list[dict[str, Any]] = field(default_factory=list)
+     deliveries: list[str] = field(default_factory=list)
+     status: str = 'running'
+     reason: str = ''
+     requests: int = 0
++    planning_rounds: int = 0
+     tool_attempts: int = 0
+     stagnant: int = 0
+     last_progress: int = 0
+     direction: str = ''
+     visible_prompt: str = ''
+     continuation: bool = False
++    continuation_mode: str = ''
+     can_continue: bool = False
++    audio_sent: bool = False
+     audio_received: bool = False
++    audio_report_completed: bool = False
++    audio_observations: list[dict[str, Any]] = field(default_factory=list)
++    previous_report: str = ''
++    previous_coverage: list[dict[str, Any]] = field(default_factory=list)
+     dialogue_context: list[dict[str, str]] = field(default_factory=list)
+     budget: Budget = field(default_factory=Budget)
+ 
+@@ -95,10 +102,18 @@
+         if self.stagnant >= 2:
+             raise BranchExit('连续两轮没有新增有效证据，停止当前执行分支')
+ 
+-    def continued(self, direction: str) -> AnalysisState:
++    def continued(self, direction: str, *, mode: str = '') -> AnalysisState:
++        if not mode:
++            import re
++            mode = 'L4' if '一般' in direction else ('L3' if re.search(r'(直接.*(?:音频|录音|听)|原始(?:音频|录音)|听感)', direction) else 'L2')
++        if mode not in {'L2', 'L3', 'L4'}:
++            raise ValueError('继续分析需要明确的 L2/L3/L4 模式')
+         state = AnalysisState(self.goal, self.context_text, evidence=copy.deepcopy(self.evidence),
+                               failures=dict(self.failures), deliveries=list(self.deliveries),
+                               dialogue_context=copy.deepcopy(self.dialogue_context),
++                              audio_observations=copy.deepcopy(self.audio_observations),
++                              previous_report=self.report, previous_coverage=copy.deepcopy(self.coverage),
++                              reason=self.reason, continuation_mode=mode,
+                               budget=copy.deepcopy(self.budget), direction=direction, continuation=True)
+         state.visible_prompt = ('继续分析原始任务：' + self.goal + '\n沿用原目标材料和成功测量，重点：'
+                                 + direction + '。仅补充必要分析，交代新增证据与缺口。')
+--- before/model_capabilities.py
++++ ai/praat_ai/model_capabilities.py
+@@ -91,6 +91,15 @@
+     # Field/encoding/format failures do not establish capability absence.
+     if re.search(r'(format|encoding|size|duration|too large|invalid.*(?:data|base64)|格式|大小|时长)', text):
+         return False
++    # Output/TTS capability cannot establish whether the model accepts input.
++    # Require an explicit input rejection when both directions are mentioned.
++    output = r'\b(?:output(?:ting|s)?|generat(?:e|ing|ion)|produc(?:e|ing|tion)|synthesi[sz](?:e|ing)|synthesis|tts)\b|text.to.(?:speech|audio)|输出|生成|合成'
++    input_term = r'(?:audio[ _-]*input|input[ _-]*audio|音频输入)'
++    input_rejection = (input_term + r'[\s:\"\x27]*(?:modality\s+)?(?:is\s+|are\s+)?(?:not supported|unsupported|不支持)'
++                       + r'|(?:does not support|not support|unsupported|不支持)\s*(?:the\s+|raw\s+|direct\s+|原始|直接)?'
++                       + input_term)
++    if re.search(output, text) and not re.search(input_rejection, text):
++        return False
+     return bool(re.search(
+         r'(?:model|endpoint|模型|端点).{0,100}(?:does not support|not support|unsupported|不支持).{0,50}(?:audio|音频)'
+         r'|(?:audio input|audio modality|音频输入).{0,60}(?:not supported|unsupported|不支持)'
+--- before/chat.py
++++ ai/praat_ai/chat.py
+@@ -2936,24 +2936,26 @@
+         from .cloud_workflow import process_cloud
+         process_cloud(self, text)
+ 
+-    def _continuation_fits(self, state):
++    def _continuation_fits(self, state, *, mode='', direction=''):
+         if not self.config.api.limit_tokens:
+             return True
+-        # Minimum fresh report plus structured output/schema and estimation margin.
+-        minimum = qwen.estimate_tokens(qwen.analysis_instructions(self.config.qwen) + state.goal) + 1000
++        # Use the same retained observations, provenance and excerpt policy as
++        # the actual report, including its instructions and output schema.
++        from .cloud_agent import minimum_continuation_tokens
++        minimum = minimum_continuation_tokens(self.config, state, mode=mode, direction=direction)
+         return minimum + self.config.api.plan_max_tokens + 256 <= self.config.api.max_context_tokens
+ 
+-    def continue_analysis(self, direction, state=None, materials=None):
++    def continue_analysis(self, direction, state=None, materials=None, mode=''):
+         state = state or self.analysis_state
+         if self.busy or state is None or not state.can_continue:
+             return
+         if not api_is_active(self.config):
+             self.append_hint('继续分析需要当前云端 API；请先选择 API 模型。')
+             return
+-        if not self._continuation_fits(state):
++        if not self._continuation_fits(state, mode=mode, direction=direction):
+             self.append_hint('当前上下文无法容纳最小报告和回复预留，请先增加上下文或降低回复上限。原证据已保留。')
+             return
+-        self.pending_analysis = state.continued(direction)
++        self.pending_analysis = state.continued(direction, mode=mode)
+         state.can_continue = False
+         if materials is not None:
+             self.current_materials = materials
+@@ -2964,26 +2966,28 @@
+     def show_analysis_choices(self):
+         if self.analysis_state is None or not self.analysis_state.can_continue:
+             return
+-        options = [('继续解释已有证据', '补充解释已有证据及原目标未完成部分'),
+-                   ('继续一般讨论', '补充一般原理、参照和练习方法，明确具体录音证据的缺口')]
++        options = [('继续解释已有证据', '补充解释已有证据及原目标未完成部分', 'L2'),
++                   ('继续一般讨论', '补充一般原理、参照和练习方法，明确具体录音证据的缺口', 'L4')]
+         material = self.current_materials
+         audio_available = bool(material and not material.closed and (material.audio_path is not None
+                                or (not material.snapshot_attempted and any(row.selected and row.class_name in tools.SOUND_CLASSES
+                                    for row in tools.parse_object_context(self.analysis_state.context_text)))))
+         if self.config.api.audio_input_enabled and audio_available:
+-            options.append(('分析原目标音频', '直接分析原始音频片段并结合已有测量'))
+-        if not self._continuation_fits(self.analysis_state):
+-            options = []
+-            self.append_hint('继续前需要增加上下文或降低回复上限，避免新轮次立即收尾。')
++            options.append(('分析原目标音频', '直接分析原始音频片段并结合已有测量', 'L3'))
++        fitting = [(label, direction, mode) for label, direction, mode in options
++                   if self._continuation_fits(self.analysis_state, mode=mode, direction=direction)]
++        if len(fitting) < len(options):
++            self.append_hint('部分继续方式需要增加上下文或降低回复上限，避免新轮次立即收尾。')
++        options = fitting
+         self.transcript.configure(state='normal')
+         self.transcript.insert('end', '\n可继续： ')
+         original_state, original_materials = self.analysis_state, self.current_materials
+-        for label, direction in options:
++        for label, direction, mode in options:
+             tag = 'continue-' + uuid.uuid4().hex
+             self._choice_tags.append(tag)
+             self.transcript.insert('end', label + '  ', (tag,))
+             self.transcript.tag_configure(tag, foreground=self.theme.color('primary'), underline=True)
+-            self.transcript.tag_bind(tag, '<Button-1>', lambda _event, d=direction, s=original_state, m=original_materials:self.continue_analysis(d, s, m))
++            self.transcript.tag_bind(tag, '<Button-1>', lambda _event, d=direction, s=original_state, m=original_materials, level=mode:self.continue_analysis(d, s, m, level))
+         tag = 'audio-settings-' + uuid.uuid4().hex
+         self.transcript.insert('end', '设置或验证音频能力  ', (tag,))
+         self.transcript.tag_configure(tag, foreground=self.theme.color('primary'), underline=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,14 +27,20 @@ class QwenConfig:
     #: 自己的语言学知识去解释、举例，测量数字仍然只能来自工具结果）。
     knowledge_mode: str = "strict"
     vision_when_requested: bool = True
-    max_context_tokens: int = 8192
+    limit_tokens: bool | None = None
+    max_context_tokens: int = 32768
     keep_alive_sec: int = 300
     # 生成参数：小模型和视觉模型对它们的敏感度不同，所以放进配置，
     # 由 server.presets[].qwen 按预设覆盖。
-    plan_max_tokens: int = 700
+    plan_max_tokens: int = 4096
     plan_temperature: float = 0.1
     top_p: float = 0.8
     presence_penalty: float = 1.5
+    audio_input_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if self.limit_tokens is None:
+            self.limit_tokens = self.provider != "api"
 
 
 @dataclass(slots=True)
@@ -45,12 +52,15 @@ class ApiConfig:
     """
 
     enabled: bool = False
+    #: 锁定云端时顶部模型菜单不能切换到本地；与当前是否正在使用 API 分开保存。
+    locked: bool = False
     #: 显示用的名字（例如 DeepSeek / OpenAI），只影响界面和状态文案。
     label: str = ""
     base_url: str = ""
     model: str = ""
     api_key: str = ""
     request_timeout_sec: int = 120
+    limit_tokens: bool = False
     max_context_tokens: int = 32768
     plan_max_tokens: int = 1500
     plan_temperature: float = 0.1
@@ -58,6 +68,8 @@ class ApiConfig:
     #: 思考档位（见 :class:`QwenConfig.thinking_level`）。云端大模型默认给「中」，
     #: 又慢又贵的那一档留给需要深想的测量规划。
     thinking_level: str = "medium"
+    #: Only high can force extra reasoning on every model-backed conversation.
+    force_deep_thinking: bool = False
     #: 云端模型可以发挥自己的语言学/语音学知识（默认开；本地小模型仍然是
     #: ``strict``，免得它拿想象出来的数字当测量结果）。
     use_world_knowledge: bool = True
@@ -67,6 +79,13 @@ class ApiConfig:
     stop_local_service: bool = True
     #: 最近一次「测试连接」成功的时间（只用于显示，不参与逻辑）。
     verified_at: str = ""
+    audio_input_enabled: bool | None = None
+    audio_input_source: str = "unknown"
+    audio_input_reason: str = ""
+    audio_input_path: str = ""
+    audio_verified_at: str = ""
+    audio_corrected_at: str = ""
+    audio_test_result: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -159,9 +178,12 @@ class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     alignment: AlignmentConfig = field(default_factory=AlignmentConfig)
+    local_qwen: QwenConfig | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        values = asdict(self)
+        values.pop("local_qwen", None)
+        return values
 
 
 def default_config_path() -> Path:
@@ -287,8 +309,10 @@ def apply_api_to_qwen(config: AppConfig) -> None:
     config.qwen.request_timeout_sec = int(api.request_timeout_sec)
     config.qwen.max_context_tokens = int(api.max_context_tokens)
     config.qwen.plan_max_tokens = int(api.plan_max_tokens)
+    config.qwen.limit_tokens = bool(api.limit_tokens)
     config.qwen.plan_temperature = float(api.plan_temperature)
     config.qwen.vision_when_requested = bool(api.vision_when_requested)
+    config.qwen.audio_input_enabled = bool(api.audio_input_enabled)
     # 云端模型的思考档位走 reasoning_effort（见 qwen.thinking_request_fields），
     # 不用 llama.cpp 的 chat 模板开关（那是本地服务专有的）。
     config.qwen.thinking_level = normalize_thinking_level(api.thinking_level)
@@ -304,14 +328,25 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     candidate = Path(path) if path else default_config_path()
     if candidate.is_file():
         raw = json.loads(candidate.read_text(encoding="utf-8"))
-        _merge_dataclass(config.qwen, raw.get("qwen", {}))
+        local_values = raw.get("qwen") or {}
+        _merge_dataclass(config.qwen, local_values)
+        # Upgrade the old shipped pair only; preserve individually tuned limits.
+        if ("limit_tokens" not in local_values
+                and local_values.get("max_context_tokens") == 8192
+                and local_values.get("plan_max_tokens") == 700):
+            config.qwen.max_context_tokens = 32768
+            config.qwen.plan_max_tokens = 4096
         server_values = dict(raw.get("server", {}))
         presets_value = server_values.pop("presets", None)
         _merge_dataclass(config.server, server_values)
         if presets_value is not None:
             config.server.presets = presets_from_raw(presets_value)
         _merge_dataclass(config.analysis, raw.get("analysis", {}))
-        _merge_dataclass(config.api, raw.get("api", {}))
+        api_values = raw.get("api", {})
+        _merge_dataclass(config.api, api_values)
+        # 旧版「使用云端 API」兼作锁定开关；首次读取时沿用其选择。
+        if "locked" not in api_values:
+            config.api.locked = bool(config.api.enabled)
         alignment_values = raw.get("alignment", {})
         _merge_dataclass(
             config.alignment,
@@ -350,6 +385,9 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     if env_mmproj:
         config.server.mmproj_path = env_mmproj
 
+    from .model_capabilities import initialize_audio
+    initialize_audio(config.api)
+    config.local_qwen = deepcopy(config.qwen)
     apply_api_to_qwen(config)
 
     return config

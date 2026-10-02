@@ -1,0 +1,19 @@
+File type = "ooTextFile"
+Object class = "Confusion"
+
+numberOfColumns = 12 
+columnLabels []: 
+"\as"	"\ct"	"\ep"	"\ic"	"\o/"	"\yc"	"a"	"e"	"i"	"o"	"u"	"y"	
+numberOfRows = 12 
+row [1]: "\as"	44	1	0	0	0	0	3	0	0	2	0	0
+row [2]: "\ct"	1	39	0	0	0	0	0	0	0	9	1	0
+row [3]: "\ep"	0	0	45	0	2	1	0	2	0	0	0	0
+row [4]: "\ic"	0	0	1	14	3	1	0	22	6	0	0	3
+row [5]: "\o/"	0	0	3	0	32	15	0	0	0	0	0	0
+row [6]: "\yc"	0	0	3	0	18	27	0	1	0	0	0	1
+row [7]: "a"	3	0	0	0	0	0	47	0	0	0	0	0
+row [8]: "e"	0	0	1	14	2	0	0	28	2	0	0	3
+row [9]: "i"	0	0	0	2	0	0	0	1	46	0	0	1
+row [10]: "o"	1	11	0	0	0	1	0	0	0	37	0	0
+row [11]: "u"	0	2	0	0	0	0	0	0	0	4	44	0
+row [12]: "y"	0	0	0	4	1	0	0	0	4	0	0	41

@@ -17,6 +17,10 @@ class QwenError(RuntimeError):
     pass
 
 
+class TruncatedResponseError(QwenError):
+    """The token limit ended generation before a complete answer/action."""
+
+
 #: 规划接口的取值（见 :func:`planner_mode`）。
 TOOLS_MODE = "tools"
 JSON_MODE = "json"
@@ -74,25 +78,70 @@ TOOL_PLANNER_INSTRUCTIONS = """
     绝对不许只写「已完成」「好的」「已处理」这种空话——用户看不到任何信息。
 """.strip()
 
-#: 接云端大模型时追加的规则（``qwen.knowledge_mode == "open"``，API 模式默认如此）：
-#: 允许它发挥自己的语言学知识去解释、举例。本地小模型不加这一段——它分不清
-#: 「文献里的常见范围」和「这次实测到的值」，实测会拿想象出来的数字当测量结果。
+#: API 的流程规则与本地小模型分开；关闭一般知识不等于关闭多步分析。
+CLOUD_EVIDENCE_INSTRUCTIONS = """
+回答时区分证据来源，按需要清楚标出以下类别，不必每次机械地写四个标题：
+- 观测：本次工具成功返回的测量、用户提供的信息、图片中可见的内容。录音测量数字
+  不得伪造，不得把计划、工具失败、示例、历史里未经核实的描述当作新测量。
+- 透明推导：可以用已知输入计算差值、比例、归一化结果等；说明输入来源、公式或
+  计算方法、单位和适用条件，明确这是推导而非新增实测。输入缺失时不要补造数字。
+- 一般知识：能否用于解释与比较由下面的知识模式决定；它不能充当本次录音的证据。
+- 假设：把可能原因和待验证判断写成假设，说明不确定性及怎样验证，不作确定结论。
+未收到音频时，不得宣称直接听过录音或获得听感；对象列表、测量表、波形图片均不等于
+音频输入。即使收到图像，也只能把图中可见内容当作图像证据。保留工具报告的未定义值、
+错误和限制，不得修改既有分数或冒充已完成尚未执行的操作。
+""".strip()
+
+CLOUD_WORKFLOW_INSTRUCTIONS = """
+你是 Praat（中文版，Windows）桌面助手。根据用户目标灵活规划、执行和解释；
+可以使用 Markdown、列表、表格和适当详细的文字，让测量、依据与结论容易理解。
+
+完整语音分析、比较和练习建议可以包含多步关联测量、分段分析和必要的对象准备。
+按问题选择基频、强度、时长、共振峰等有意义的测量，不设固定的工具种类或数量限制；
+不要求一次回答只解决一个子问题。先完成相关测量，再综合解释。已有结果足够时就回答；
+避免无关操作和没有新依据的重复调用。同一工具可以用于不同对象、区间、参数或有依据的重试。
+独立的操作可以一并调用；后续步骤依赖新对象 id、时长或上一步结果时，先等待观察结果，
+再根据最新对象列表和选择状态继续。必要的分析准备属于用户目标，删除、覆盖文件或其他
+无关改动不能因为要分析就擅自添加；遵守前端已有的校验与操作权限。
+
+对象只能使用当前上下文或执行结果中已确认真实存在的 id 或名称，不得编造对象。
+用户指定编号时明确填 object / object2；“当前对象”按最新选择状态判断；用户指定
+Sound、Pitch、Formant、TextGrid 等对象类型时，按工具要求匹配合理的对象类型，
+不要把新生成的 Pitch 或 Formant 错当作原始 Sound。有多个合理候选而缺少依据时说明歧义。
+整段、整个、完整声音的请求必须使用 from=0，终点使用该目标对象实际 duration；
+需要 start/end 等参数时采用对应的完整范围。时长未知则先查时长再填实际终点，
+不能静默使用编辑器旧选区，不能凭空猜 duration，也不要把 to=0 当作明确的整段终点。
+分段请求尊重用户区间，说明实际测量范围；不要把单个中点的测量说成整段统计。
+
+工具报错后先读错误、检查对象类型与最新对象列表/选择状态；若上下文不足先获取或请求
+必要状态，再调整为有区别的对象、区间或参数进行有依据的重试。不得重复原来的失败调用。
+缺少测量能力时，不能拿另一种量替代，也不能用一般知识冒充该指标；说明缺什么和可行下一步。
+优先使用已有工具；现有工具组合仍不能满足目标时，可以使用 custom_script 编写合法的
+Praat 英文脚本，绝对不能写 Python。Praat 字符串用双引号，单引号仅作合法变量插值，
+不要误用为字符串引号；遵守脚本安全校验和指定结果/完成标记路径。需要数值结果时使用
+appendFileLine 写到指定结果文件。只有用户提供新名字时才设置 name / new_name。
+
+回答要交付用户请求的实际结论、测量范围、解释或下一步；只回一句「已完成」等于没做。
+回答长度按问题需要决定，失败时明确说明尚未完成的部分及限制。
+""".strip()
+
+#: API 开放知识模式下的解释规则，不再叠加本地的数字/单操作限制。
 WORLD_KNOWLEDGE_INSTRUCTIONS = """
-你现在接的是云端大模型，可以放心用自己的语言学/语音学知识：
-13. 「对比 / 评价 / 判断」类请求（例如「把这段和东京标准音比一下」「我的发音标准吗」
-    「跟普通话母语者比呢」）：先把该测的测出来（需要就换着用两三个工具，比如基频、
-    共振峰、时长、强度），再**在回复里把对比写出来**——参照系（东京标准音、普通话
-    母语者……）的典型特征是什么样（要说清那是教科书/文献里的常见范围，不是你测的）、
-    这次测到的数值是什么、差在哪里、怎么练。这类请求的交付物就是那段比较文字，
-    只回一句「已完成」等于没做。为了做这个对比多测两三个量，不算「顺手多做」。
-14. 用户问「为什么」「这是什么」「怎么练」这类问题时，直接用你自己的知识回答：
-    解释原理、举常见例子、给练习建议都可以，不必硬套工具，也不要一律回
-    「结果里没有」。
-15. 但**这次录音的测量数字**仍然只能来自工具结果：不要凭空写出基频、共振峰、
-    时长之类的数值。引用常识范围可以，要说清那是文献里的常见范围、不是本次测量
-    结果（例如「普通话 /a/ 的 F1 常见在 700–900 Hz，这次测到的是 …」）。
-16. 做完操作之后，用一两句话说明结果意味着什么（发音或声学上怎么理解），
-    别只报数字。
+知识模式：开放。可以使用自己的语言学/语音学知识解释原理、比较典型特征、举例和
+给出练习建议，不必为概念问题强行调用工具。对比东京标准音、普通话母语者等目标时，
+明确参照是什么、它来自一般知识还是实际参考录音，再把相关观测和比较结论写出来。
+录音测量数字只能来自实际工具结果；透明推导必须说明已知输入和计算方法。
+引用“文献里的常见范围”时，明确这是一般知识而非本次测量，并说明语言、音素、说话者、
+测量方法等适用条件；范围没有可靠把握就使用定性描述，不能编造文献、来源或统一标准值。
+单凭少量声学指标不能确定发音是否标准、音素身份或健康状况；解释证据能支持什么、
+还有什么不确定，针对用户目标给出具体可实行的练习及验证方式。
+""".strip()
+
+CLOUD_STRICT_KNOWLEDGE_INSTRUCTIONS = """
+知识模式：严格。只依据工具观测、用户提供的参照和这些输入的透明推导进行解释与比较。
+禁止无依据的一般知识对比，不得补充自带的标准音特征、常见范围、文献数字或练习处方。
+没有参照时说明还缺哪些证据，可以建议怎样取得或测量这些证据。此模式仍允许完整分析、
+多步关联测量、透明计算和清晰的 Markdown 回答；不要退回本地模型的单操作限制。
 """.strip()
 
 
@@ -104,6 +153,14 @@ def identity_instructions(config: QwenConfig | None) -> str:
     """
 
     model = str(getattr(config, "model", "") or "").strip() or "（未配置的模型）"
+    if str(getattr(config, "provider", LOCAL_PROVIDER)) == API_PROVIDER:
+        return (
+            f"当前配置的模型身份是 {model}；涉及模型身份时如实说明这个配置名称，"
+            "不要猜测服务端实际模型、厂商或声称已独立验证身份。\n"
+            f"可以自然地回答，例如「我是 {model}，我被设置成 Praat 的前端。」；"
+            "无需固定句式。用户问「我是谁」是询问用户身份，不能当成模型自我介绍；"
+            "没有用户身份信息时如实说明。"
+        )
     return (
         f"你的身份：你现在跑在模型 {model} 上（用户在前端里选的）。\n"
         "用户问「你是谁」「我是谁」「你是什么模型」时，**必须**照下面这个格式简短回答：\n"
@@ -120,19 +177,29 @@ def knowledge_is_open(config: QwenConfig | None) -> bool:
 
 
 def planner_instructions(config: QwenConfig | None = None) -> str:
-    """规划用的系统提示：业务规则 + 身份规则（+ 云端大模型的知识条款）。"""
+    """按 provider 选择流程，知识模式仅决定 API 可以引用哪些解释依据。"""
 
-    parts = [TOOL_PLANNER_INSTRUCTIONS, identity_instructions(config)]
-    if knowledge_is_open(config):
-        parts.append(WORLD_KNOWLEDGE_INSTRUCTIONS)
-    return "\n\n".join(parts)
+    if str(getattr(config, "provider", LOCAL_PROVIDER)) == API_PROVIDER:
+        return CLOUD_WORKFLOW_INSTRUCTIONS + "\n\n" + analysis_instructions(config)
+    return TOOL_PLANNER_INSTRUCTIONS + "\n\n" + identity_instructions(config)
+
+
+def analysis_instructions(config: QwenConfig) -> str:
+    """API 的所有解释路径共享证据、身份和知识规则，不掺入操作传输格式。"""
+
+    knowledge = (
+        WORLD_KNOWLEDGE_INSTRUCTIONS
+        if knowledge_is_open(config)
+        else CLOUD_STRICT_KNOWLEDGE_INSTRUCTIONS
+    )
+    return "\n\n".join([CLOUD_EVIDENCE_INSTRUCTIONS, knowledge, identity_instructions(config)])
 
 
 def message_text(message: Mapping[str, Any] | None) -> str:
     """从一次响应的 ``message`` 里取出要显示的正文。
 
-    ``content`` 为空时退回 ``reasoning_content``（思考型模型会把答案只放在那里），
-    两头都空就返回空字符串。以前只有 :meth:`QwenClient.chat` 这么做，原生工具那条
+    ``content`` 为空时只取 ``reasoning_content`` 中明确标出的最终答案，
+    不把未完成的思考过程当回答。以前只有 :meth:`QwenClient.chat` 这么做，原生工具那条
     路（``_NativePlanner``）直接读 ``content``，于是模型把话说在 reasoning 里时
     界面就显示成「已完成」（2026-09-21 用户报的）。
     """
@@ -247,6 +314,17 @@ def thinking_request_fields(config: QwenConfig) -> dict[str, Any]:
 
     level = normalize_thinking_level(getattr(config, "thinking_level", "auto"))
     if str(getattr(config, "provider", LOCAL_PROVIDER)) == API_PROVIDER:
+        from urllib.parse import urlsplit
+        host = (urlsplit(config.base_url).hostname or '').casefold()
+        official_qwen = (host in {'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com'}
+                         or host.endswith('.maas.aliyuncs.com'))
+        model = config.model.casefold()
+        hybrid = model.startswith('qwen3') and not any(word in model for word in ('thinking', 'instruct'))
+        if official_qwen and hybrid and level != 'auto':
+            fields = {'enable_thinking': level != 'off'}
+            if level in {'low', 'medium'}:
+                fields['thinking_budget'] = {'low':1024, 'medium':4096}[level]
+            return fields
         if level in {"low", "medium", "high"}:
             return {"reasoning_effort": level}
         return {}
@@ -396,21 +474,19 @@ def trim_object_context(context_text: str, *, max_tokens: int) -> tuple[str, int
 
 
 def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
-    """``tool_calls[].function.arguments`` 是 JSON 字符串，解析成 dict。"""
+    """只接受完整 JSON 对象；损坏参数不能降级成默认当前对象操作。"""
 
     if isinstance(raw, Mapping):
         return dict(raw)
-    text = str(raw or "").strip()
-    if not text:
-        return {}
+    if not isinstance(raw, str) or not raw.strip():
+        raise QwenError("工具参数缺失或为空，必须提供完整 JSON 对象（无参数时使用 {}）。")
     try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            value = extract_json_object(text)
-        except QwenError:
-            return {}
-    return dict(value) if isinstance(value, Mapping) else {}
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise QwenError("工具参数不是完整合法的 JSON；未执行，请重新生成参数。") from error
+    if not isinstance(value, dict):
+        raise QwenError("工具参数必须是 JSON 对象，不能是数组、标量或 null。")
+    return value
 
 
 def extract_tool_actions(message: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -433,13 +509,17 @@ def extract_tool_actions(message: Mapping[str, Any]) -> list[dict[str, Any]]:
         name = str(function.get("name", "") or "").strip()
         if not name:
             continue
-        actions.append(
-            {
-                "tool": name,
-                "arguments": _parse_tool_arguments(function.get("arguments")),
-                "id": str(call.get("id", "") or f"call-{index + 1}"),
-            }
-        )
+        action: dict[str, Any] = {
+            "tool": name,
+            "arguments": {},
+            "id": str(call.get("id", "") or f"call-{index + 1}"),
+        }
+        try:
+            action["arguments"] = _parse_tool_arguments(function.get("arguments"))
+        except QwenError as error:
+            # 保留调用 id，让执行层拒绝并回灌失败，而非默默丢掉调用或执行 {}。
+            action["invalid_arguments"] = str(error)
+        actions.append(action)
     return actions
 
 
@@ -611,11 +691,19 @@ class QwenClient:
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": self.config.top_p,
             "presence_penalty": self.config.presence_penalty,
         }
+        if (self.config.provider == API_PROVIDER
+                and self.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+                and self.config.model.startswith("gemini-3")):
+            # Gemini 3 uses its own sampling defaults; these OpenAI fields can
+            # degrade or reject requests on Google's compatibility endpoint.
+            for field in ("temperature", "top_p", "presence_penalty"):
+                payload.pop(field)
+        if self.config.limit_tokens:
+            payload["max_tokens"] = max_tokens
         # 思考档位：云端是 reasoning_effort，本地是 chat_template_kwargs
         # （llama.cpp 专有：用模型自带的 chat 模板，多轮里把工具结果作为
         # role=tool 回灌，没有这一条小模型会跑偏，见 ADR-004）。
@@ -648,7 +736,7 @@ class QwenClient:
                 result = self._post(payload)
             # 新一点的云端模型不认 max_tokens（要 max_completion_tokens），
             # 报错里提到它时换个字段名再试一次，别让用户自己去猜。
-            elif "max_completion_tokens" not in detail:
+            elif "max_tokens" not in payload or "max_completion_tokens" not in detail:
                 raise
             else:
                 payload.pop("max_tokens", None)
@@ -656,11 +744,17 @@ class QwenClient:
                 result = self._post(payload)
 
         try:
-            message = result["choices"][0]["message"]
+            choice = result["choices"][0]
+            message = choice["message"]
         except (KeyError, IndexError, TypeError) as error:
             raise QwenError("Qwen returned an unexpected response.") from error
         if not isinstance(message, dict):
             raise QwenError("Qwen returned an unexpected response.")
+        if choice.get("finish_reason") == "length":
+            raise TruncatedResponseError(
+                "模型输出达到长度上限，回答或工具调用被截断；未执行这次不完整的调用。"
+                "可降低思考强度或提高输出上限后重试。"
+            )
         return message
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -716,14 +810,18 @@ class QwenClient:
             "qwen_explain": True,
             "qwen_vision": False,
         }
+        system_prompt = (
+            "你是 Praat 纠音助手的请求解析器。"
+            "只输出一个 JSON 对象，不输出 Markdown。"
+            "不得编造不存在的对象 ID；示例中的时间、音素和阈值只是格式示意，"
+            "不能当作用户提供的标注或本次测量。"
+        )
+        if self.config.provider == API_PROVIDER:
+            system_prompt = analysis_instructions(self.config) + "\n\n" + system_prompt
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "你是 Praat 本地纠音助手的请求解析器。"
-                    "只输出一个 JSON 对象，不输出 Markdown。"
-                    "不得编造不存在的对象 ID。"
-                ),
+                "content": system_prompt,
             },
             {
                 "role": "user",
@@ -794,7 +892,7 @@ class QwenClient:
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": TOOL_PLANNER_INSTRUCTIONS
+                "content": planner_instructions(self.config)
                 + "\n\n"
                 + self._tool_context(result_path, state_path, object_context),
             },
@@ -808,8 +906,7 @@ class QwenClient:
             temperature=self.config.plan_temperature,
         )
         actions = extract_tool_actions(message)
-        content = message.get("content") or ""
-        reply = content.strip() if isinstance(content, str) else ""
+        reply = message_text(message).strip()
         if not actions:
             if reply:
                 # 模型选择只回话、不执行动作（例如「你好」或「这个做不到」）。
@@ -879,9 +976,17 @@ JSON 结构：
 13. 用户说法里带对象类型时按类型选：说「这个 TextGrid」就用 TextGrid，说「这个声音」就用 Sound；不要因为另一个类型的对象是当前选中就写错。
 14. 没有对应工具的测量（例如 CPP）绝不能拿别的量代替；reply 里直说做不到，并说明还缺什么。
 """.strip()
-        if knowledge_is_open(self.config):
-            # 云端大模型：把「可以发挥自己的知识」那几条也带上（见
-            # WORLD_KNOWLEDGE_INSTRUCTIONS）。测量数字仍然只能来自工具结果。
+        if self.config.provider == API_PROVIDER:
+            system_prompt = planner_instructions(self.config) + "\n\n" + """
+本接口的传输格式：只输出一个 JSON 对象，外层不要加 Markdown 围栏或额外文字。
+用户可见的 reply 可以包含 Markdown 和完整解释，JSON 字符串须正确转义。
+单步结构：{"reply": "回答或本步意图", "tool": "工具名或空字符串", "arguments": {}, "script": ""}
+多个独立动作可用 actions 数组：{"reply": "本步意图", "actions": [{"tool": "工具名", "arguments": {}}]}。
+tool 只能是工具清单中的名称或 custom_script；自定义脚本放 arguments.script。
+没有操作要执行时 tool=""、arguments={}、script=""，也不要输出任何 actions；
+依赖前一步结果的操作不要预猜参数，等执行观察后再继续。答复不能把本次计划写成已完成。
+""".strip()
+        elif knowledge_is_open(self.config):
             system_prompt = (
                 system_prompt
                 + "\n\n"
@@ -913,6 +1018,19 @@ JSON 结构：
 用户：导入 D:/in/a.wav
 输出：{"reply": "读取 wav 文件。", "tool": "custom_script", "arguments": {}, "script": "Read from file: \\"D:/in/a.wav\\""}
 """.strip()
+        if self.config.provider == API_PROVIDER:
+            # 云端示例不能用空参数暗示“整段”可以继承编辑器选区。
+            examples = """
+示例（对象 id、数值和区间仅为格式示意，实际调用必须用当前现场已确认的信息）：
+用户：统计整个声音的基频
+尚未知时长时：{"reply": "先查询目标声音的实际时长。", "tool": "duration", "arguments": {"object": 7}, "script": ""}
+已确认目标 Sound 是 7、实际 duration 为 2.5 秒时：{"reply": "统计整段 0–2.5 秒的基频。", "tool": "pitch_statistics", "arguments": {"object": 7, "from": 0, "to": 2.5}, "script": ""}
+用户：查询 0.4 秒处的 F1 和 F2
+输出：{"reply": "查询该时刻的第一、第二共振峰。", "tool": "formant_frequency", "arguments": {"object": 7, "formant": "1,2", "time": 0.4}, "script": ""}
+用户：导入 D:/in/a.wav
+输出：{"reply": "读取声音文件。", "tool": "read_file", "arguments": {"path": "D:/in/a.wav"}, "script": ""}
+已有观测足够回答时：{"reply": "在此填写观测、必要的透明推导、解释和限制。", "tool": "", "arguments": {}, "script": ""}
+""".strip()
         context_message = "\n".join(
             [
                 f"结果文件（脚本把数值结果写到这里）：{result_path}",
@@ -936,7 +1054,7 @@ JSON 结构：
                 "content": system_prompt + "\n\n" + context_message,
             },
         ]
-        for item in history[-8:]:
+        for item in (history if not self.config.limit_tokens else history[-8:]):
             role = item.get("role", "")
             content = item.get("content", "")
             if role in {"user", "assistant"} and content:
@@ -951,13 +1069,19 @@ JSON 结构：
         return extract_json_object(response)
 
     def explain_errors(self, request: dict[str, Any], result: dict[str, Any]) -> str:
+        cloud = self.config.provider == API_PROVIDER
+        system_prompt = (
+            analysis_instructions(self.config)
+            + "\n\n你是发音训练助手。依据给定结果解释偏差，回答用户目标并说明证据和限制；"
+            "开放知识模式下可提供原理与可验证的练习建议，不得修改既有分数。"
+            if cloud else
+            "你是发音训练助手。根据给定数值解释发音偏差，"
+            "不得修改分数，不得声称听到了音频。回答控制在 300 字以内。"
+        )
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "你是发音训练助手。根据给定数值解释发音偏差，"
-                    "不得修改分数，不得声称听到了音频。回答控制在 300 字以内。"
-                ),
+                "content": system_prompt,
             },
             {
                 "role": "user",
@@ -967,7 +1091,10 @@ JSON 结构：
                 ),
             },
         ]
-        return self.chat(messages, max_tokens=500, temperature=0.4).strip()
+        return self.chat(
+            messages, max_tokens=self.config.plan_max_tokens if cloud else 500,
+            temperature=0.4,
+        ).strip()
 
     def vision_explain(
         self,
@@ -978,13 +1105,20 @@ JSON 结构：
         path = Path(image_path)
         media_type = mimetypes.guess_type(path.name)[0] or "image/png"
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        cloud = self.config.provider == API_PROVIDER
+        system_prompt = (
+            analysis_instructions(self.config)
+            + "\n\n你是语音学图表解释助手。描述图中可见的曲线、阴影区间和数值，"
+            "将图像观测与给定测量结果联系起来解释，标明不能从图中确定的内容；"
+            "不得重新计算或修改既有发音分数。"
+            if cloud else
+            "你是语音学图表解释助手。只描述图中可见的曲线、"
+            "阴影区间和数值，不得重新计算发音分数。"
+        )
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "你是语音学图表解释助手。只描述图中可见的曲线、"
-                    "阴影区间和数值，不得重新计算发音分数。"
-                ),
+                "content": system_prompt,
             },
             {
                 "role": "user",
@@ -1003,7 +1137,10 @@ JSON 结构：
                 ],
             },
         ]
-        return self.chat(messages, max_tokens=500, temperature=0.2).strip()
+        return self.chat(
+            messages, max_tokens=self.config.plan_max_tokens if cloud else 500,
+            temperature=0.2,
+        ).strip()
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -1041,7 +1178,7 @@ def _final_reasoning_fallback(reasoning: str) -> str:
     for marker in markers:
         if marker in reasoning:
             return reasoning.rsplit(marker, 1)[-1].strip()
-    return reasoning.strip()
+    return ""
 
 
 def probe_api(
@@ -1073,6 +1210,8 @@ def probe_api(
             max_tokens=16,
             temperature=0.0,
         )
+    except TruncatedResponseError:
+        return True, f"连接成功（{model} 的测试回答被截断，但接口是通的）。"
     except QwenError as error:
         return False, str(error)
     text = str(message.get("content") or message.get("reasoning_content") or "").strip()

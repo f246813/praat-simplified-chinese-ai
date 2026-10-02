@@ -111,7 +111,7 @@ def main() -> int:
     started: subprocess.Popen[bytes] | None = None
     try:
         pump(window, 2)
-        labels = list(window.preset_box.cget("values"))
+        labels = list(window.preset_labels)
         print(f"· 预设下拉框：{labels}")
         if not labels:
             problems.append("下拉框是空的（配置里没有 server.presets？）")

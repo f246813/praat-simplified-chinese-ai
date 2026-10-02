@@ -1,0 +1,127 @@
+test_400_error_code_and_model_precede_preset_and_test_state (test_api_capability_status.CapabilityDialogTests.test_400_error_code_and_model_precede_preset_and_test_state) ... FAIL
+test_cancelled_probe_preserves_setting (test_api_capability_status.CapabilityDialogTests.test_cancelled_probe_preserves_setting) ... FAIL
+test_changed_key_invalidates_previous_success_and_blocks_inflight_result (test_api_capability_status.CapabilityDialogTests.test_changed_key_invalidates_previous_success_and_blocks_inflight_result) ... FAIL
+test_connection_is_text_only_and_does_not_mark_audio_verified (test_api_capability_status.CapabilityDialogTests.test_connection_is_text_only_and_does_not_mark_audio_verified) ... FAIL
+test_details_are_read_only_and_hide_credentials (test_api_capability_status.CapabilityDialogTests.test_details_are_read_only_and_hide_credentials) ... ERROR
+test_explicit_rejection_displays_unsupported_and_disables_audio (test_api_capability_status.CapabilityDialogTests.test_explicit_rejection_displays_unsupported_and_disables_audio) ... FAIL
+test_model_change_invalidates_previous_error_and_details (test_api_capability_status.CapabilityDialogTests.test_model_change_invalidates_previous_error_and_details) ... FAIL
+test_official_preset_displays_support_and_unverified_state (test_api_capability_status.CapabilityDialogTests.test_official_preset_displays_support_and_unverified_state) ... FAIL
+test_saved_failed_test_reopens_and_new_credentials_invalidate_it (test_api_capability_status.CapabilityDialogTests.test_saved_failed_test_reopens_and_new_credentials_invalidate_it) ... FAIL
+test_timeout_has_explicit_unverified_status_without_fake_http_code (test_api_capability_status.CapabilityDialogTests.test_timeout_has_explicit_unverified_status_without_fake_http_code) ... FAIL
+test_unknown_gateway_does_not_claim_official_support (test_api_capability_status.CapabilityDialogTests.test_unknown_gateway_does_not_claim_official_support) ... ok
+test_unverified_preserves_manual_enabled_setting (test_api_capability_status.CapabilityDialogTests.test_unverified_preserves_manual_enabled_setting) ... FAIL
+test_verified_reports_basic_validation_and_enables_audio (test_api_capability_status.CapabilityDialogTests.test_verified_reports_basic_validation_and_enables_audio) ... FAIL
+test_real_audio_probe_retains_code_without_claiming_unsupported (test_api_capability_status.ProbeDiagnosticTests.test_real_audio_probe_retains_code_without_claiming_unsupported) ... FAIL
+
+======================================================================
+ERROR: test_details_are_read_only_and_hide_credentials (test_api_capability_status.CapabilityDialogTests.test_details_are_read_only_and_hide_credentials)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 134, in test_details_are_read_only_and_hide_credentials
+    self.dialog.show_diagnostic_details()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'ApiSettingsDialog' object has no attribute 'show_diagnostic_details'
+
+======================================================================
+FAIL: test_400_error_code_and_model_precede_preset_and_test_state (test_api_capability_status.CapabilityDialogTests.test_400_error_code_and_model_precede_preset_and_test_state)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 76, in test_400_error_code_and_model_precede_preset_and_test_state
+    self.assertTrue(hint.startswith('status code: 400 �� model: qwen3.7-flash'),hint)
+AssertionError: False is not true : ģ��Ԥ�裺ģ��Ԥ�裬��δʵ��
+
+======================================================================
+FAIL: test_cancelled_probe_preserves_setting (test_api_capability_status.CapabilityDialogTests.test_cancelled_probe_preserves_setting)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 113, in test_cancelled_probe_preserves_setting
+    self.assertIn('��ȡ��',self.dialog.audio_hint.get())
+AssertionError: '��ȡ��' not found in '�û����ã��û���������δʵ��'
+
+======================================================================
+FAIL: test_changed_key_invalidates_previous_success_and_blocks_inflight_result (test_api_capability_status.CapabilityDialogTests.test_changed_key_invalidates_previous_success_and_blocks_inflight_result)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 118, in test_changed_key_invalidates_previous_success_and_blocks_inflight_result
+    self.assertIn('��δ��֤',self.dialog.audio_hint.get())
+AssertionError: '��δ��֤' not found in '�û����ã�������Ƶ����У��ͨ��'
+
+======================================================================
+FAIL: test_connection_is_text_only_and_does_not_mark_audio_verified (test_api_capability_status.CapabilityDialogTests.test_connection_is_text_only_and_does_not_mark_audio_verified)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 165, in test_connection_is_text_only_and_does_not_mark_audio_verified
+    self.assertIn('����������',self.dialog.status.get())
+AssertionError: '����������' not found in '���ӳɹ���fixture'
+
+======================================================================
+FAIL: test_explicit_rejection_displays_unsupported_and_disables_audio (test_api_capability_status.CapabilityDialogTests.test_explicit_rejection_displays_unsupported_and_disables_audio)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 101, in test_explicit_rejection_displays_unsupported_and_disables_audio
+    self.assertIn('�ӿ���ȷ��֧����Ƶ����',self.dialog.audio_hint.get())
+AssertionError: '�ӿ���ȷ��֧����Ƶ����' not found in '�ӿ��Զ�������This model does not support audio input'
+
+======================================================================
+FAIL: test_model_change_invalidates_previous_error_and_details (test_api_capability_status.CapabilityDialogTests.test_model_change_invalidates_previous_error_and_details)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 129, in test_model_change_invalidates_previous_error_and_details
+    self.assertIn('δ֪',hint); self.assertIn('��δ��֤',hint)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '��δ��֤' not found in '����δ֪��δ��¼��Ĭ�Ϲرգ����ֶ����û���֤'
+
+======================================================================
+FAIL: test_official_preset_displays_support_and_unverified_state (test_api_capability_status.CapabilityDialogTests.test_official_preset_displays_support_and_unverified_state)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 62, in test_official_preset_displays_support_and_unverified_state
+    self.assertIn('��֧��ֱ����Ƶ����', hint)
+AssertionError: '��֧��ֱ����Ƶ����' not found in 'ģ��Ԥ�裺ģ��Ԥ�裬��δʵ��'
+
+======================================================================
+FAIL: test_saved_failed_test_reopens_and_new_credentials_invalidate_it (test_api_capability_status.CapabilityDialogTests.test_saved_failed_test_reopens_and_new_credentials_invalidate_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 149, in test_saved_failed_test_reopens_and_new_credentials_invalidate_it
+    try: self.assertIn('status code: 400',other.audio_hint.get())
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'status code: 400' not found in 'ģ��Ԥ�裺ģ��Ԥ�裬��δʵ��'
+
+======================================================================
+FAIL: test_timeout_has_explicit_unverified_status_without_fake_http_code (test_api_capability_status.CapabilityDialogTests.test_timeout_has_explicit_unverified_status_without_fake_http_code)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 106, in test_timeout_has_explicit_unverified_status_without_fake_http_code
+    self.assertIn('δ����֤',hint); self.assertIn('��ʱ',hint)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'δ����֤' not found in 'ģ��Ԥ�裺ģ��Ԥ�裬��δʵ��'
+
+======================================================================
+FAIL: test_unverified_preserves_manual_enabled_setting (test_api_capability_status.CapabilityDialogTests.test_unverified_preserves_manual_enabled_setting)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 88, in test_unverified_preserves_manual_enabled_setting
+    self.assertIn('δ����֤',self.dialog.audio_hint.get())
+AssertionError: 'δ����֤' not found in '�û����ã��û���������δʵ��'
+
+======================================================================
+FAIL: test_verified_reports_basic_validation_and_enables_audio (test_api_capability_status.CapabilityDialogTests.test_verified_reports_basic_validation_and_enables_audio)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 94, in test_verified_reports_basic_validation_and_enables_audio
+    self.assertIn('������Ƶ��֤ͨ��',self.dialog.audio_hint.get())
+AssertionError: '������Ƶ��֤ͨ��' not found in '�û����ã�������Ƶ����У��ͨ����������ϸ΢�����жϻ�ȷ����׼ȷ'
+
+======================================================================
+FAIL: test_real_audio_probe_retains_code_without_claiming_unsupported (test_api_capability_status.ProbeDiagnosticTests.test_real_audio_probe_retains_code_without_claiming_unsupported)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\�ȶ����ڰ�\ai\tests\test_api_capability_status.py", line 33, in test_real_audio_probe_retains_code_without_claiming_unsupported
+    self.assertEqual(result.get('status_code'), 400)
+AssertionError: None != 400
+
+----------------------------------------------------------------------
+Ran 14 tests in 3.470s
+
+FAILED (failures=12, errors=1)

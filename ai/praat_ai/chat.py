@@ -29,21 +29,24 @@ import threading
 import time
 import tkinter as tk
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tkinter import ttk
 from typing import Any, Callable, Mapping
 
 from . import (
     api_settings,
+    delivery,
     parent_watch,
     praat_app,
     progress_popup,
     qwen,
     sendpraat,
     tools,
+    vot_request,
     ui_theme,
     ui_widgets,
+    ui_windows,
 )
 from .config import api_is_active, default_config_path as config_path, load_config
 from .presets import PresetError, active_preset, list_presets
@@ -61,6 +64,14 @@ MAX_COMMAND_SCRIPTS = 40
 
 #: 超过这个岁数的旧脚本文件才允许删：``Message.txt`` 里可能还引用着最近几个。
 COMMAND_SCRIPT_TTL_SEC = 3600.0
+
+COMPOSER_THINKING_CHOICES = (
+    ("自动", "auto"),
+    ("关闭", "off"),
+    ("低", "low"),
+    ("中", "medium"),
+    ("高", "high"),
+)
 
 
 def context_ping_script() -> str:
@@ -136,6 +147,10 @@ def request_id_from_path(path: Path | str) -> str:
 
 def started_marker_path() -> Path:
     return runtime_dir() / "chat_started.txt"
+
+
+def finished_marker_path() -> Path:
+    return runtime_dir() / "chat_finished.txt"
 
 
 def failure_path() -> Path:
@@ -278,7 +293,7 @@ def _clean_send_output(text: str) -> str:
 def _clear_result_files() -> None:
     """每次投递前清掉上一次的结果和完成标记（等待时只看新的那个）。"""
 
-    for path in (result_path(), state_path(), started_marker_path(), failure_path()):
+    for path in (result_path(), state_path(), started_marker_path(), failure_path(), finished_marker_path()):
         try:
             path.unlink()
         except FileNotFoundError:
@@ -323,6 +338,13 @@ def _completion_state(request_id: str) -> tuple[bool, str]:
         return True, ""
     started = _read_started_marker()
     if started == request_id:
+        if "# praat-protocol=2" in object_context():
+            try:
+                finished = finished_marker_path().read_text(encoding="utf-8").splitlines()
+            except OSError:
+                return False, ""
+            if not finished or finished[-1].strip() != f"finished {request_id}":
+                return False, ""
         return True, ""
     return False, (
         f"上一条超时指令（编号 {started or '未知'}）刚刚才执行完，"
@@ -418,7 +440,7 @@ def render_action(
                 tool_name,
                 {},
                 context,
-                custom_script=str(arguments.get("script", "") or ""),
+                custom_script=str(arguments.get("script", "") or custom_script),
             ),
             "",
         )
@@ -448,11 +470,61 @@ MAX_AGENT_ROUNDS = 3
 #: 一次用户请求最多**实际执行**几个动作。小模型在多轮里会退化成重复调用同一个
 #: 工具（实测「截取 0.2–0.5 秒」被它连做三遍），所以除了轮数还要卡总步数。
 MAX_AGENT_STEPS = 5
+API_AGENT_ROUNDS = 8
+API_AGENT_STEPS = 20
+
+# 分析所需的对象准备允许 API 模型在后续轮次完成。
+ANALYSIS_PREPARATION_TOOLS = frozenset({
+    "select_object", "extract_part", "duplicate_object", "spectrogram", "view_edit",
+})
+
+
+def _whole_recording_request(user_text: str) -> bool:
+    """用户这句话是不是要求对**整段**对象做分析（而不是编辑器里圈出来的那一小段）。"""
+
+    return bool(
+        re.search(
+            r"整段|整个(?:声音|语音|音频|录音|波形)"
+            r"|全部(?:声音|语音|音频)"
+            r"|(?:the\s+)?(?:whole|entire|full)\s+(?:sound|audio|recording|utterance|file)",
+            user_text,
+            re.I,
+        )
+    )
+
+
+def _request_context(text: str, user_text: str) -> str:
+    """整段请求覆盖编辑器旧选区；工具显式时间参数仍由工具层处理。
+
+    对象列表是 6 列 TSV（``id / class / name / selected / sel_start / sel_end``）；
+    只把后两列清空，别动前面的列。列数正好 6、且第一列是数字的行才会被改，其余行
+    原样保留——行数、顺序、制表符和末尾换行都不变，所以 ``parse_object_context()``
+    仍然读得出一模一样的对象，只是没有圈选。
+    """
+
+    if not _whole_recording_request(user_text):
+        return text
+    lines = []
+    for line in text.splitlines():
+        fields = line.split("\t")
+        if len(fields) == 6 and fields[0].isdigit():
+            fields[4:6] = ["", ""]
+        lines.append("\t".join(fields))
+    stripped = "\n".join(lines)
+    # splitlines() 会把末尾换行吃掉，这里补回来，避免调用方拿到的文本长度悄悄变短。
+    return stripped + "\n" if text.endswith("\n") else stripped
 
 
 @dataclass(slots=True)
 class AgentStep:
-    """一次工具执行，以及回灌给模型的那段观察结果。"""
+    """一次工具执行，以及回灌给模型的那段观察结果。
+
+    ``execution`` 是**投递事实**（见 :mod:`praat_ai.delivery`）：
+    ``''`` 表示执行器没有声明（外部替身、本地工具），调用方只能按说明文字判断；
+    其余取值是 ``DELIVERED`` / ``NOT_DELIVERED`` / ``EXECUTION_UNKNOWN`` /
+    ``EXECUTION_BLOCKED``。只按说明文字猜「执行状态不明」会把「根本没送出去」也算
+    进去，从而白白停掉整轮（2026-10-02 的 VOT 请求）。
+    """
 
     round_index: int
     tool: str
@@ -462,6 +534,7 @@ class AgentStep:
     script: str = ""
     results: list[str] = field(default_factory=list)
     note: str = ""
+    execution: str = ""
 
 
 @dataclass(slots=True)
@@ -570,8 +643,10 @@ def _execute_action(
 
     tool_name = str(action.get("tool", "") or "").strip()
     arguments = action.get("arguments") or {}
+    if action.get("invalid_arguments"):
+        return AgentStep(round_index, tool_name, {}, False, f"工具 {tool_name} 没有执行：{action['invalid_arguments']}")
     if not isinstance(arguments, Mapping):
-        arguments = {}
+        return AgentStep(round_index, tool_name, {}, False, f"工具 {tool_name} 没有执行：工具参数必须为 JSON 对象。")
     # 本地工具（跑现成 .praat 脚本那种）不走「渲染脚本 → 投递」，先分流。
     if tool_name in tools.LOCAL_TOOLS:
         return _execute_local_action(
@@ -583,13 +658,20 @@ def _execute_action(
         observation = f"工具 {tool_name} 没有执行：{error}"
         return AgentStep(round_index, tool_name, dict(arguments), False, observation)
     ok, results, failure = execute(script)
+    if tool_name == "vot":
+        # Script completion alone is not measurement success (e.g. no burst).
+        measured = any(
+            re.match(r"^VOT(?: 估计值)?\s*=\s*[+-]?\d+(?:\.\d+)?\s*秒", line)
+            for line in results
+        )
+        if ok and measured:
+            results = [*results, "计算公式：VOT（毫秒）=（浊音起始时刻（秒）− 爆破时刻（秒））× 1000。"]
+        else:
+            ok = False
+            failure = "VOT 测量未完成：" + (failure or "；".join(results) or "脚本没有返回 VOT 数值。")
     if ok:
         detail = "；".join(results) if results else "（脚本跑完了，但没有输出结果行）"
-        observation = (
-            f"工具 {tool_name} 执行成功，结果：{detail}\n"
-            "（如果这些结果已经够回答用户，就直接回答，不要再调工具、也不要顺手多做别的操作；"
-            "只有确实还需要下一步时才继续调工具。）"
-        )
+        observation = f"工具 {tool_name} 执行成功，结果：{detail}"
     else:
         observation = f"工具 {tool_name} 执行失败：{failure}"
     return AgentStep(
@@ -630,11 +712,7 @@ def _execute_local_action(
         return AgentStep(round_index, tool_name, dict(arguments), False, observation)
     if ok:
         detail = "；".join(results) if results else "（工具跑完了，但没有输出结果行）"
-        observation = (
-            f"工具 {tool_name} 执行成功，结果：{detail}\n"
-            "（如果这些结果已经够回答用户，就直接回答，不要再调工具、也不要顺手多做别的操作；"
-            "只有确实还需要下一步时才继续调工具。）"
-        )
+        observation = f"工具 {tool_name} 执行成功，结果：{detail}"
     else:
         observation = f"工具 {tool_name} 执行失败：{failure}"
     return AgentStep(
@@ -658,6 +736,8 @@ def _run_agent_turn(
     max_rounds: int = MAX_AGENT_ROUNDS,
     max_steps: int = MAX_AGENT_STEPS,
     allow_followup_mutations: bool = False,
+    analysis_preparation: bool = False,
+    refresh_context: Callable[[], str] | None = None,
     environment: tools.LocalEnvironment | None = None,
     cancel: threading.Event | None = None,
 ) -> TurnOutcome:
@@ -674,7 +754,8 @@ def _run_agent_turn(
     """
 
     outcome = TurnOutcome()
-    executed: dict[str, str] = {}
+    executed: dict[str, AgentStep] = {}
+    unresolved: dict[str, str] = {}
     steps_done = 0
     stopped_early = False
     cancelled = False
@@ -683,7 +764,12 @@ def _run_agent_turn(
             # 用户在等上一轮结果时按了「停止」：不再规划、不再执行。
             cancelled = True
             break
-        actions, reply = planner.next()
+        try:
+            actions, reply = planner.next()
+        except qwen.TruncatedResponseError as error:
+            outcome.failure = str(error)
+            outcome.reply = "模型回答未完成：" + str(error)
+            return outcome
         if not actions:
             if not reply:
                 # 模型既没调工具、又没写正文（实测思考型模型会把话全放在
@@ -691,25 +777,32 @@ def _run_agent_turn(
                 # 别让界面用一句兜底话糊过去。
                 ask = getattr(planner, "ask_for_text", None)
                 if ask is not None:
-                    reply = ask()
+                    try:
+                        reply = ask()
+                    except qwen.TruncatedResponseError as error:
+                        outcome.failure = str(error)
+                        outcome.reply = "模型回答未完成：" + str(error)
+                        return outcome
             outcome.reply = reply or _summary_of(outcome)
             return outcome
-        for action in actions:
+        for action_index, action in enumerate(actions):
             if cancel is not None and cancel.is_set():
                 cancelled = True
+                for pending in actions[action_index:]:
+                    planner.observe(pending, "已取消，未执行此工具调用。")
                 break
-            signature = _action_signature(action)
+            signature = _action_signature(action) + repr(context.objects)
             tool_name = str(action.get("tool", "") or "")
             if signature in executed:
                 observation = (
                     "这一步刚才已经执行过，没有重复执行。"
-                    f"上一次的结果：{executed[signature]}"
+                    f"上一次的结果：{executed[signature].observation}"
                 )
                 step = AgentStep(
                     round_index,
                     tool_name,
                     dict(action.get("arguments") or {}),
-                    True,
+                    executed[signature].ok,
                     observation,
                     "",
                     [],
@@ -723,6 +816,7 @@ def _run_agent_turn(
                 round_index > 1
                 and not allow_followup_mutations
                 and tools.is_mutating(tool_name)
+                and not (analysis_preparation and tool_name in ANALYSIS_PREPARATION_TOOLS)
             ):
                 # 用户这句话没有要求第二步，而这个动作会改动对象：不做。
                 observation = (
@@ -746,33 +840,71 @@ def _run_agent_turn(
                 continue
             if steps_done >= max_steps:
                 stopped_early = True
+                for pending in actions[action_index:]:
+                    planner.observe(pending, f"已达到本次操作 {max_steps} 步的上限，此调用未执行。请根据已有实测结果回答。")
                 break
             step = _execute_action(
                 action, context, execute, round_index, environment
             )
             steps_done += 1
-            executed[signature] = step.observation
+            executed[signature] = step
             outcome.steps.append(step)
             outcome.used_tools = True
             if step.ok:
                 outcome.results.extend(step.results)
+                unresolved.pop(tool_name, None)
             else:
-                outcome.failure = step.observation
+                unresolved[tool_name] = step.observation
                 # 失败也可能带回结果行：脚本在 Praat 里报错时，Praat 会把错误原文
                 # 写进结果文件（不再弹模态框），那一行要显示给用户看。
                 outcome.results.extend(step.results)
+            outcome.failure = "；".join(unresolved.values())
             if step.note:
                 outcome.notes.append(step.note)
             planner.observe(action, step.observation)
             if on_progress is not None:
                 on_progress(_progress_text(step))
+            if refresh_context is not None:
+                try:
+                    fresh_text = refresh_context()
+                    if not fresh_text.splitlines() or not fresh_text.splitlines()[0].startswith("id\tclass\tname\tselected"):
+                        raise tools.ToolError("没有读到完整的对象列表。")
+                    context = replace(context, objects=tools.parse_object_context(fresh_text))
+                    update = getattr(planner, "update_context", None)
+                    if update is not None:
+                        update(fresh_text)
+                except (OSError, tools.ToolError) as error:
+                    outcome.failure = f"对象状态刷新失败，已停止后续操作：{error}"
+                    for pending in actions[action_index + 1:]:
+                        planner.observe(pending, outcome.failure + "；此调用未执行。")
+                    stopped_early = True
+                    break
         if stopped_early or cancelled:
             break
     if cancelled:
         outcome.notes.append("已取消：后面的步骤没有再执行。")
         outcome.reply = "已取消这次操作（已经执行完的那几步结果还在下面）。"
         return outcome
-    outcome.reply = planner.wrap_up() or _summary_of(outcome)
+    # 收尾这轮是「锦上添花」：模型只是把已经测到的结果写成一段中文回答。它失败
+    # （网络读超时最常见，见 2026-09-30 真机验收）不能让整轮白跑——上面那些脚本
+    # 已经在 Praat 里执行完了，结果必须还给用户。所以这里只重试一次，再失败就退回
+    # 本地拼的摘要 `_summary_of(outcome)`，并把原因写进 notes。
+    for attempt in range(2):
+        try:
+            outcome.reply = planner.wrap_up() or _summary_of(outcome)
+            break
+        except qwen.TruncatedResponseError as error:
+            outcome.failure = str(error)
+            outcome.reply = "模型回答未完成：" + str(error)
+            break
+        except qwen.QwenError as error:
+            if attempt == 0:
+                outcome.notes.append(f"收尾回答失败，正在重试一次：{error}")
+                continue
+            outcome.notes.append(
+                f"收尾回答两次都没成功（{error}），下面用本次实测结果拼的摘要。"
+            )
+            outcome.reply = _summary_of(outcome)
     return outcome
 
 
@@ -790,6 +922,8 @@ class _NativePlanner:
         state_path: str,
     ) -> None:
         self.client = client
+        self.result_path = result_path
+        self.state_path = state_path
         self.messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -800,8 +934,47 @@ class _NativePlanner:
         ]
         self.messages.extend(qwen.history_messages(history))
         self.messages.append({"role": "user", "content": user_text})
+        self.turn_start = len(self.messages) - 1
+
+    def update_context(self, text: str) -> None:
+        self.messages[0]["content"] = qwen.planner_instructions(self.client.config) + "\n\n" + tool_context_text(text, self.result_path, self.state_path)
+
+    def fit_messages(self, *, with_tools: bool = True) -> None:
+        """云端逐轮核算预算，保留所有 tool_call_id 配对；完整结果仍留在界面与文件。"""
+        if self.client.config.provider != "api" or not self.client.config.limit_tokens:
+            return
+        schema_cost = qwen.estimate_tokens(json.dumps(tools.tool_schemas(), ensure_ascii=False)) if with_tools else 0
+        available = self.client.config.max_context_tokens - self.client.config.plan_max_tokens - qwen.SAFETY_TOKENS - schema_cost
+        def cost() -> int:
+            return qwen.estimate_tokens(json.dumps(self.messages, ensure_ascii=False))
+        if cost() <= available:
+            return
+        if self.turn_start > 1:
+            del self.messages[1:self.turn_start]
+            self.turn_start = 1
+        for message in self.messages:
+            if cost() <= available:
+                return
+            if message.get("role") != "tool":
+                continue
+            original = str(message.get("content", ""))
+            if len(original) < 200:
+                continue
+            lo, hi = 80, len(original)
+            marker = "\n（工具结果因上下文预算截短；缺失部分不得推测，请缩小查询范围。）\n"
+            while lo < hi:
+                middle = (lo + hi + 1) // 2
+                message["content"] = original[:middle] + marker
+                if cost() <= available:
+                    lo = middle
+                else:
+                    hi = middle - 1
+            message["content"] = original[:lo] + marker
+        if cost() > available:
+            raise qwen.QwenError("API 上下文预算不足以保留工具调用和结果，请在 API 设置中增大上下文窗口或缩小分析范围。")
 
     def next(self) -> tuple[list[dict[str, Any]], str]:
+        self.fit_messages()
         message = self.client.chat_message(
             self.messages,
             tools=tools.tool_schemas(),
@@ -838,6 +1011,7 @@ class _NativePlanner:
                 ),
             }
         )
+        self.fit_messages(with_tools=False)
         message = self.client.chat_message(
             self.messages,
             max_tokens=self.client.config.plan_max_tokens,
@@ -846,6 +1020,7 @@ class _NativePlanner:
         return qwen.message_text(message).strip()
 
     def wrap_up(self) -> str:
+        self.fit_messages(with_tools=False)
         text = self.client.chat(
             self.messages,
             max_tokens=self.client.config.plan_max_tokens,
@@ -877,20 +1052,18 @@ class _JsonPlanner:
         self.state_path = state_path
         self.observations: list[str] = []
 
-    def next(self) -> tuple[list[dict[str, Any]], str]:
+    def update_context(self, text: str) -> None:
+        self.context_text = text
+
+    def observed_history(self) -> list[dict[str, str]]:
         history = list(self.history)
         if self.observations:
-            history.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "上一步的执行结果：\n"
-                        + "\n".join(self.observations)
-                        + "\n请根据这些结果回答用户；如果需要继续操作就再选工具，"
-                        "不需要就不要选工具。"
-                    ),
-                }
-            )
+            history.append({"role": "user", "content": "上一步的执行结果：\n" + "\n".join(self.observations)
+                            + "\n根据这些结果回答用户，需要继续分析时再选工具。"})
+        return history
+
+    def next(self) -> tuple[list[dict[str, Any]], str]:
+        history = self.observed_history()
         plan = self.client.plan_praat_command(
             self.user_text,
             self.context_text,
@@ -911,7 +1084,7 @@ class _JsonPlanner:
         plan = self.client.plan_praat_command(
             self.user_text + "\n（请直接在 reply 里用中文回答，不要选工具，也不要留空。）",
             self.context_text,
-            list(self.history),
+            self.observed_history(),
             tool_catalog=tools.catalog_text(),
             result_path=self.result_path,
             state_path=self.state_path,
@@ -951,7 +1124,9 @@ def run_turn(
     execute: Callable[[str], tuple[bool, list[str], str]],
     on_progress: Callable[[str], None] | None = None,
     native: bool | None = None,
-    max_rounds: int = MAX_AGENT_ROUNDS,
+    max_rounds: int | None = None,
+    max_steps: int | None = None,
+    refresh_context: Callable[[], str] | None = None,
     environment: tools.LocalEnvironment | None = None,
     cancel: threading.Event | None = None,
 ) -> TurnOutcome:
@@ -964,6 +1139,60 @@ def run_turn(
     token 预算裁一遍（A5），被省掉的部分写进 ``TurnOutcome.notes``。
     """
 
+    if cancel is not None and cancel.is_set():
+        return TurnOutcome(reply="已取消这次操作。")
+    context_text = _request_context(context_text, user_text)
+    context = replace(context, objects=tools.parse_object_context(context_text))
+    api_mode = client.config.provider == "api"
+    round_limit = max_rounds if max_rounds is not None else (API_AGENT_ROUNDS if api_mode else MAX_AGENT_ROUNDS)
+    step_limit = max_steps if max_steps is not None else (API_AGENT_STEPS if api_mode else MAX_AGENT_STEPS)
+    vot_arguments = vot_request.direct_arguments(user_text)
+    if vot_arguments is not None:
+        try:
+            if "object" in vot_arguments:
+                requested = next((row for row in context.objects if row.id == vot_arguments["object"]), None)
+                if requested is None:
+                    raise tools.ToolError(f"对象列表里没有编号 {vot_arguments['object']}。")
+                allowed = frozenset({"Sound", "TextGrid"}) if "burst" in vot_arguments else tools.SOUND_CLASSES
+                context.require_class(requested, allowed, "指定对象不支持这次 VOT 测量")
+            times = [value for key, value in vot_arguments.items() if key != "object"]
+            if any(not 0 <= value <= 36000 for value in times):
+                raise tools.ToolError("时间必须在 0–36000 秒范围内。")
+            if "from" in vot_arguments and vot_arguments["to"] - vot_arguments["from"] < 0.002:
+                raise tools.ToolError("搜索范围的终点必须晚于起点，范围至少为 2 毫秒。")
+            if "burst" in vot_arguments or "voicing" in vot_arguments:
+                if not {"burst", "voicing"} <= vot_arguments.keys():
+                    raise tools.ToolError("需要同时给出 burst（爆破）和 voicing（浊音起始）两个时刻。")
+                if vot_arguments["voicing"] <= vot_arguments["burst"]:
+                    raise tools.ToolError("浊音起始必须晚于爆破时刻；未改用自动检测。")
+            if not {"burst", "voicing", "from", "to"} & vot_arguments.keys():
+                row = context.resolve_by_class(vot_arguments.get("object"), tools.SOUND_CLASSES, "自动检测 VOT 需要 Sound")
+                if row.selection is not None and row.selection[1] - row.selection[0] < 0.002:
+                    raise tools.ToolError("编辑器选区不足 2 毫秒，请扩大选区到爆破和浊音起始附近。")
+            if "选区" in user_text:
+                row = context.resolve_by_class(vot_arguments.get("object"), tools.SOUND_CLASSES, "按选区测量需要 Sound")
+                if row.selection is None:
+                    raise tools.ToolError("没有有效的编辑器选区，请先在波形上圈选爆破到浊音起始附近的范围。")
+        except tools.ToolError as error:
+            message = "VOT 测量未完成：" + str(error)
+            return TurnOutcome(reply=message, failure=message)
+        # The known command has one required result; no model can substitute
+        # metadata, invent landmarks, or stop before the measurement happens.
+        step = _execute_action(
+            {"tool": "vot", "arguments": vot_arguments}, context, execute, 1, environment
+        )
+        if on_progress is not None:
+            on_progress(_progress_text(step))
+        failure_detail = step.observation.partition("：")[2] or step.observation
+        failure_reply = failure_detail if failure_detail.startswith("VOT 测量未完成") else "VOT 测量未完成：" + failure_detail
+        return TurnOutcome(
+            reply="\n".join(step.results) if step.ok else failure_reply,
+            results=step.results,
+            steps=[step],
+            used_tools=bool(step.script),
+            failure="" if step.ok else step.observation,
+        )
+
     use_native = (
         qwen.planner_mode() != qwen.JSON_MODE if native is None else native
     )
@@ -975,19 +1204,23 @@ def run_turn(
     instructions = (
         qwen.planner_instructions(client.config) if use_native else tools.catalog_text()
     )
-    budget = qwen.history_budget(
-        client.config.max_context_tokens,
-        instructions=instructions,
-        tool_schemas=schemas,
-        user_text=user_text,
-        response_tokens=client.config.plan_max_tokens,
-    )
-    trimmed_context, hidden_rows = qwen.trim_object_context(
-        context_text, max_tokens=max(120, budget // 3)
-    )
-    trimmed_history, dropped_turns = qwen.trim_history(
-        history, max_tokens=max(0, budget - qwen.estimate_tokens(trimmed_context))
-    )
+    if client.config.limit_tokens:
+        budget = qwen.history_budget(
+            client.config.max_context_tokens,
+            instructions=instructions,
+            tool_schemas=schemas,
+            user_text=user_text,
+            response_tokens=client.config.plan_max_tokens,
+        )
+        trimmed_context, hidden_rows = qwen.trim_object_context(
+            context_text, max_tokens=max(120, budget // 3)
+        )
+        trimmed_history, dropped_turns = qwen.trim_history(
+            history, max_tokens=max(0, budget - qwen.estimate_tokens(trimmed_context))
+        )
+    else:
+        trimmed_context, hidden_rows = context_text, 0
+        trimmed_history, dropped_turns = qwen.history_messages(history), 0
     notes: list[str] = []
     if hidden_rows:
         notes.append(
@@ -1018,8 +1251,11 @@ def run_turn(
         context=context,
         execute=execute,
         on_progress=on_progress,
-        max_rounds=2 if not use_native else max_rounds,
+        max_rounds=round_limit if use_native or api_mode else min(round_limit, 2),
+        max_steps=step_limit,
         allow_followup_mutations=wants_second_step(user_text),
+        analysis_preparation=api_mode,
+        refresh_context=(lambda: _request_context(refresh_context(), user_text)) if refresh_context is not None else None,
         environment=environment,
         cancel=cancel,
     )
@@ -1034,6 +1270,7 @@ def _send_script(
     request_id: str = "",
     cancel: threading.Event | None = None,
     process_id: int | None = None,
+    outcome: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Hand the script to the running Praat and wait for its result files.
 
@@ -1051,6 +1288,11 @@ def _send_script(
 
     ``process_id`` 指定送给哪一个 Praat（默认最新打开的那个，和 ``--send`` 一致）；
     验证脚本用它把自己开的那个实例和用户开着的实例区分开。
+
+    ``outcome``（可选）是**结构化的投递事实**出口：本函数往里追加一格
+    ``DELIVERED`` 或 ``NOT_DELIVERED``（见 :mod:`praat_ai.delivery`）。失败时只
+    看返回值分不出「根本没送出去」和「送出去了没等到结果」，而这两件事的处理完全
+    不同（前者可以改参数重试，后者必须停下来核实）。
     """
 
     request_id = request_id or new_request_id()
@@ -1059,10 +1301,14 @@ def _send_script(
     target.write_text(script_preamble(request_id) + script, encoding="utf-8")
     prune_command_scripts()
     if sendpraat.send_mode() == sendpraat.ARGV_MODE:
-        return _send_script_via_argv(executable, target, request_id, cancel=cancel)
+        return _send_script_via_argv(executable, target, request_id, cancel=cancel, outcome=outcome)
     delivered, note = sendpraat.deliver(ai_directory(), target, process_id=process_id)
     if not delivered:
+        if outcome is not None:
+            outcome.append(delivery.NOT_DELIVERED)
         return False, note
+    if outcome is not None:
+        outcome.append(delivery.DELIVERED)
     return _wait_for_result(None, request_id=request_id, cancel=cancel)
 
 
@@ -1072,6 +1318,7 @@ def _send_script_via_argv(
     request_id: str = "",
     *,
     cancel: threading.Event | None = None,
+    outcome: list[str] | None = None,
 ) -> tuple[bool, str]:
     """排障兜底：``Praat.exe --FULL-TRUST --send``（会激活 Praat 的一个子窗口）。"""
 
@@ -1094,7 +1341,11 @@ def _send_script_via_argv(
                 creationflags=creation_flags,
             )
     except OSError as error:
+        if outcome is not None:
+            outcome.append(delivery.NOT_DELIVERED)
         return False, f"调用 Praat 失败：{error}"
+    if outcome is not None:
+        outcome.append(delivery.DELIVERED)
     return _wait_for_result(process, request_id=request_id, cancel=cancel)
 
 
@@ -1225,6 +1476,12 @@ def api_choice_label(config) -> str:
     if not parts:
         return "云端 API：未配置"
     return "云端 API：" + " / ".join(parts)
+
+
+def local_preset_allowed(config) -> bool:
+    """云端锁定时禁选本地；云端在用且本机服务被停用时也禁选。"""
+
+    return not (config.api.locked or (api_is_active(config) and config.api.stop_local_service))
 
 
 def model_status_text(config) -> str:
@@ -1391,14 +1648,29 @@ def render_message(text: str) -> list[tuple[str, Any]]:
     return segments
 
 
+@dataclass
+class _ProcessBlock:
+    """一轮请求的灰色过程信息；正文与复制链接不属于这个折叠区。"""
+
+    started_at: float
+    header_tag: str
+    body_tag: str
+    end_mark: str
+    finished_at: float | None = None
+    collapsed: bool = False
+    #: 上一次由右键切换折叠的时刻。同一次点击里如果 Tk 既投递了 ``<Button-3>``
+    #: 又投递了 ``<ButtonRelease-3>``，会被这个时间戳吃掉第二次，避免「闪一下又回来」。
+    last_toggle_at: float = 0.0
+
+
 class ChatWindow:
     def __init__(self) -> None:
-        self.root = tk.Tk()
+        self.root = ui_windows.create_root()
         self.root.title("Praat AI 对话")
-        self.root.geometry("900x680")
-        self.root.minsize(680, 480)
         #: 主题：TW-Elements 的设计令牌 + 跟随系统深浅色（见 ai/praat_ai/ui_theme.py）。
         self.theme = ui_theme.Theme(self.root)
+        self.root.geometry(f"{self.theme.pad(900)}x{self.theme.pad(680)}")
+        self.root.minsize(self.theme.pad(680), self.theme.pad(480))
         self.root.configure(background=self.theme.color("canvas"))
         self.config = load_config()
         self.client = qwen.QwenClient(self.config.qwen)
@@ -1406,6 +1678,17 @@ class ChatWindow:
         self.config_stamp = self._config_stamp()
         self.next_config_check = 0.0
         self.history: list[dict[str, str]] = []
+        from .conversation_store import ConversationStore
+        from .materials import cleanup_abandoned
+        cleanup_abandoned(runtime_dir() / "tasks")
+        self.store = ConversationStore(runtime_dir() / 'conversations.sqlite3',
+                                       secrets=[self.config.api.api_key, self.config.qwen.api_key])
+        self.session_id = self.store.new_session()
+        self.analysis_state = None
+        self.pending_analysis = None
+        self.task_materials = []
+        self.current_materials = None
+        self._choice_tags = []
         self.messages: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy = False
         #: C7：点「停止」时置上，正在等的投递/批处理/多轮循环都会看到。
@@ -1416,6 +1699,8 @@ class ChatWindow:
         self.progress_window = None
         #: 「⧉ 复制」那些文本 tag → 对应的消息原文（点一下复制整条）。
         self._copy_registry: dict[str, str] = {}
+        self._process_blocks: dict[str, _ProcessBlock] = {}
+        self._active_process: _ProcessBlock | None = None
 
         frame = tk.Frame(self.root, background=self.theme.color("canvas"))
         frame.pack(fill="both", expand=True, padx=14, pady=14)
@@ -1448,6 +1733,9 @@ class ChatWindow:
             background="surface",
         )
         self.status_chip.pack(side="right")
+        self.records_button = ui_widgets.RoundedButton(
+            self.app_bar.body, self.theme, '查看记录', self.view_records, kind='text')
+        self.records_button.pack(side='right', padx=8)
 
         preset_row = tk.Frame(frame, background=self.theme.color("canvas"))
         preset_row.grid(row=1, column=0, sticky="ew", pady=(10, 8))
@@ -1461,14 +1749,14 @@ class ChatWindow:
             font=self.theme.font("small"),
         ).grid(row=0, column=0, sticky="w", padx=(0, 8))
         self.preset_choice = tk.StringVar(value="")
-        self.preset_box = ttk.Combobox(
+        self.preset_box = ttk.Menubutton(
             preset_row,
             textvariable=self.preset_choice,
-            values=[],
-            state="readonly",
             width=48,
-            font=self.theme.font("body"),
+            style="PraatPreset.TMenubutton",
         )
+        self.preset_menu = tk.Menu(self.preset_box, tearoff=False)
+        self.preset_box.configure(menu=self.preset_menu)
         self.preset_box.grid(row=0, column=1, sticky="ew")
         self.preset_button = ui_widgets.RoundedButton(
             preset_row,
@@ -1539,6 +1827,9 @@ class ChatWindow:
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.transcript.configure(yscrollcommand=scrollbar.set)
         self._configure_transcript_tags(self.theme)
+        # Text 的 tag_bind 依赖上一次 Motion 的 current 标签；滚动/重绘后可能过期。
+        # 在控件上接收右键，再按本次点击坐标判断标题，不依赖悬停状态。
+        self.transcript.bind("<Button-3>", self._on_process_right_click)
 
         composer = ui_widgets.Card(frame, self.theme, padding=(12, 10, 12, 10), radius=12)
         composer.grid(row=4, column=0, sticky="ew", pady=(12, 0))
@@ -1548,7 +1839,7 @@ class ChatWindow:
         self.entry_field = ui_widgets.FieldCard(
             composer_body, self.theme, background="surface", radius=8
         )
-        self.entry_field.grid(row=0, column=0, columnspan=3, sticky="ew")
+        self.entry_field.grid(row=0, column=0, columnspan=5, sticky="ew")
         self.entry = tk.Text(
             self.entry_field,
             height=3,
@@ -1567,38 +1858,84 @@ class ChatWindow:
         self.entry.bind("<Return>", self.on_return)
         self.entry.bind("<KP_Enter>", self.on_return)
         self.entry.bind("<Shift-Return>", self.on_shift_return)
+        # 输入框下方的提示、思考强度和操作按钮共用白色区域。
+        composer_actions = tk.Frame(
+            composer_body, background=self.theme.color("surface")
+        )
+        composer_actions.grid(
+            row=1,
+            column=0,
+            columnspan=5,
+            sticky="ew",
+            pady=(self.theme.pad(8), 0),
+        )
+        composer_actions.columnconfigure(0, weight=1)
+        composer_actions.rowconfigure(0, weight=1)
+        self.composer_actions = composer_actions
+        self.composer_hint = tk.Label(
+            composer_actions,
+            text="Enter 发送，Shift+Enter 换行",
+            anchor="w",
+            background=self.theme.color("surface"),
+            foreground=self.theme.color("textMuted"),
+            font=self.theme.font("small"),
+        )
+        self.composer_hint.grid(row=0, column=0, sticky="w")
+        self.thinking_choice_labels = {
+            value: label for label, value in COMPOSER_THINKING_CHOICES
+        }
+        self.thinking_choice_values = {
+            label: value for label, value in COMPOSER_THINKING_CHOICES
+        }
+        current_level = api_settings.normalize_thinking_level(
+            self.config.qwen.thinking_level
+        )
+        self.thinking_choice = tk.StringVar(
+            value=self.thinking_choice_labels[current_level]
+        )
+        self.thinking_label = tk.Label(
+            composer_actions,
+            text="思考强度：",
+            anchor="e",
+            background=self.theme.color("surface"),
+            foreground=self.theme.color("textMuted"),
+            font=self.theme.font("small"),
+        )
+        self.thinking_label.grid(
+            row=0, column=1, sticky="e", padx=(0, self.theme.pad(4))
+        )
+        self.thinking_box = ttk.Combobox(
+            composer_actions,
+            textvariable=self.thinking_choice,
+            values=[label for label, _ in COMPOSER_THINKING_CHOICES],
+            state="readonly",
+            width=6,
+            font=self.theme.font("body"),
+        )
+        self.thinking_box.grid(
+            row=0, column=2, sticky="e", padx=(0, self.theme.pad(24))
+        )
+        self.thinking_box.bind(
+            "<<ComboboxSelected>>", self.on_thinking_level_selected
+        )
         self.send_button = ui_widgets.RoundedButton(
-            composer_body,
+            composer_actions,
             self.theme,
             "发送",
             self.submit,
             kind="filled",
         )
-        self.send_button.grid(row=1, column=1, sticky="e", padx=(10, 0), pady=(10, 0))
+        self.send_button.grid(row=0, column=3, sticky="e", padx=(0, self.theme.pad(8)))
         # C7：等待可以取消。Praat 卡住、社区脚本跑太久时不用干等 25 秒。
         self.stop_button = ui_widgets.RoundedButton(
-            composer_body,
+            composer_actions,
             self.theme,
             "停止",
             self.cancel_turn,
             kind="outlined",
         )
         self.stop_button.configure(state="disabled")
-        self.stop_button.grid(row=1, column=2, sticky="e", padx=(8, 0), pady=(10, 0))
-        self.composer_hint = tk.Label(
-            composer_body,
-            text=(
-                "Enter 发送，Shift+Enter 换行；脚本在正在运行的 Praat 里执行，结果会回到这里；"
-                "「停止」= 不再等这一步（Praat 里已经在跑的脚本不受影响）"
-            ),
-            anchor="w",
-            justify="left",
-            wraplength=520,
-            background=self.theme.color("surface"),
-            foreground=self.theme.color("textMuted"),
-            font=self.theme.font("small"),
-        )
-        self.composer_hint.grid(row=1, column=0, sticky="w", pady=(10, 0))
+        self.stop_button.grid(row=0, column=4, sticky="e")
 
         self.append("assistant", "请直接用自然语言描述要执行的 Praat 操作。")
         self.append_hint(
@@ -1690,13 +2027,43 @@ class ChatWindow:
             widget.configure(background=canvas_color)
         self.context_line.configure(background=canvas_color, foreground=theme.color("textMuted"))
         self.composer_hint.configure(background=surface, foreground=theme.color("textMuted"))
+        self.composer_actions.configure(background=surface)
+        self.thinking_label.configure(
+            background=surface, foreground=theme.color("textMuted")
+        )
         self.entry.configure(
             background=surface,
             foreground=theme.color("text"),
             insertbackground=theme.color("text"),
             font=theme.font("body"),
         )
-        self.preset_box.configure(font=theme.font("body"))
+        style.configure(
+            "PraatPreset.TMenubutton",
+            background=surface,
+            foreground=theme.color("text"),
+            arrowcolor=theme.color("text"),
+            bordercolor=theme.color("border"),
+            lightcolor=theme.color("border"),
+            darkcolor=theme.color("border"),
+            font=theme.font("body"),
+            padding=(8, 5),
+            relief="flat",
+        )
+        style.map(
+            "PraatPreset.TMenubutton",
+            background=[("pressed", theme.color("surfaceAlt")), ("active", theme.color("surfaceAlt"))],
+            foreground=[("disabled", theme.color("textMuted"))],
+            arrowcolor=[("disabled", theme.color("textMuted"))],
+        )
+        self.preset_menu.configure(
+            background=surface,
+            foreground=theme.color("text"),
+            activebackground=theme.color("primarySoft"),
+            activeforeground=theme.color("text"),
+            disabledforeground=theme.color("textMuted"),
+            font=theme.font("body"),
+        )
+        self.thinking_box.configure(font=theme.font("body"))
         self._configure_transcript_tags(theme)
         try:
             self.status_chip.set_kind(self._status_kind())
@@ -1812,9 +2179,11 @@ class ChatWindow:
                 if qwen.knowledge_is_open(self.config.qwen)
                 else "只按工具结果回答"
             )
-            bits.append(
-                "不需要本机 llama-server；想回到本机模型就选一个预设再点「应用预设」"
-            )
+            bits.append("不需要本机 llama-server")
+            if local_preset_allowed(self.config):
+                bits.append("可从顶部选本地预设并应用")
+            else:
+                bits.append("本地预设已禁用，可在 API 配置中解除限制")
             return (
                 f"当前是 API 模式：{label} / {self.config.api.model}"
                 f"（{'，'.join(bits)}）。"
@@ -1838,19 +2207,21 @@ class ChatWindow:
         self.preset_ids = {
             self.preset_label_for(preset): preset["id"] for preset in self.presets
         }
-        labels = list(self.preset_ids)
-        # API 模式下当前模型是云端那个：把它放在下拉框第一行并选中，不然用户看到
-        # 的是本地 qwen 预设，以为接的 API 没生效（2026-09-21 用户报的）。
-        self.api_choice = api_choice_label(self.config) if api_is_active(self.config) else ""
-        if self.api_choice:
-            labels = [self.api_choice] + labels
-        self.preset_box.configure(
-            values=labels,
-            state="readonly" if labels else "disabled",
-        )
-        self.preset_button.configure(state="normal" if labels else "disabled")
+        self.api_choice = api_choice_label(self.config)
+        labels = [self.api_choice, *self.preset_ids]
+        self.preset_labels = labels
+        self.preset_menu.delete(0, "end")
+        for label in labels:
+            allowed = label == self.api_choice or local_preset_allowed(self.config)
+            self.preset_menu.add_command(
+                label=label,
+                state="normal" if allowed else "disabled",
+                command=lambda choice=label: self.select_model_choice(choice),
+            )
+        self.preset_box.configure(state="normal")
+        self.preset_button.configure(state="normal")
         current = next((preset for preset in self.presets if preset["active"]), None)
-        if self.api_choice:
+        if api_is_active(self.config) or not local_preset_allowed(self.config):
             self.preset_choice.set(self.api_choice)
         elif current is not None:
             self.preset_choice.set(self.preset_label_for(current))
@@ -1861,22 +2232,41 @@ class ChatWindow:
         self.preset_hint.set(self.preset_hint_text())
         self.preset_snack.set_kind(self._hint_kind())
 
+    def select_model_choice(self, label: str) -> None:
+        """顶部菜单选择即切换；按钮仍可用于失败后的重试。"""
+
+        if self.busy:
+            self.append_hint("正在处理上一个请求，稍后再切换模型。")
+            return
+        self.preset_choice.set(label)
+        self.apply_selected_preset()
+
     def apply_selected_preset(self, _event: object = None) -> None:
         if self.busy:
             return
-        if getattr(self, "api_choice", "") and self.preset_choice.get() == self.api_choice:
-            # 选中的就是「当前正在用的云端模型」那一行：不用重启任何东西。
+        if self.preset_choice.get() == self.api_choice:
+            if not api_is_active(self.config):
+                self.busy = True
+                self.send_button.configure(state="disabled")
+                self.preset_button.configure(state="disabled")
+                self.set_status("Praat AI  |  正在切换到云端 API…")
+                threading.Thread(target=self.activate_api_worker, daemon=True).start()
+                return
             self.append_hint(
                 f"当前已经在用云端 API 模型：{self.config.api.model}"
-                "（不需要本机 llama-server）。想回到本机模型，就在下拉框里选一个"
-                "本地预设，再点「应用预设」。"
+                "（不需要本机 llama-server）。"
             )
+            return
+        if not local_preset_allowed(self.config):
+            self.append_hint("本地模型已禁用；请先在 API 配置中解除云端锁定并取消停用本地模型服务。")
+            self.refresh_preset_widgets()
             return
         preset_id = resolve_preset_id(self.presets, self.preset_choice.get())
         if not preset_id:
             self.append_hint("预设列表已经变化，请重新选择一个预设再点「应用预设」。")
             return
         self.busy = True
+        self._set_thinking_selector_busy(True)
         self.send_button.configure(state="disabled")
         self.preset_button.configure(state="disabled")
         self.set_status("Praat AI  |  正在切换模型预设…")
@@ -1900,6 +2290,20 @@ class ChatWindow:
             self.messages.put(
                 ("assistant", f"已切换模型预设：{label}（{model}，{vision}）")
             )
+        finally:
+            self.messages.put(("progress-done", ""))
+            self.messages.put(("reload", ""))
+            self.messages.put(("done", ""))
+
+    def activate_api_worker(self) -> None:
+        try:
+            from . import control
+
+            control.activate_api(progress=self._progress_sink())
+        except (PresetError, qwen.QwenError, OSError, ValueError) as error:
+            self.messages.put(("assistant", f"切换云端 API 失败：{error}"))
+        else:
+            self.messages.put(("assistant", "已切换到云端 API。"))
         finally:
             self.messages.put(("progress-done", ""))
             self.messages.put(("reload", ""))
@@ -1935,8 +2339,7 @@ class ChatWindow:
         )
         self.api_dialog = dialog
         self.append_hint(
-            "API 配置：填服务商、地址、模型名和 API key，点「测试连接」确认后保存，"
-            "前端就会改用它（本机 llama-server 的配置会保留）。"
+            "API 配置：填写服务商、地址、模型名和 API key；锁定云端后顶部不能选本地模型。"
         )
         try:
             dialog.window.transient(self.root)
@@ -1990,12 +2393,142 @@ class ChatWindow:
 
     def append(self, role: str, text: str) -> None:
         self._insert_message(role, text)
+        if getattr(self, 'store', None) is not None:
+            self.store.append(self.session_id, 'message', {'role':role, 'text':text})
 
     def append_lines(self, tag: str, text: str) -> None:
         self._insert_message(tag, text)
 
     def append_hint(self, text: str) -> None:
+        block = self._active_process
+        if block is not None:
+            transcript = self.transcript
+            transcript.configure(state="normal")
+            # 提示可能在回答之后入队，仍插回本轮过程区；左重力防止正文进入折叠区。
+            transcript.mark_gravity(block.end_mark, "right")
+            transcript.insert(block.end_mark, f"ⓘ {text}\n", ("hint", block.body_tag))
+            transcript.mark_gravity(block.end_mark, "left")
+            transcript.configure(state="disabled")
+            transcript.see("end")
+            return
         self._insert_message("hint", text)
+
+    def _begin_process(self) -> None:
+        number = len(self._process_blocks) + 1
+        block = _ProcessBlock(
+            started_at=time.monotonic(),
+            header_tag=f"process_header_{number}",
+            body_tag=f"process_body_{number}",
+            end_mark=f"process_end_{number}",
+        )
+        self._process_blocks[block.header_tag] = block
+        self._active_process = block
+        transcript = self.transcript
+        transcript.configure(state="normal")
+        transcript.tag_configure(block.body_tag, elide=False)
+        transcript.tag_bind(block.header_tag, "<Enter>", lambda _event: self._set_cursor("hand2"))
+        transcript.tag_bind(block.header_tag, "<Leave>", lambda _event: self._set_cursor("xterm"))
+        transcript.insert("end", "正在思考和计算…  ▴\n", ("hint", block.header_tag))
+        transcript.mark_set(block.end_mark, "end-1c")
+        transcript.mark_gravity(block.end_mark, "left")
+        transcript.configure(state="disabled")
+        transcript.see("end")
+
+    def _finish_process(self, finished_at: float) -> None:
+        block = self._active_process
+        if block is None:
+            return
+        block.finished_at = finished_at
+        block.collapsed = True
+        self._active_process = None
+        self._render_process_header(block)
+        self.transcript.mark_unset(block.end_mark)
+        self.transcript.see("end")
+
+    def _render_process_header(self, block: _ProcessBlock) -> None:
+        elapsed = max(0, int(block.finished_at - block.started_at))
+        minutes, seconds = divmod(elapsed, 60)
+        arrow = "▾" if block.collapsed else "▴"
+        label = f"已完成，用时{minutes}分{seconds}秒  {arrow}"
+        transcript = self.transcript
+        start, end = transcript.tag_ranges(block.header_tag)
+        transcript.configure(state="normal")
+        # 保留换行，避免更换标题时把正文边界挪进标题里。
+        transcript.delete(start, f"{end}-1c")
+        transcript.insert(start, label, ("hint", block.header_tag))
+        transcript.tag_configure(block.body_tag, elide=block.collapsed)
+        transcript.configure(state="disabled")
+
+    def _process_block_at(self, index: str) -> _ProcessBlock | None:
+        """这一处文字属于哪个**已结束**的过程折叠区（用于右键命中）。
+
+        只认标题那一行会漏掉两种情况，用户会看到「右键没反应」：
+
+        - 标题行右侧、行尾之后的空白：那里没有文字，``@x,y`` 落在行首/行尾的换行上，
+          拿不到 header tag；
+        - 标题行上下的行距（``hint`` 的 ``spacing1/spacing3`` 是**行间**空隙，不映射到
+          任何字符），差一两行同样点不到 header tag。
+
+        所以这里除了题目所在的字符，还看该行的行尾、下一行的行首和行尾。折叠时正文被
+        elide 掉，正文那一行的字符索引正好等于标题行行尾的下一个位置（``line.end +1c``），
+        所以「点折叠区也能展开」也顺带成立，而展开状态下正文各行不会命中。
+        """
+
+        transcript = self.transcript
+        number = index.split(".")[0]
+        candidates: list[str] = [index]
+        for offset in (0, 1):
+            line = int(number) + offset
+            if line < 1:
+                continue
+            start = f"{line}.0"
+            end = f"{line}.end"
+            candidates.append(start)
+            candidates.append(end)
+        for candidate in candidates:
+            try:
+                names = transcript.tag_names(candidate)
+            except tk.TclError:
+                continue
+            for tag in names:
+                block = self._process_blocks.get(tag)
+                if block is not None and block.finished_at is not None:
+                    return block
+        return None
+
+    #: 同一次右键里重复投递的事件（``<Button-3>`` + ``<ButtonRelease-3>``）必须只算一次，
+    #: 否则两次切换互相抵消，用户看到的就是「点了没反应 / 闪一下又收起」。
+    _TOGGLE_DEBOUNCE_SEC = 0.28
+
+    def _set_process_collapsed(self, block: _ProcessBlock, collapsed: bool, *, debounce: bool) -> bool:
+        """把某个折叠区设成指定状态；``debounce=True`` 时吃掉同一秒内的重复事件。"""
+
+        now = time.monotonic()
+        if debounce and now - block.last_toggle_at < self._TOGGLE_DEBOUNCE_SEC:
+            return False
+        if collapsed == block.collapsed:
+            return False
+        block.last_toggle_at = now
+        block.collapsed = collapsed
+        self._render_process_header(block)
+        return True
+
+    def toggle_process(self, block: _ProcessBlock) -> bool:
+        """无条件切换（右键命中的正常路径，带去抖）。"""
+
+        return self._set_process_collapsed(block, not block.collapsed, debounce=True)
+
+    def _on_process_right_click(self, event) -> str | None:
+        try:
+            index = self.transcript.index(f"@{event.x},{event.y}")
+        except tk.TclError:
+            return None
+        block = self._process_block_at(index)
+        if block is None:
+            return None
+        self.toggle_process(block)
+        # 命中标题就吃掉这次事件，别让它变成文本选择的起点。
+        return "break"
 
     # ---------------------------------------------------------- 消息块渲染
 
@@ -2100,10 +2633,51 @@ class ChatWindow:
             pass
 
     def on_return(self, _event: tk.Event) -> str:
+        if ui_windows.is_composing(self.entry):
+            # Native IME confirmation is handled before Tk key bindings; don't
+            # also send the prompt or let Text insert a stray newline.
+            return "break"
         self.submit()
         return "break"
 
+    def _set_thinking_selector_busy(self, busy: bool) -> None:
+        self.thinking_box.configure(state="disabled" if busy else "readonly")
+
+    def on_thinking_level_selected(self, _event: object = None) -> str:
+        previous = api_settings.normalize_thinking_level(
+            self.config.qwen.thinking_level
+        )
+        if self.busy:
+            self.thinking_choice.set(self.thinking_choice_labels[previous])
+            return "break"
+
+        level = self.thinking_choice_values.get(self.thinking_choice.get(), "auto")
+        if level == previous:
+            return "break"
+        values = {
+            "api": {"thinking_level": level},
+            "qwen": {"thinking_level": level},
+        }
+        if level != "auto":
+            values["qwen"]["enable_thinking"] = level != "off"
+        try:
+            from . import control
+
+            control.update_config(values, config_path())
+        except Exception as error:  # noqa: BLE001 - keep config errors in the chat UI
+            self.thinking_choice.set(self.thinking_choice_labels[previous])
+            self.append_hint(f"思考强度保存失败，已恢复原选择：{error}")
+            return "break"
+
+        self.reload_config()
+        self.append_hint(
+            f"思考强度已设为「{self.thinking_choice_labels[level]}」，从下一次请求生效。"
+        )
+        return "break"
+
     def on_shift_return(self, _event: tk.Event) -> str:
+        if ui_windows.is_composing(self.entry):
+            return "break"
         self.entry.insert("insert", "\n")
         return "break"
 
@@ -2114,18 +2688,24 @@ class ChatWindow:
         if not text:
             return "break"
         self.entry.delete("1.0", "end")
+        # A typed new goal must not inherit a previously prepared continuation.
+        if self.pending_analysis is not None and text != self.pending_analysis.visible_prompt:
+            self.pending_analysis = None
         self.busy = True
         self.cancel_event.clear()
         self.send_button.configure(state="disabled")
+        self._set_thinking_selector_busy(True)
         self.stop_button.configure(state="normal")
         self.preset_button.configure(state="disabled")
         self.set_status("Praat AI  |  正在处理请求…")
         self.append("user", text)
-        threading.Thread(
+        self._begin_process()
+        self._turn_worker = threading.Thread(
             target=self.process_message,
             args=(text,),
             daemon=True,
-        ).start()
+        )
+        self._turn_worker.start()
         return "break"
 
     def cancel_turn(self) -> None:
@@ -2182,10 +2762,14 @@ class ChatWindow:
             on_progress=lambda line: self.messages.put(("hint", line)),
             environment=environment,
             cancel=self.cancel_event,
+            refresh_context=object_context,
         )
 
     def process_message(self, text: str) -> None:
         try:
+            if api_is_active(self.config):
+                self.process_cloud_message(text)
+                return
             executable = praat_executable()
             # 一次 tasklist 查清「Praat 在不在跑」和「开了几个」——以前每条指令查两次。
             process_ids = praat_process_ids(executable) if executable else None
@@ -2217,6 +2801,9 @@ class ChatWindow:
                 )
 
             outcome = self.run_user_turn(text, executable)
+            if getattr(self, 'store', None) is not None:
+                from dataclasses import asdict
+                self.store.append(self.session_id, 'local_turn', asdict(outcome))
             for note in outcome.notes:
                 self.messages.put(("hint", note))
 
@@ -2228,7 +2815,9 @@ class ChatWindow:
                 return
 
             if outcome.results:
-                body = f"{outcome.reply}\n结果：{'；'.join(outcome.results)}"
+                body = outcome.reply
+                if body != "\n".join(outcome.results):
+                    body += f"\n结果：{'；'.join(outcome.results)}"
                 self.messages.put(("assistant", body))
                 self.messages.put(("result", "结果：\n" + "\n".join(outcome.results)))
                 if outcome.failure:
@@ -2261,25 +2850,73 @@ class ChatWindow:
         except (qwen.QwenError, tools.ToolError, PresetError, OSError) as error:
             self.messages.put(("assistant", f"处理失败：{error}"))
         finally:
-            self.messages.put(("done", ""))
+            # 记录工作线程真正结束的时刻，避免 UI 队列延迟计入耗时。
+            self.messages.put(("done", str(time.monotonic())))
+
+    def _begin_stream_reply(self):
+        if getattr(self, '_streaming_reply', False): return
+        transcript = self.transcript
+        transcript.configure(state='normal')
+        transcript.mark_set('stream_reply_start', 'end-1c')
+        transcript.mark_gravity('stream_reply_start', 'left')
+        transcript.insert('end-1c', '\n助手：\n', ('assistant',))
+        # Process hints are inserted immediately before this reply. Follow
+        # those insertions so finalization removes only the streamed answer.
+        transcript.mark_gravity('stream_reply_start', 'right')
+        transcript.mark_set('stream_reply_end', 'end-1c')
+        transcript.mark_gravity('stream_reply_end', 'left')
+        transcript.configure(state='disabled')
+        self._streaming_reply = True
+
+    def _append_stream_reply(self, text):
+        if not getattr(self, '_streaming_reply', False): return
+        transcript = self.transcript
+        transcript.configure(state='normal')
+        # Let Tk advance a temporary mark across Unicode text; Tcl string
+        # lengths and Text character offsets differ for non-BMP characters.
+        transcript.mark_set('stream_reply_cursor', 'stream_reply_end')
+        transcript.mark_gravity('stream_reply_cursor', 'right')
+        transcript.insert('stream_reply_end', text, ('assistant',))
+        transcript.mark_set('stream_reply_end', 'stream_reply_cursor')
+        transcript.mark_unset('stream_reply_cursor')
+        transcript.configure(state='disabled')
+        transcript.see('stream_reply_end')
+
+    def _finish_stream_reply(self, text):
+        if getattr(self, '_streaming_reply', False):
+            transcript = self.transcript
+            transcript.configure(state='normal')
+            transcript.delete('stream_reply_start', 'stream_reply_end')
+            transcript.mark_unset('stream_reply_start', 'stream_reply_end')
+            transcript.configure(state='disabled')
+            self._streaming_reply = False
+        self.append('assistant', text)
 
     def flush_messages(self) -> None:
         try:
             while True:
                 role, text = self.messages.get_nowait()
-                if role == "done":
+                if role == 'assistant-start':
+                    self._begin_stream_reply()
+                elif role == 'assistant-delta':
+                    self._append_stream_reply(text)
+                elif role == 'assistant-final':
+                    self._finish_stream_reply(text)
+                elif role == "done":
+                    self._finish_process(float(text) if text else time.monotonic())
                     self.busy = False
                     self.cancel_event.clear()
                     self.send_button.configure(state="normal")
+                    self._set_thinking_selector_busy(False)
                     self.stop_button.configure(state="disabled")
-                    self.preset_button.configure(
-                        state="normal" if self.presets else "disabled"
-                    )
+                    self.preset_button.configure(state="normal")
                     self.set_status("Praat AI  |  " + model_status_text(self.config))
                     self.context_label.set(selected_object_label())
                     self.entry.focus_set()
                 elif role == "reload":
                     self.reload_config()
+                elif role == 'choices':
+                    self.show_analysis_choices()
                 elif role == "progress":
                     self.show_progress(text)
                 elif role == "progress-done":
@@ -2358,6 +2995,12 @@ class ChatWindow:
         if getattr(self, "_closed", False):
             return   # WM_DELETE_WINDOW 和「Praat 关了」可能同时来，别 destroy 两次
         self._closed = True
+        if getattr(self, 'cancel_event', None) is not None:
+            self.cancel_event.set()
+        if getattr(self, 'api_dialog', None) is not None:
+            self.api_dialog.close()
+        if not getattr(self, 'busy', False):
+            self.cleanup_materials()
         if getattr(self, "praat_watcher", None) is not None:
             self.praat_watcher.stopped = True
         if getattr(self, "theme_watcher", None) is not None:
@@ -2367,13 +3010,131 @@ class ChatWindow:
             pid_path.unlink()
         except FileNotFoundError:
             pass
+        worker = getattr(self, '_turn_worker', None)
+        if worker is not None and worker.is_alive():
+            self.root.withdraw()
+            self.root.after(100, self._destroy_when_idle)
+        else:
+            self.cleanup_materials()
+            self._close_cloud_runtime()
+            self.root.destroy()
+
+    def _destroy_when_idle(self):
+        worker = getattr(self, '_turn_worker', None)
+        if worker is not None and worker.is_alive():
+            self.root.after(100, self._destroy_when_idle)
+            return
+        self.cleanup_materials()
+        self._close_cloud_runtime()
         self.root.destroy()
 
-    def _on_praat_gone(self) -> None:
-        """Praat 已经退出：先说一句，再把窗口关掉。
+    def _close_cloud_runtime(self):
+        runtime = getattr(self, 'cloud_runtime', None)
+        if runtime is not None: runtime.close()
 
-        以前这个窗口会一直留着（2026-09-21 用户报的「关掉 Praat 后前端不关」）。
-        """
+    def process_cloud_message(self, text):
+        from .cloud_workflow import process_cloud
+        process_cloud(self, text)
+
+    def _continuation_fits(self, state, *, mode='', direction=''):
+        if not self.config.api.limit_tokens:
+            return True
+        # Use the same retained observations, provenance and excerpt policy as
+        # the actual report, including its instructions and output schema.
+        from .cloud_agent import minimum_continuation_tokens
+        minimum = minimum_continuation_tokens(self.config, state, mode=mode, direction=direction)
+        return minimum + self.config.api.plan_max_tokens + 256 <= self.config.api.max_context_tokens
+
+    def continue_analysis(self, direction, state=None, materials=None, mode=''):
+        state = state or self.analysis_state
+        if self.busy or state is None or not state.can_continue:
+            return
+        if not api_is_active(self.config):
+            self.append_hint('继续分析需要当前云端 API；请先选择 API 模型。')
+            return
+        if not self._continuation_fits(state, mode=mode, direction=direction):
+            self.append_hint('当前上下文无法容纳最小报告和回复预留，请先增加上下文或降低回复上限。原证据已保留。')
+            return
+        self.pending_analysis = state.continued(direction, mode=mode)
+        state.can_continue = False
+        if materials is not None:
+            self.current_materials = materials
+        self.entry.delete('1.0', 'end')
+        self.entry.insert('1.0', self.pending_analysis.visible_prompt)
+        self.submit()
+
+    def show_analysis_choices(self):
+        if self.analysis_state is None or not self.analysis_state.can_continue:
+            return
+        options = [('继续解释已有证据', '补充解释已有证据及原目标未完成部分', 'L2'),
+                   ('继续一般讨论', '补充一般原理、参照和练习方法，明确具体录音证据的缺口', 'L4')]
+        material = self.current_materials
+        audio_available = bool(material and not material.closed and (material.audio_path is not None
+                               or (not material.snapshot_attempted and any(row.selected and row.class_name in tools.SOUND_CLASSES
+                                   for row in tools.parse_object_context(self.analysis_state.context_text)))))
+        if self.config.api.audio_input_enabled and audio_available:
+            options.append(('分析原目标音频', '直接分析原始音频片段并结合已有测量', 'L3'))
+        fitting = [(label, direction, mode) for label, direction, mode in options
+                   if self._continuation_fits(self.analysis_state, mode=mode, direction=direction)]
+        if len(fitting) < len(options):
+            self.append_hint('部分继续方式需要增加上下文或降低回复上限，避免新轮次立即收尾。')
+        options = fitting
+        self.transcript.configure(state='normal')
+        self.transcript.insert('end', '\n可继续： ')
+        original_state, original_materials = self.analysis_state, self.current_materials
+        for label, direction, mode in options:
+            tag = 'continue-' + uuid.uuid4().hex
+            self._choice_tags.append(tag)
+            self.transcript.insert('end', label + '  ', (tag,))
+            self.transcript.tag_configure(tag, foreground=self.theme.color('primary'), underline=True)
+            self.transcript.tag_bind(tag, '<Button-1>', lambda _event, d=direction, s=original_state, m=original_materials, level=mode:self.continue_analysis(d, s, m, level))
+        tag = 'audio-settings-' + uuid.uuid4().hex
+        self.transcript.insert('end', '设置或验证音频能力  ', (tag,))
+        self.transcript.tag_configure(tag, foreground=self.theme.color('primary'), underline=True)
+        self.transcript.tag_bind(tag, '<Button-1>', lambda _event:self.open_api_settings())
+        self.transcript.insert('end', '\n')
+        self.transcript.configure(state='disabled')
+        self.transcript.see('end')
+
+    def view_records(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title('对话与分析记录（仅查看）')
+        dialog.geometry('880x600')
+        sessions = self.store.sessions()
+        chooser = ttk.Combobox(dialog, state='readonly', values=[date[:19] + '  ' + identity[:8] for identity, date in sessions])
+        chooser.pack(fill='x', padx=10, pady=8)
+        body = tk.Text(dialog, wrap='word', font=self.theme.font('body'))
+        body.pack(fill='both', expand=True, padx=10, pady=10)
+        def show(_event=None):
+            if chooser.current() < 0:
+                return
+            rows = self.store.records(sessions[chooser.current()][0])
+            body.configure(state='normal')
+            body.delete('1.0', 'end')
+            for row in rows:
+                body.insert('end', row['created'] + '  ' + row['kind'] + '\n'
+                            + json.dumps(row['payload'], ensure_ascii=False, indent=2) + '\n\n')
+            body.configure(state='disabled')
+        chooser.bind('<<ComboboxSelected>>', show)
+        if sessions:
+            chooser.current(0)
+            show()
+
+    def cleanup_materials(self):
+        for materials in getattr(self, 'task_materials', []):
+            if not materials.closed:
+                try:
+                    materials.close()
+                except OSError as error:
+                    if getattr(self, 'store', None) is not None:
+                        self.store.append(self.session_id, 'cleanup', {'reason':str(error)})
+
+    def _on_praat_gone(self) -> None:
+        """Praat 退出后保留云端证据分析；本地模式继续沿用跟随退出行为。"""
+
+        if api_is_active(self.config):
+            self.append_hint('Praat 已经关闭，相关操作暂停；云端仍可解释已有证据、分析已取得的片段或继续一般讨论。')
+            return
 
         try:
             self.append_hint("Praat 已经关闭，前端窗口跟着退出。")
@@ -2392,6 +3153,11 @@ class ChatWindow:
         self.config_stamp = self._config_stamp()
         self.presets = list_presets(self.config)
         self.refresh_preset_widgets()
+        self.thinking_choice.set(
+            self.thinking_choice_labels[
+                api_settings.normalize_thinking_level(self.config.qwen.thinking_level)
+            ]
+        )
         self.set_status("Praat AI  |  " + model_status_text(self.config))
 
     @staticmethod

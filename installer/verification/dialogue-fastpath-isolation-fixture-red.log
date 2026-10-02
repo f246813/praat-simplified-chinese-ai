@@ -1,0 +1,187 @@
+PRAAT_PROGRESS	0.1000	API 模式：按设置停掉本机模型服务（省显存）…
+PRAAT_PROGRESS	0.1000	API 模式：按设置停掉本机模型服务（省显存）…
+PRAAT_PROGRESS	0.6000	等待端口释放…
+PRAAT_PROGRESS	1.0000	本机模型服务已停。
+PRAAT_PROGRESS	0.1000	API 模式：设置里取消了「顺手停掉本机模型服务」，本机服务保持不动。
+PRAAT_PROGRESS	1.0000	API 模式仍在运行；本机模型服务按设置保留。
+PRAAT_PROGRESS	0.1000	正在停止模型服务…
+PRAAT_PROGRESS	1.0000	已停止。
+PRAAT_PROGRESS	0.0500	停止旧的模型服务…
+PRAAT_PROGRESS	0.1500	等待端口释放…
+PRAAT_PROGRESS	0.0500	检查显卡与运行参数…
+PRAAT_PROGRESS	0.0800	准备启动本地模型服务…
+PRAAT_PROGRESS	1.0000	模型服务已就绪。
+PRAAT_PROGRESS	0.0500	检查显卡与运行参数…
+PRAAT_PROGRESS	0.0800	准备启动本地模型服务…
+PRAAT_PROGRESS	1.0000	模型服务已就绪。
+PRAAT_PROGRESS	0.0500	停止旧的模型服务…
+PRAAT_PROGRESS	0.1500	等待端口释放…
+PRAAT_PROGRESS	0.0500	检查显卡与运行参数…
+PRAAT_PROGRESS	0.0800	准备启动本地模型服务…
+PRAAT_PROGRESS	1.0000	模型服务已就绪。
+PRAAT_PROGRESS	0.1000	当前是 API 模式，不需要本机模型服务。
+PRAAT_PROGRESS	1.0000	已就绪：deepseek-chat（云端）
+PRAAT_PROGRESS	0.1000	当前是 API 模式，不需要本机模型服务。
+PRAAT_PROGRESS	1.0000	已就绪：deepseek-chat（云端）
+PRAAT_PROGRESS	0.1000	API 模式：按设置停掉本机模型服务（省显存）…
+PRAAT_PROGRESS	0.6000	等待端口释放…
+PRAAT_PROGRESS	1.0000	本机模型服务已停。
+PRAAT_PROGRESS	0.1000	API 模式：设置里取消了「顺手停掉本机模型服务」，本机服务保持不动。
+PRAAT_PROGRESS	1.0000	API 模式仍在运行；本机模型服务按设置保留。
+PRAAT_PROGRESS	0.1000	API 模式：按设置停掉本机模型服务（省显存）…
+PRAAT_PROGRESS	0.6000	等待端口释放…
+PRAAT_PROGRESS	1.0000	本机模型服务已停。
+PRAAT_PROGRESS	0.0500	检查显卡与运行参数…
+PRAAT_PROGRESS	0.0800	准备启动本地模型服务…
+PRAAT_PROGRESS	1.0000	模型服务已就绪。
+PRAAT_PROGRESS	0.0500	检查显卡与运行参数…
+PRAAT_PROGRESS	0.0800	准备启动本地模型服务…
+PRAAT_PROGRESS	0.1000	正在停止模型服务…
+PRAAT_PROGRESS	0.6000	等待端口释放…
+PRAAT_PROGRESS	1.0000	已停止。
+PRAAT_PROGRESS	0.0500	检查显卡与运行参数…
+PRAAT_PROGRESS	0.0800	准备启动本地模型服务…
+PRAAT_PROGRESS	0.0200	切回本地模型（关闭 API 模式）…
+.......................................................................F........................................................can't invoke "event" command: application has been destroyed
+    while executing
+"event generate $w <<ThemeChanged>>"
+    (procedure "ttk::ThemeChanged" line 6)
+    invoked from within
+"ttk::ThemeChanged"
+FFFF......................................invalid command name "2268582251584flush_messages"
+    while executing
+"2268582251584flush_messages"
+    ("after" script)
+invalid command name "2268582899008focus_set"
+    while executing
+"2268582899008focus_set"
+    ("after" script)
+invalid command name "2267976673152flush_messages"
+    while executing
+"2267976673152flush_messages"
+    ("after" script)
+invalid command name "2268476330112focus_set"
+    while executing
+"2268476330112focus_set"
+    ("after" script)
+can't invoke "event" command: application has been destroyed
+    while executing
+"event generate $w <<ThemeChanged>>"
+    (procedure "ttk::ThemeChanged" line 6)
+    invoked from within
+"ttk::ThemeChanged"
+invalid command name "2268583040064flush_messages"
+    while executing
+"2268583040064flush_messages"
+    ("after" script)
+can't invoke "event" command: application has been destroyed
+    while executing
+"event generate $w <<ThemeChanged>>"
+    (procedure "ttk::ThemeChanged" line 6)
+    invoked from within
+"ttk::ThemeChanged"
+invalid command name "2268583040128focus_set"
+    while executing
+"2268583040128focus_set"
+    ("after" script)
+.invalid command name "2268476310976_restore_status_text"
+    while executing
+"2268476310976_restore_status_text"
+    ("after" script)
+.........................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................can't invoke "event" command: application has been destroyed
+    while executing
+"event generate $w <<ThemeChanged>>"
+    (procedure "ttk::ThemeChanged" line 6)
+    invoked from within
+"ttk::ThemeChanged"
+can't invoke "event" command: application has been destroyed
+    while executing
+"event generate $w <<ThemeChanged>>"
+    (procedure "ttk::ThemeChanged" line 6)
+    invoked from within
+"ttk::ThemeChanged"
+can't invoke "event" command: application has been destroyed
+    while executing
+"event generate $w <<ThemeChanged>>"
+    (procedure "ttk::ThemeChanged" line 6)
+    invoked from within
+"ttk::ThemeChanged"
+.....invalid command name "2268662435968flush_messages"
+    while executing
+"2268662435968flush_messages"
+    ("after" script)
+invalid command name "2268662443584focus_set"
+    while executing
+"2268662443584focus_set"
+    ("after" script)
+invalid command name "2268662805632flush_messages"
+    while executing
+"2268662805632flush_messages"
+    ("after" script)
+invalid command name "2268662797568focus_set"
+    while executing
+"2268662797568focus_set"
+    ("after" script)
+invalid command name "2268679859520flush_messages"
+    while executing
+"2268679859520flush_messages"
+    ("after" script)
+invalid command name "2268679859712focus_set"
+    while executing
+"2268679859712focus_set"
+    ("after" script)
+...........................................................
+======================================================================
+FAIL: test_config_path_can_be_overridden_by_the_environment (test_api_settings.ApiConfigParsingTests.test_config_path_can_be_overridden_by_the_environment)
+``PRAAT_AI_CONFIG_PATH`` 整份换配置文件。
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_api_settings.py", line 167, in test_config_path_can_be_overridden_by_the_environment
+    self.assertEqual(config_module.default_config_path(), path)
+AssertionError: Windo[42 chars]aat/verification/dialogue-__737qcx/config.json') != Windo[42 chars]aat/verification/dialogue-__737qcx/tmp4n_0wlrc/ai_config.json')
+
+======================================================================
+FAIL: test_top_menu_grays_local_items_and_keeps_cloud_entry_visible (test_api_transition.ApiTransitionTests.test_top_menu_grays_local_items_and_keeps_cloud_entry_visible) (locked=False, stopped=False)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_api_transition.py", line 167, in test_top_menu_grays_local_items_and_keeps_cloud_entry_visible
+    self.assertEqual(window.preset_choice.get(), window.api_choice)
+AssertionError: '本地测试 · local.gguf · 纯文本' != '云端 API：未配置'
+- 本地测试 · local.gguf · 纯文本
++ 云端 API：未配置
+
+
+======================================================================
+FAIL: test_top_menu_grays_local_items_and_keeps_cloud_entry_visible (test_api_transition.ApiTransitionTests.test_top_menu_grays_local_items_and_keeps_cloud_entry_visible) (locked=False, stopped=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_api_transition.py", line 166, in test_top_menu_grays_local_items_and_keeps_cloud_entry_visible
+    self.assertEqual(window.preset_menu.entrycget(1, "state"), expected)
+AssertionError: 'normal' != 'disabled'
+- normal
++ disabled
+
+
+======================================================================
+FAIL: test_top_menu_grays_local_items_and_keeps_cloud_entry_visible (test_api_transition.ApiTransitionTests.test_top_menu_grays_local_items_and_keeps_cloud_entry_visible)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_api_transition.py", line 173, in test_top_menu_grays_local_items_and_keeps_cloud_entry_visible
+    self.assertEqual(window.preset_choice.get(), window.api_choice)
+AssertionError: '本地测试 · local.gguf · 纯文本' != '云端 API：未配置'
+- 本地测试 · local.gguf · 纯文本
++ 云端 API：未配置
+
+
+======================================================================
+FAIL: test_top_menu_selection_really_switches_cloud_local_cloud (test_api_transition.ApiTransitionTests.test_top_menu_selection_really_switches_cloud_local_cloud)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\f2468\Desktop\Praat\稳定早期版\ai\tests\test_api_transition.py", line 231, in test_top_menu_selection_really_switches_cloud_local_cloud
+    self.assertEqual(load_config(path).api.enabled, expected)
+AssertionError: True != False
+
+----------------------------------------------------------------------
+Ran 786 tests in 129.678s
+
+FAILED (failures=5)
