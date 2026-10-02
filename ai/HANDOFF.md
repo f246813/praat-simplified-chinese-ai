@@ -104,6 +104,41 @@ icacls "C:\Users\f2468\Desktop\Praat\稳定早期版\Praat.exe" /setintegritylev
   **需要用户自己的 GitHub token**（本机没有凭据、没有 `gh`；脚本交互式隐藏输入）。
   重打包前的产物备份在 `backups/installer-before-repack-20261002-delivery-fix/`。
 
+### 分支推送（2026-10-02 夜，tag v7.0-zh.5 之后）
+
+用户要求「包括主页面的其他文件也一块推上去」。**`modern` 已推送**：
+`2740ae17a071` → **`84f5d3ec5fe3dfde1e1efc0d641b9e61a045c6ab`**（327 个文件 / 4.78 MiB）。
+
+- 推送**没有克隆仓库**：本机代理会把大响应截断（递归树 JSON 1.78 MB 每次短几千字节、
+  55 MB 附件只有 ~13 KB/s），所以用 Git Data API（blob → tree → commit → 更新 ref），
+  逐路径查状态。工具：`python installer/push-frontend.py`（默认 dry run，`--push` 才推，
+  需要 `GITHUB_TOKEN`）。
+- ⚠️ **原生 C++ 一律不推**（3070 个文件跳过）：线上 `modern` 的原生侧比本地快照新
+  （`PraatAiControl_addModelMenu` 被线上 `sys/praat_objectMenus.cpp` 调用、
+  `fon/SegmentAcoustic*` 分段声学分析、`MelderFile_replaceAtomically`、
+  `v_createExtraToolbarButtons`）。本地缺这些，推上去**原生树会链接不过、还会删掉上游功能**。
+  这条规则已写进推送脚本（按后缀/文件名识别原生文件）。
+- 另外跳过：会丢线上内容的文件 1 个（`docs/ai-frontend/DESIGN.zh-CN.md`）、非文本 543、
+  >8 MiB 2 个、安装验证夹具与 `ai_config.json`（后者绝不进仓库）。
+- 建树用 `base_tree = 线上树` → **不删除任何线上路径**；上传前对每个字节做密钥扫描。
+- 推送后核对：前端 7/7 与本地一致、原生 6/6 未变、线上独有 6 个文件仍在。
+- 回退：`refs/heads/modern` 指回 `2740ae17a07181f8dae3d6aa927ae18cf9ac9ad1`。
+- 注意：release tag `v7.0-zh.5` 仍指向 `2740ae17`，release 页的 "Source code" 归档是推送前的
+  源码；本次修复的源码在附件 `AIPraat-frontend-fix-20261002.zip` 里。若想让归档也是新的，
+  需要在 `84f5d3ec` 上再建一个 tag/release（**没有擅自移动已发布的 tag**）。
+
+### 本会话环境的两个坑（下次省时间）
+
+1. **大响应会被代理截断**：GitHub API 的递归树（1.7 MB）稳定短几千字节 → 用逐路径
+   `/contents/<path>` 小请求代替；PowerShell 的 `Invoke-WebRequest` 下 55 MB 附件只有
+   ~13 KB/s 且会卡死，10 个并发分块又被代理 TLS 拒（`schannel: failed to receive handshake`）。
+   上传方向反而很快（55 MB 的 release 附件几分钟就传完）。
+2. **`Start-Process` 在本机会直接报错**：环境里同时存在 `NO_PROXY`/`no_proxy`、
+   `HTTPS_PROXY`/`https_proxy` 这类大小写重复的环境变量，PowerShell 建子进程环境字典时
+   「已添加了具有相同键的项」。要用 .NET `ProcessStartInfo`（`UseShellExecute=false`）
+   或 `cmd /c start`。<br>同理，`NO_PROXY` 里的 `[::1]` 会让 `httpx2` 在构造 OpenAI 客户端时
+   抛 `Invalid port: ':1]'`（云端的假红来源）。
+
 ### 下次继续
 
 1. **Low 标签已按方案 A 处理**（只改了 `稳定早期版\Praat.exe`），但**重新构建会前功尽弃**：
