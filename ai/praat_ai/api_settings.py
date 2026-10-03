@@ -93,6 +93,7 @@ DEFAULTS: dict[str, Any] = {
     "limit_tokens": False,
     "max_context_tokens": 32768,
     "plan_max_tokens": 1500,
+    "dialogue_max_tokens": 2048,
     "local_limit_tokens": True,
     "local_max_context_tokens": 32768,
     "local_plan_max_tokens": 4096,
@@ -142,6 +143,7 @@ def settings_from_config(config: AppConfig) -> dict[str, Any]:
             "limit_tokens": bool(api.limit_tokens),
             "max_context_tokens": api.max_context_tokens,
             "plan_max_tokens": api.plan_max_tokens,
+            "dialogue_max_tokens": api.dialogue_max_tokens,
             "local_limit_tokens": bool(local.limit_tokens),
             "local_max_context_tokens": local.max_context_tokens,
             "local_plan_max_tokens": local.plan_max_tokens,
@@ -208,6 +210,7 @@ def normalize_settings(values: Mapping[str, Any]) -> tuple[dict[str, Any], list[
             values.get("max_context_tokens"), 32768, 2048, 1_000_000
         ),
         "plan_max_tokens": _as_int(values.get("plan_max_tokens"), 1500, 128, 32768),
+        "dialogue_max_tokens": _as_int(values.get("dialogue_max_tokens"), 2048, 256, 32768),
         "local_limit_tokens": bool(values.get("local_limit_tokens", True)),
         "local_max_context_tokens": _as_int(values.get("local_max_context_tokens"), 32768, 2048, 1_000_000),
         "local_plan_max_tokens": _as_int(values.get("local_plan_max_tokens"), 4096, 128, 32768),
@@ -541,14 +544,27 @@ class ApiSettingsDialog:
         self.plan_tokens = tk.StringVar(value=str(self.values["plan_max_tokens"]))
         shell, _entry = field_entry(advanced_body, self.plan_tokens, width=10)
         shell.grid(row=5, column=1, sticky="w", pady=4)
+        field_label(advanced_body, "云端对话最大回复 token").grid(row=6, column=0, sticky="w", pady=4)
+        self.dialogue_tokens = tk.StringVar(value=str(self.values["dialogue_max_tokens"]))
+        shell, _entry = field_entry(advanced_body, self.dialogue_tokens, width=10)
+        shell.grid(row=6, column=1, sticky="w", pady=4)
+        limits_note = field_label(
+            advanced_body,
+            '不勾选「对云端 API 启用限制」时，云端上下文按 131072、分析类回复按 8192 兜底；'
+            '「云端对话最大回复 token」始终生效，但不会超过「云端最大回复 token」的预算。'
+            '思考强度还会额外留出推理额度（低/中/高 = 1024/4096/8192），所以「最大回复 Token」'
+            '只管正文长度。',
+            muted=True, role='small')
+        limits_note.configure(wraplength=600, justify='left')
+        limits_note.grid(row=7, column=0, columnspan=2, sticky='w', pady=(4, 0))
         self.force_deep_thinking = tk.BooleanVar(value=self.values['force_deep_thinking'])
         ttk.Checkbutton(
             advanced_body, text='最高思考强度下，强制每次对话进行深度思考',
             variable=self.force_deep_thinking,
-        ).grid(row=6, column=0, columnspan=2, sticky='w', pady=(10, 0))
+        ).grid(row=8, column=0, columnspan=2, sticky='w', pady=(10, 0))
         note = field_label(advanced_body, '仅最高档生效；关闭时寒暄和能力介绍可快速回复，复杂分析仍使用所选强度。', muted=True, role='small')
         note.configure(wraplength=600, justify='left')
-        note.grid(row=7, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        note.grid(row=9, column=0, columnspan=2, sticky='w', pady=(4, 0))
         self.advanced.grid_remove()
 
         ui_widgets.Snackbar(
@@ -653,6 +669,7 @@ class ApiSettingsDialog:
             "limit_tokens": self.limit_tokens.get(),
             "max_context_tokens": self.context_tokens.get(),
             "plan_max_tokens": self.plan_tokens.get(),
+            "dialogue_max_tokens": self.dialogue_tokens.get(),
             "local_limit_tokens": self.local_limit_tokens.get(),
             "local_max_context_tokens": self.local_context_tokens.get(),
             "local_plan_max_tokens": self.local_plan_tokens.get(),

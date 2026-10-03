@@ -102,6 +102,24 @@ class ThinkingFieldsTests(unittest.TestCase):
         self.assertEqual(self.fields('high', 'https://fixture-gateway.invalid/v1'), {'reasoning_effort':'high'})
 
 
+class ReasoningReserveTests(unittest.TestCase):
+    """思考档位要占掉的输出额度：正文之外额外留，不让 reasoning 顶掉正文。"""
+
+    def reserve(self, level):
+        fn=getattr(cloud_agent,'reasoning_reserve',None)
+        self.assertTrue(callable(fn), 'Missing reasoning output reservation')
+        return fn(level)
+
+    def test_levels_reserve_provider_bounded_or_conservative_output(self):
+        self.assertEqual(self.reserve('off'), 0)
+        self.assertEqual(self.reserve('low'), 1024)
+        self.assertEqual(self.reserve('medium'), 4096)
+        self.assertEqual(self.reserve('high'), 8192)
+        self.assertEqual(self.reserve('HIGH'), 8192)
+        # auto = 交给服务端默认（可能开思考）：按中档预留，宁可多留也别让正文被挤掉。
+        self.assertEqual(self.reserve('auto'), 4096)
+
+
 class ForceSettingTests(unittest.TestCase):
     def test_advanced_checkbox_is_collected_and_survives_reopening(self):
         from praat_ai import ui_windows

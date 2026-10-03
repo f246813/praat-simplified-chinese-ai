@@ -6,6 +6,7 @@ evidence, side-effect safety, branch exits and budgets shared across all modes.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import re
 import threading
@@ -25,7 +26,7 @@ from pydantic_graph import GraphBuilder, StepContext
 from . import model_capabilities as caps, qwen, tools
 from . import delivery
 from .escape_policy import AnalysisState, BranchExit, Evidence
-from .dialogue_policy import dialogue_kind, effective_thinking_level, direct_measurement
+from .dialogue_policy import dialogue_kind, effective_thinking_level, direct_measurement, reasoning_reserve
 from .cloud_runtime import CloudRuntime
 
 
@@ -59,8 +60,52 @@ FAILURE_INSTRUCTIONS = (
     'audio_input=false 只表示本轮没把音频交给模型：Praat 测量不依赖它，不能据此说无法测量。')
 
 
+#: 关掉思考的寒暄/能力介绍走单次快速回复：只给正文这么多（推理另算）。
+DIALOGUE_FAST_TOKENS = 512
+#: 正文额度的地板：续写或降档重试时再低就没有意义了。
+OUTPUT_REQUEST_FLOOR = 256
+
+
+class OutputTruncated(BranchExit):
+    """模型输出被长度上限截断（``finish_reason='length'``）。
+
+    消息文本与旧行为一致（``模型输出未完整结束：length``），分析路径照旧按失败收尾；
+    流式对话路径会先尝试续写，最差也要把已经流出的正文留下来。
+    """
+
+    def __init__(self, reason: str = 'length'):
+        super().__init__('模型输出未完整结束：' + reason)
+        self.finish_reason = reason
+
+
 #: 报告上下文里最多带几条失败/未执行的尝试。
 _MAX_BLOCKED_ATTEMPTS = 6
+
+
+class OutputLimitRejected(Exception):
+    """服务端拒绝了这次请求的输出上限（``max_tokens``）。
+
+    正文/推理额度已经按服务端能接受的范围降过；由 :meth:`CloudSession.drive` 重新开一轮
+    重试一次——pydantic-ai 的 ``node.stream()`` 一个节点只能进一次，原地重试会直接断言失败。
+    """
+
+
+def output_limit_from_error(detail: str):
+    """从服务端的报错里读出它允许的输出上限（读不出来返回 None）。
+
+    各家的说法不一样（``supports at most 8192`` / ``Range of max_tokens should be [1, 8192]``
+    / ``the max value is 8192``），所以按常见句式依次试；读不出来时调用方只能保守降额。
+    """
+
+    for pattern in (r'at most\s+(\d{2,7})', r'\[\s*\d+\s*,\s*(\d{2,7})\s*\]',
+                    r'max(?:imum)?[^0-9]{0,24}?(\d{2,7})', r'最多\s*(\d{2,7})',
+                    r'上限[^0-9]{0,12}(\d{2,7})'):
+        match = re.search(pattern, detail or '', re.I)
+        if match:
+            value = int(match.group(1))
+            if OUTPUT_REQUEST_FLOOR <= value <= 1_000_000:
+                return value
+    return None
 
 
 def blocked_attempts(state, limit: int = _MAX_BLOCKED_ATTEMPTS):
@@ -102,7 +147,7 @@ def report_instructions(config, state) -> str:
     return text
 
 
-def report_context(state, *, audio=False):
+def report_context(state, *, audio=False, preserve=False):
     rows = tools.parse_object_context(state.context_text)
     target = [{'id':row.id, 'class':row.class_name, 'name':row.name, 'selection':row.selection}
               for row in rows if row.selected][:20] if rows else state.context_text[:1200]
@@ -119,13 +164,24 @@ def report_context(state, *, audio=False):
     if state.audio_observations and state.previous_report == state.audio_observations[-1]['analysis']:
         context['previous_report'] = ''
         context['previous_report_source'] = 'audio_observations 最后一项（同一报告，避免重复）'
+    if preserve:
+        context.update(
+            target_material=[{'id':row.id, 'class':row.class_name, 'name':row.name, 'selection':row.selection}
+                             for row in rows if row.selected] if rows else state.context_text,
+            previous_report=state.previous_report,
+            previous_coverage=copy.deepcopy(state.previous_coverage),
+            audio_observations=copy.deepcopy(state.audio_observations),
+            visible_dialogue=copy.deepcopy(state.dialogue_context))
+        return context
     for evidence in context['evidence']:
         evidence['rows'] = [row[:1200] for row in evidence['rows'][:40]]
     return context
 
 
-def compact_report_context(context, token_limit):
-    """Excerpt copies for a fresh request; never truncate the retained records."""
+def compact_report_context(context, token_limit, *, preserve=False):
+    """Legacy excerpts only; modern requests retain context and fail preflight if full."""
+    if preserve:
+        return json.dumps(context, ensure_ascii=False)
     while qwen.estimate_tokens(json.dumps(context, ensure_ascii=False)) > token_limit:
         if len(context['evidence']) > 1:
             context['evidence'].pop()
@@ -157,7 +213,8 @@ def compact_report_context(context, token_limit):
 def minimum_continuation_tokens(config, state, *, mode='', direction=''):
     candidate = state.continued(direction or '解释已有证据及剩余缺口', mode=mode)
     candidate.mode = candidate.continuation_mode
-    prompt = compact_report_context(report_context(candidate), 400)
+    modern = config.api.token_mode is not None
+    prompt = compact_report_context(report_context(candidate, preserve=modern), 400, preserve=modern)
     instruction = report_instructions(config, candidate)
     schema = json.dumps(AnalysisReport.model_json_schema(), ensure_ascii=False)
     return qwen.estimate_tokens(prompt + instruction + schema) + 256
@@ -197,7 +254,7 @@ class CloudSession:
                  materials, prepare_audio, correct_audio):
         self.started = time.monotonic()
         self.config, self.state = config, state
-        if not config.api.limit_tokens:
+        if not config.api.limit_tokens and config.api.token_mode is None:
             # Finite application memory bound, independent of disabled user limits.
             state.budget.context_tokens = 131072
         self.execute_action, self.cancel = execute_action, cancel
@@ -208,7 +265,12 @@ class CloudSession:
         self.materials, self.prepare_audio, self.correct_audio = materials, prepare_audio, correct_audio
         self.usage = RunUsage()
         self.limits = UsageLimits(request_limit=state.budget.request_limit, tool_calls_limit=state.budget.tool_limit)
-        self.settings = {'max_tokens':state.budget.response_tokens, 'temperature':config.api.plan_temperature,
+        # 云端把 reasoning token 计入 max_tokens（实测概念解释那一轮 2048 里 1435 是推理）：
+        # 先按思考档位把推理额度写进预算，再定输出上限，正文才不会被推理挤掉。
+        state.budget.reasoning_tokens = reasoning_reserve(config.api.thinking_level)
+        self.body_target = max(OUTPUT_REQUEST_FLOOR, state.budget.response_tokens)
+        self.output_cap = self.body_target + state.budget.reasoning_tokens
+        self.settings = {'max_tokens':self.output_cap, 'temperature':config.api.plan_temperature,
                          'parallel_tool_calls':False}
         if config.api.base_url.rstrip('/') == 'https://generativelanguage.googleapis.com/v1beta/openai' and config.api.model.startswith('gemini-3'):
             self.settings.pop('temperature', None)
@@ -217,8 +279,21 @@ class CloudSession:
         self.executed = {e.signature:e for e in state.evidence}
         self.tool_running = False
         self.received_text = False
+        #: 服务端拒过这次的输出上限时记下降额后的额度（续写不再把它抬回去）。
+        self.rejected_output_cap = None
         state.metrics = {'first_text_seconds':None, 'request_timings':[],
                          'effective_thinking_level':config.api.thinking_level}
+        if config.api.token_mode is not None:
+            self.state.budget.reasoning_tokens = 0  # New reply cap is total output, not body + hidden reserve.
+            self.body_target = min(self.body_target, config.api.plan_max_tokens)
+            self.output_cap = config.api.plan_max_tokens
+            self.apply_modern_settings()
+
+    def apply_modern_settings(self, input_cost=0):
+        from .modern_budget import model_settings
+        for key in ('max_tokens', 'temperature', 'top_p', 'presence_penalty'):
+            self.settings.pop(key, None)
+        self.settings.update(model_settings(self.config.api, sdk=True, input_cost=input_cost))
 
     def set_thinking(self, level):
         from .config import QwenConfig
@@ -233,9 +308,66 @@ class CloudSession:
             else:
                 self.settings.setdefault('extra_body', {})[key] = value
 
+    def body_tokens(self) -> int:
+        """这次请求要交付的可见正文额度（推理不算在里面）。"""
+
+        return self.body_target
+
+    def set_body_tokens(self, limit: int) -> None:
+        """把正文额度钉在 ``min(预算, limit)`` 上；推理预留照旧加回去。
+
+        用户设置与预算只决定**正文**；推理额度由思考档位决定、始终额外留出，
+        否则 reasoning 会把正文挤到长度上限（``模型输出未完整结束：length``）。
+        """
+        if self.config.api.token_mode is not None:
+            self.state.budget.reasoning_tokens = 0
+            self.body_target = min(int(limit), self.config.api.plan_max_tokens)
+            self.output_cap = self.config.api.plan_max_tokens
+            self.apply_modern_settings()
+            return
+
+        self.body_target = max(OUTPUT_REQUEST_FLOOR, min(self.state.budget.response_tokens, int(limit)))
+        self.output_cap = self.body_target + self.state.budget.reasoning_tokens
+        self.settings['max_tokens'] = self.output_cap
+
+    def fit_output(self, input_cost: int) -> None:
+        """上下文装不下「正文＋推理」时先缩推理，别把整轮判成失败。
+
+        正文是必须交付的（放不下时由调用方的上下文校验明确报错）；推理只是让回答
+        不撞长度上限的手段，所以剩余空间不够时按剩余空间给。
+        """
+        if self.config.api.token_mode is not None:
+            self.apply_modern_settings(input_cost)
+            return
+        room = self.state.budget.context_tokens - input_cost - 256
+        self.settings['max_tokens'] = min(self.output_cap, max(self.body_target, room))
+
     def check(self):
         if self.cancel.is_set():
             raise asyncio.CancelledError()
+
+    def reject_output_limit(self, detail):
+        """服务端拒绝了这次的输出上限：先让掉推理额度，再考虑正文。
+
+        旧版本只发正文（正文 ≤ 旧上限时服务端是接受的），所以降额必须让「正文 + 推理」
+        一起落到服务端能接受的范围：只砍正文时推理额度还在，总数可能永远超上限，重试必然
+        再失败（典型：high=8192 预留 + 正文 2048 = 10240 > 百炼/DeepSeek 的 8192）。
+        """
+
+        limit = output_limit_from_error(detail)
+        if limit:
+            # 服务端点名了上限：正文优先，推理只吃上限内的剩余空间。
+            self.state.budget.reasoning_tokens = max(0, min(self.state.budget.reasoning_tokens,
+                                                            limit - self.body_target))
+            self.set_body_tokens(min(self.body_target, limit))
+        elif self.state.budget.reasoning_tokens:
+            # 没说上限：先让掉这次新增的推理额度，正文维持原样（= 旧版本的请求形状）。
+            self.state.budget.reasoning_tokens = 0
+            self.set_body_tokens(self.body_target)
+        else:
+            # 推理本来就是 0（旧版本也会被拒）：只能砍正文，地板 OUTPUT_REQUEST_FLOOR。
+            self.set_body_tokens(max(OUTPUT_REQUEST_FLOOR, self.body_target // 2))
+        self.rejected_output_cap = self.settings.get('max_tokens')
 
     def event(self, mode, reason):
         self.state.event(mode, reason)
@@ -266,6 +398,21 @@ class CloudSession:
         return cost
 
     async def drive(self, agent, prompt, *, tool_phase=False, on_text=None):
+        """跑一次模型对话；服务端拒绝输出上限时整轮重启一次（同一个 agent、新的 run）。
+
+        pydantic-ai 的 ``node.stream()`` 一个节点只能进一次，所以不能在原地 ``continue``
+        重试：必须重新开 run，否则会变成 ``stream() should only be called once per node``。
+        """
+
+        try:
+            return await self._drive(agent, prompt, tool_phase=tool_phase, on_text=on_text,
+                                     allow_output_retry=True)
+        except OutputLimitRejected:
+            self.progress('服务端不接受这个输出上限，按正文 ' + str(self.body_tokens()) + ' token 重试一次')
+            return await self._drive(agent, prompt, tool_phase=tool_phase, on_text=on_text,
+                                     allow_output_retry=False)
+
+    async def _drive(self, agent, prompt, *, tool_phase=False, on_text=None, allow_output_retry=True):
         async with agent.iter(prompt, model_settings=self.settings, usage=self.usage,
                               usage_limits=self.limits) as run:
             node = run.next_node
@@ -279,8 +426,12 @@ class CloudSession:
                     if tool_phase and (self.state.budget.should_close(input_cost)
                                        or self.state.requests >= self.state.budget.request_limit - 3):
                         raise BranchExit('上下文余量或跨阶段请求预算达到收尾阈值')
-                    if not tool_phase and input_cost + self.state.budget.response_tokens + 256 > self.state.budget.context_tokens:
+                    if not tool_phase and input_cost + self.body_target + 256 > self.state.budget.context_tokens:
+                        # 正文必须放得下，否则这轮没有可交付的内容；推理额度按剩余空间缩
+                        # （见 fit_output），所以这里只校验正文，口径与 reserve 里的
+                        # 「正文 + 推理」一致：先保正文，再尽量给推理留位置。
                         raise BranchExit('最小报告上下文与输出预留无法容纳，请缩小范围或增加上下文设置')
+                    self.fit_output(input_cost)
                     if self.state.requests >= self.state.budget.request_limit:
                         raise BranchExit('本轮模型请求总预算已用完')
                     if tool_phase:
@@ -322,7 +473,12 @@ class CloudSession:
                             self.record_responses(run.all_messages())
                             if on_text is not None:
                                 response = next((m for m in reversed(run.all_messages()) if isinstance(m, ModelResponse)), None)
-                                if response is not None and response.finish_reason in {'length', 'content_filter', 'error'}:
+                                if response is not None and response.finish_reason == 'length':
+                                    # 只有带流式回调的对话路径走这里：截断可以续写。
+                                    # 分析路径（execute/report 不传 on_text）本来就不进这个判断，
+                                    # 它的截断由 SDK 的输出校验/上游报错体现——本次改动不动它。
+                                    raise OutputTruncated(response.finish_reason)
+                                if response is not None and response.finish_reason in {'content_filter', 'error'}:
                                     raise BranchExit('模型输出未完整结束：' + response.finish_reason)
                             timing['status'] = 'complete'
                             break
@@ -333,6 +489,15 @@ class CloudSession:
                             temporary = status in {408, 429, 500, 502, 503, 504} or isinstance(error, (TimeoutError, ConnectionError)) or 'timeout' in type(error).__name__.lower()
                             timing.update(status='failed', http_status=status, error_type=type(error).__name__)
                             from .dialogue_policy import force_high
+                            output_rejected = status == 400 and any(
+                                field in detail for field in ('max_tokens', 'max_completion_tokens', 'output length'))
+                            # 工具阶段的 400 不重启：重开会把 planning_rounds 又加一次，用户明确
+                            # 要求的对象操作随后会被「未授权追加对象操作」挡掉。对话/报告阶段没有
+                            # 这个副作用，才允许重开一轮。
+                            if (allow_output_retry and not tool_phase and attempt == 0 and output_rejected
+                                    and not self.received_text and self.settings.get('max_tokens', 0) > OUTPUT_REQUEST_FLOOR):
+                                self.reject_output_limit(detail)
+                                raise OutputLimitRejected() from error
                             if (attempt == 0 and not self.received_text and self.state.requests < self.state.budget.request_limit
                                     and (temporary or (rejected and 'openai_reasoning_effort' in self.settings
                                                        and not force_high(self.config.api)))):
@@ -523,8 +688,9 @@ class CloudSession:
                                                    and not state.evidence and state.reason) else 'L2'
             self.event(mode, '重建独立分析上下文，解释原始目标及证据缺口')
         state.can_continue = bool(state.reason or self.config.api.limit_tokens)
-        context = report_context(state, audio=audio is not None)
-        prompt = compact_report_context(context, max(400, state.budget.context_tokens - state.budget.reserve - 1800))
+        modern = self.config.api.token_mode is not None
+        context = report_context(state, audio=audio is not None, preserve=modern)
+        prompt = compact_report_context(context, max(400, state.budget.context_tokens - state.budget.reserve - 1800), preserve=modern)
         instruction = report_instructions(self.config, state)
         agent = Agent(self.model, system_prompt=instruction, output_type=PromptedOutput(AnalysisReport),
                       retries={'tools':0, 'output':1}, name='independent_analysis')
@@ -589,10 +755,14 @@ class CloudSession:
         self.settings.pop('parallel_tool_calls', None)
         self.set_thinking(level)
         self.state.metrics['effective_thinking_level'] = level
+        # 思考档位换了，推理预留跟着换（设置只管正文，推理额度永远额外留出）。
+        self.state.budget.reasoning_tokens = reasoning_reserve(level)
         if kind == 'conversation' and level == 'off':
-            self.settings['max_tokens'] = min(self.state.budget.response_tokens, 512)
-        elif kind == 'concept':
-            self.settings['max_tokens'] = min(self.state.budget.response_tokens, 2048)
+            self.set_body_tokens(DIALOGUE_FAST_TOKENS)
+        else:
+            # 寒暄/概念解释的正文上限来自设置（api.dialogue_max_tokens），同时仍被
+            # 「云端最大回复 token」预算压着；这里不再有写死的 2048。
+            self.set_body_tokens(self.config.api.dialogue_max_tokens)
         instruction = qwen.identity_instructions(self.config.qwen)
         instruction += '\n自然回答用户，按问题需要控制长度。寒暄和能力介绍请简短。不能声称已执行测量或听过录音。'
         if kind == 'concept': instruction += '\n' + qwen.analysis_instructions(self.config.qwen)
@@ -601,9 +771,53 @@ class CloudSession:
         prompt += self.state.goal
         self.event('chat', '普通对话直接回复' if kind == 'conversation' else '概念解释直接回复')
         agent = Agent(self.model, system_prompt=instruction, output_type=str, retries=0, name='direct_dialogue')
-        self.state.report = await self.drive(agent, prompt, on_text=on_text)
+        collected: list[str] = []
+
+        def sink(delta):
+            collected.append(delta)
+            on_text(delta)
+
+        try:
+            self.state.report = await self.drive(agent, prompt, on_text=sink)
+        except OutputTruncated as truncated:
+            self.state.report = await self.recover_truncated(agent, collected, truncated, sink)
         self.state.coverage = []
-        self.state.status, self.state.can_continue = 'complete', False
+        if self.state.status == 'running':
+            # 截断恢复路径已经定过状态（partial），不要在这里改回 complete。
+            self.state.status, self.state.can_continue = 'complete', False
+
+    def finish_truncated(self, partial, error):
+        """截断又没续写完：保留已经流出的正文，并说清楚截断和能做什么。"""
+
+        self.state.status, self.state.can_continue = 'partial', False
+        self.state.reason = caps.safe_error(error, self.config.api.api_key)
+        if not partial:
+            return '本次回复未完成：' + self.state.reason
+        return partial + ('\n\n（本次回复未完成：输出达到长度上限，以上是已经写完的部分。'
+                          '可提高「云端对话最大回复 token」「云端最大回复 token」或降低思考档位后重问一次。）')
+
+    async def recover_truncated(self, agent, collected, truncated, on_text):
+        """``length`` 截断的恢复：先按正文满额续写一次，最差也保住已流出的正文。"""
+
+        partial = ''.join(collected)
+        if not partial:
+            raise truncated        # 一个字都没流出来：沿用原来的失败路径
+        if self.state.requests >= self.state.budget.request_limit:
+            return self.finish_truncated(partial, truncated)
+        self.state.event('chat', '输出被长度上限截断，自动续写一次')
+        self.progress('输出被长度上限截断，自动续写一次')
+        if self.rejected_output_cap is None:
+            # 没被服务端拒过上限：正文给满，尽量一次写完。
+            self.set_body_tokens(self.state.budget.response_tokens)
+        # 被拒过就沿用当前（已经被接受的）额度，别把刚降下来的又抬回去。
+        prompt = ('上一次回复因为长度上限被截断。请从中断处接着把剩下的内容写完：'
+                  '不要重复已经写过的句子，也不要重新开头。\n已写内容（结尾部分）：\n' + partial[-1200:])
+        try:
+            answer = await self.drive(agent, prompt, on_text=on_text)
+        except Exception as error:      # 续写失败或又被截断：保住累计文本，交代清楚
+            return self.finish_truncated(''.join(collected), error)
+        continuation = ''.join(collected)[len(partial):]
+        return partial + (continuation or answer)
 
     def finish_metrics(self):
         self.state.metrics.update(total_seconds=time.monotonic()-self.started, requests=self.state.requests,

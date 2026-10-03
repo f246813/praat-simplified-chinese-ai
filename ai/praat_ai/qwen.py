@@ -21,6 +21,15 @@ class TruncatedResponseError(QwenError):
     """The token limit ended generation before a complete answer/action."""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # Never forward a model request/Authorization to another URL.
+
+
+def _open_no_redirect(request, *, timeout):
+    return urllib.request.build_opener(_NoRedirect()).open(request, timeout=timeout)
+
+
 #: 规划接口的取值（见 :func:`planner_mode`）。
 TOOLS_MODE = "tools"
 JSON_MODE = "json"
@@ -759,6 +768,15 @@ class QwenClient:
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         """发一次 ``/chat/completions``，返回解析后的 JSON。"""
+        if self.config.token_mode is not None:
+            from .modern_budget import model_settings
+            completion_field = 'max_completion_tokens' in payload
+            for key in ('max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'presence_penalty'):
+                payload.pop(key, None)
+            payload.update(model_settings(self.config, input_cost=estimate_tokens(
+                json.dumps(payload.get('messages', []), ensure_ascii=False))))
+            if completion_field and 'max_tokens' in payload:
+                payload['max_completion_tokens'] = payload.pop('max_tokens')
 
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
@@ -767,7 +785,8 @@ class QwenClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(
+            opener = _open_no_redirect if self.config.token_mode is not None else urllib.request.urlopen
+            with opener(
                 request,
                 timeout=self.config.request_timeout_sec,
             ) as response:
@@ -1054,7 +1073,7 @@ tool 只能是工具清单中的名称或 custom_script；自定义脚本放 arg
                 "content": system_prompt + "\n\n" + context_message,
             },
         ]
-        for item in (history if not self.config.limit_tokens else history[-8:]):
+        for item in (history if self.config.token_mode is not None or not self.config.limit_tokens else history[-8:]):
             role = item.get("role", "")
             content = item.get("content", "")
             if role in {"user", "assistant"} and content:

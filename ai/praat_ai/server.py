@@ -16,10 +16,10 @@ class QwenServerError(RuntimeError):
     pass
 
 
-def endpoint_available(base_url: str, timeout: float = 2.0) -> bool:
+def endpoint_available(base_url: str, timeout: float = 2.0, *, opener=None) -> bool:
     request = urllib.request.Request(f"{base_url.rstrip('/')}/models")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with (opener or urllib.request.urlopen)(request, timeout=timeout) as response:
             return 200 <= response.status < 300
     except (OSError, urllib.error.URLError):
         return False
@@ -113,10 +113,11 @@ def _model_ids_from_payload(payload: object) -> list[str]:
 def _fetch_models_payload(
     base_url: str,
     timeout: float = 2.0,
+    *, opener=None,
 ) -> object | None:
     request = urllib.request.Request(f"{base_url.rstrip('/')}/models")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with (opener or urllib.request.urlopen)(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except (OSError, urllib.error.URLError, ValueError, UnicodeDecodeError):
         return None
@@ -174,10 +175,12 @@ def server_model_state(
     base_url: str,
     model_path: str | Path,
     timeout: float = 2.0,
+    *, opener=None,
 ) -> bool | None:
     """True/False when the server reports its models; None when that cannot be read."""
 
-    ids = running_models(base_url, timeout=timeout)
+    ids = (_model_ids_from_payload(_fetch_models_payload(base_url, timeout, opener=opener))
+           if opener is not None else running_models(base_url, timeout=timeout))
     if not ids:
         return None
     return any(model_name_matches(item, model_path) for item in ids)
@@ -200,6 +203,10 @@ class QwenServerManager:
         self.log_handle = None
         self.vision_active = False
         self.last_warning = ""
+        self._probe_options = {}
+        if config.qwen.token_mode is not None:
+            from .qwen import _open_no_redirect
+            self._probe_options['opener'] = _open_no_redirect
 
     def ensure_started(self) -> bool:
         # 先花 0.25 秒看一眼 base_url 的端口：端口没开就不可能在跑「同一个模型」，
@@ -210,11 +217,12 @@ class QwenServerManager:
             state = server_model_state(
                 self.config.qwen.base_url,
                 self.config.server.model_path,
+                **self._probe_options,
             )
             if state is True:
                 self._report(0.95, "模型服务已经在跑，直接用。")
                 return False   # 已经在跑同一个模型
-            if state is None and endpoint_available(self.config.qwen.base_url):
+            if state is None and endpoint_available(self.config.qwen.base_url, **self._probe_options):
                 return False   # 服务在跑但读不到模型列表：保持原行为，不擅自重启
             if state is False:
                 raise QwenServerError(
@@ -377,7 +385,7 @@ class QwenServerManager:
             # 等满 2 秒超时，循环就变成 2.5 秒才报一次进度（进度条一顿一顿的）。
             if _endpoint_port_is_open(self.config.qwen.base_url):
                 # 端口开了：用短超时问一句，能答上就算就绪（模型已经在监听了）。
-                if endpoint_available(self.config.qwen.base_url, timeout=0.8):
+                if endpoint_available(self.config.qwen.base_url, timeout=0.8, **self._probe_options):
                     self._report(0.95, "模型服务已就绪。")
                     return
             time.sleep(0.25)

@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from praat_ai import chat, qwen, tools
+from praat_ai.escape_policy import Budget
 
 
 def context_tsv(count: int) -> str:
@@ -51,6 +52,23 @@ class BudgetTests(unittest.TestCase):
         )
         self.assertLess(big, small)
         self.assertGreater(big, 0)
+
+class BudgetReserveTests(unittest.TestCase):
+    """正文 + 推理才是这次请求真正的输出上限：预算与预留都按这个口径。"""
+
+    def budget(self, *, reasoning=0):
+        return Budget(context_tokens=32768, response_tokens=1500, reasoning_tokens=reasoning)
+
+    def test_output_tokens_and_reserve_count_the_reasoning_allowance(self):
+        plain, thinking = self.budget(), self.budget(reasoning=8192)
+        self.assertEqual(plain.output_tokens, 1500)
+        self.assertEqual(thinking.output_tokens, 1500 + 8192)
+        self.assertEqual(thinking.reserve - plain.reserve, 8192)
+
+    def test_reasoning_allowance_closes_the_tool_budget_earlier(self):
+        plain, thinking = self.budget(), self.budget(reasoning=8192)
+        self.assertFalse(plain.should_close(25000))
+        self.assertTrue(thinking.should_close(25000))
 
     def test_budget_never_goes_negative(self) -> None:
         budget = qwen.history_budget(

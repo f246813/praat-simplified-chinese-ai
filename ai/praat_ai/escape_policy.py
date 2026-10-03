@@ -14,13 +14,24 @@ class BranchExit(RuntimeError):
 @dataclass
 class Budget:
     context_tokens: int = 32768
+    #: 可见正文的额度（不含推理）。云端对话还会被 ``api.dialogue_max_tokens`` 再压一次。
     response_tokens: int = 1500
     request_limit: int = 12
     tool_limit: int = 20
+    #: 思考档位要占掉的输出额度：云端把 reasoning token 计入 ``max_tokens``，
+    #: 所以「正文额度 + 推理预留」才是这次请求真正的输出上限
+    #: （见 :func:`praat_ai.dialogue_policy.reasoning_reserve`）。
+    reasoning_tokens: int = 0
+
+    @property
+    def output_tokens(self) -> int:
+        """这次请求真正的 ``max_tokens``：正文额度 + 推理预留。"""
+
+        return self.response_tokens + self.reasoning_tokens
 
     @property
     def reserve(self) -> int:
-        return self.response_tokens + max(512, min(2048, self.context_tokens // 10)) + 512
+        return self.output_tokens + max(512, min(2048, self.context_tokens // 10)) + 512
 
     def should_close(self, input_tokens: int) -> bool:
         return self.context_tokens - input_tokens < self.reserve

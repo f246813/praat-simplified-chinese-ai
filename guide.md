@@ -1306,6 +1306,65 @@ control.ensure_local_service(config, config_path, progress=...)
 端口必须空掉；② false 时切 API 端口仍在、模型没变；③ 取消 API 后自动起服务，
 随后发一条真消息不再 10061；③′ 切本地预设同样会自动起服务）。
 
+#### 8.15.8 云端输出上限要真的生效，`length` 截断要能恢复（2026-10-03）
+
+用户问「为什么报 模型输出未完整结束：length」。查下来不是限额组件坏了，而是三处口径
+不一致把它架空了，最后正文被推理挤到长度上限（实例：`什么是HNR`，`output_tokens=2048`
+正好等于上限、`reasoning_tokens=1435`、`finish_reason=length`）：
+
+1. **不勾选「对云端 API 启用限制」时，两个云端数值不生效**：`cloud_workflow.py:93` 把
+   `plan_max_tokens` 换成 8192，`cloud_agent.py` 把上下文换成 131072——这是有意的兜底，
+   但界面上没有任何提示。
+2. **对话类回复另有一层写死的上限**：`cloud_agent.dialogue()` 原来对概念解释用
+   `min(预算, 2048)`，寒暄+关思考用 `min(预算, 512)`。因为是 `min`，**设置只能往下压、
+   抬不过 2048**，用户填的「云端最大回复 token」根本管不到这条通道。
+3. **正文预留没算 reasoning**：`escape_policy.Budget.reserve` 与 `cloud_agent.py` 的上下文
+   校验只按正文预留，而云端把 `reasoning_tokens` 计入 `max_tokens`，于是校验通过、
+   输出照样被截断。
+
+现在的口径（改的就是上面三条）：
+
+- **对话正文上限来自设置**：`api.dialogue_max_tokens`（界面「云端对话最大回复 token」，
+  默认 2048 = 原来的硬编码值，范围 **256–32768**，与 `cloud_agent.OUTPUT_REQUEST_FLOOR`
+  对齐）。实际正文 = `min(云端最大回复 token 预算, dialogue_max_tokens)`——所以它**不会**
+  超过「云端最大回复 token」（或未勾选限制时的 8192 兜底）；寒暄+关思考仍走 512 的快速档
+  （`DIALOGUE_FAST_TOKENS`）。
+- **推理额度额外留出**：`dialogue_policy.reasoning_reserve()` 按思考档位给
+  `off/auto/low/medium/high = 0/4096/1024/4096/8192`，`max_tokens = 正文 + 推理`；
+  `Budget.output_tokens` 与 `Budget.reserve`（工具轮的收尾阈值、报告上下文裁剪）都按
+  「正文 + 推理」算，`cloud_agent` 的上下文校验同样按这个口径。
+- **上下文装不下时先缩推理**：`CloudSession.fit_output()` 把这次请求的上限钉在
+  `min(正文+推理, 剩余空间)`，正文是必须交付的（放不下才报「最小报告上下文与输出预留
+  无法容纳」）。否则小上下文用户会从「截断」直接变成「整轮失败」。
+- **服务端拒绝这个上限时整轮重启一次**：`OutputLimitRejected` + `drive()` 重启。
+  降额顺序是**推理先让位**（`reject_output_limit`）：报错里点名上限（`supports at most
+  8192` / `[1, 8192]` / `max value is 8192`，见 `output_limit_from_error`）就按上限给
+  正文优先、推理吃剩余；读不出数字就先让掉推理额度、正文维持原样（= 旧版本的请求形状）；
+  推理本来就是 0 才砍正文（地板 256）。**只砍正文是不够的**：high 档预留 8192、正文
+  2048 = 10240，超过百炼/DeepSeek 的 8192，砍完正文仍然超上限，重试必然再失败。
+  工具阶段（`tool_phase`）不做这个重启：重开会让 `planning_rounds` 多加一次，用户明确
+  要求的对象操作随后会被「未授权追加对象操作」挡掉。注意 pydantic-ai 的 `node.stream()`
+  **一个节点只能进一次**，原来那种在 `for attempt` 里 `continue` 的重试在流式路径上会直接
+  断言失败（`stream() should only be called once per node`），所以必须是重新开 run。
+- **`length` 可恢复**：流式对话第一次被截断时自动续写一次（带上已写内容的结尾部分；没被
+  服务端拒过上限时正文给满，拒过就沿用已被接受的额度，别把刚降下来的又抬回去），续写又被
+  截断就**保留已经流出的正文**并追加「本次回复未完成：输出达到长度上限…」；一个字都没流
+  出来才沿用原来的失败路径。
+- **分析路径（`execute`/`report` 不传 `on_text`）本来就不进 `length` 判断**，它的截断一直
+  由 SDK 的输出校验/上游报错体现（`finish_reason` 判断外面套着 `if on_text is not None`，
+  改动前也是这样）。所以本次改动**不动**分析路径的行为，别把它写成「仍报 `模型输出未完整
+  结束：length`」。
+- 界面上「云端最大回复 token / 云端上下文 token」下面加了说明：不勾选限制时的兜底
+  （131072 / 8192）、对话上限始终生效但受回复预算压着、思考档位额外留推理额度。
+
+回归：`ai/tests/test_dialogue_stream.py::DialogueOutputLimitTests`（设置驱动正文上限、
+预算压着、512 快速档、上下文不够时先缩推理）、`test_dialogue_protocol.py`
+（续写一次并合并、续写又截断要保留正文、请求预算用完不续写、输出上限被拒要降额重启、
+服务端点名上限时推理额度也要落回上限内、读不出上限就先让掉推理额度）、
+`test_dialogue_fastpath.py::ReasoningReserveTests`（档位映射）、
+`test_token_budget.py::BudgetReserveTests`（`output_tokens`/`reserve` 计入推理）、
+`test_api_settings.py`（新设置往返与范围收敛到 256）。
+
 ### 8.16 界面：对齐 TW-Elements 的设计语言（2026-09-22）
 
 [TW-Elements](https://github.com/mdbootstrap/TW-Elements)（Tailwind + MDB，

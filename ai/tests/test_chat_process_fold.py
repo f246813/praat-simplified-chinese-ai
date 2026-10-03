@@ -9,6 +9,10 @@ from praat_ai import chat
 
 class ProcessFoldTests(unittest.TestCase):
     def setUp(self) -> None:
+        # A GUI fixture must not probe a real model endpoint from user configuration.
+        probe = patch.object(chat, 'running_model_info', return_value={})
+        probe.start()
+        self.addCleanup(probe.stop)
         try:
             self.window = chat.ChatWindow()
         except tk.TclError as error:

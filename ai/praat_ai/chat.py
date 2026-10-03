@@ -941,6 +941,12 @@ class _NativePlanner:
 
     def fit_messages(self, *, with_tools: bool = True) -> None:
         """云端逐轮核算预算，保留所有 tool_call_id 配对；完整结果仍留在界面与文件。"""
+        if self.client.config.token_mode is not None:
+            schema_cost = qwen.estimate_tokens(json.dumps(tools.tool_schemas(), ensure_ascii=False)) if with_tools else 0
+            reserve = self.client.config.plan_max_tokens if self.client.config.token_mode != 'provider' else 512
+            if qwen.estimate_tokens(json.dumps(self.messages, ensure_ascii=False)) + schema_cost + reserve >= self.client.config.max_context_tokens:
+                raise qwen.QwenError('本轮工具上下文超过真实窗口；保留证据并停止，未静默裁剪历史')
+            return
         if self.client.config.provider != "api" or not self.client.config.limit_tokens:
             return
         schema_cost = qwen.estimate_tokens(json.dumps(tools.tool_schemas(), ensure_ascii=False)) if with_tools else 0
@@ -1204,7 +1210,7 @@ def run_turn(
     instructions = (
         qwen.planner_instructions(client.config) if use_native else tools.catalog_text()
     )
-    if client.config.limit_tokens:
+    if client.config.limit_tokens and client.config.token_mode is None:
         budget = qwen.history_budget(
             client.config.max_context_tokens,
             instructions=instructions,
@@ -3173,4 +3179,6 @@ class ChatWindow:
 
 
 def main() -> int:
-    return ChatWindow().run()
+    from .service_lock import service_transition_lock
+    with service_transition_lock(runtime_dir() / 'frontend.lock', timeout=1):
+        return ChatWindow().run()

@@ -4,3 +4,5 @@ praat-parselmouth>=0.4.7; python_version < "3.13"
 pydantic-ai-slim[openai]==2.52.0
 pydantic-graph==2.52.0
 jsonschema==4.26.0
+pywebview==6.2.1
+pythonnet==3.2.0; sys_platform == "win32"

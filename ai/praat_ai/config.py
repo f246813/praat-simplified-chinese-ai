@@ -37,6 +37,8 @@ class QwenConfig:
     top_p: float = 0.8
     presence_penalty: float = 1.5
     audio_input_enabled: bool = False
+    # None keeps the legacy frontend request semantics unchanged.
+    token_mode: str | None = None
 
     def __post_init__(self) -> None:
         if self.limit_tokens is None:
@@ -63,6 +65,11 @@ class ApiConfig:
     limit_tokens: bool = False
     max_context_tokens: int = 32768
     plan_max_tokens: int = 1500
+    #: 对话类回复（寒暄/概念解释）的正文上限：分析报告之外的第二道闸，因为对话不需要
+    #: 报告那么长。默认 2048 = 原来的硬编码值；调大调小都从这里生效
+    #: （分析类回复只看 ``plan_max_tokens``）。推理额度不计在内（见
+    #: :func:`praat_ai.dialogue_policy.reasoning_reserve`）。
+    dialogue_max_tokens: int = 2048
     plan_temperature: float = 0.1
     vision_when_requested: bool = False
     #: 思考档位（见 :class:`QwenConfig.thinking_level`）。云端大模型默认给「中」，
@@ -86,6 +93,9 @@ class ApiConfig:
     audio_verified_at: str = ""
     audio_corrected_at: str = ""
     audio_test_result: dict[str, Any] = field(default_factory=dict)
+    token_mode: str | None = None
+    top_p: float | None = None
+    presence_penalty: float | None = None
 
 
 @dataclass(slots=True)
@@ -310,7 +320,12 @@ def apply_api_to_qwen(config: AppConfig) -> None:
     config.qwen.max_context_tokens = int(api.max_context_tokens)
     config.qwen.plan_max_tokens = int(api.plan_max_tokens)
     config.qwen.limit_tokens = bool(api.limit_tokens)
-    config.qwen.plan_temperature = float(api.plan_temperature)
+    config.qwen.plan_temperature = (None if api.token_mode is not None and api.plan_temperature is None
+                                    else float(api.plan_temperature))
+    config.qwen.token_mode = api.token_mode
+    if api.token_mode is not None:
+        config.qwen.top_p = api.top_p
+        config.qwen.presence_penalty = api.presence_penalty
     config.qwen.vision_when_requested = bool(api.vision_when_requested)
     config.qwen.audio_input_enabled = bool(api.audio_input_enabled)
     # 云端模型的思考档位走 reasoning_effort（见 qwen.thinking_request_fields），

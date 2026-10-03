@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Publish a GitHub release (notes + one asset) for the AI Praat frontend.
+    Publish a GitHub release (notes + installer) for the AI Praat frontend.
 
 .DESCRIPTION
     Creates a NEW release (and its tag) on the public mirror and attaches the files
-    listed in -Assets (default: the rebuilt installer plus the frontend source fix
-    bundle). It never touches existing releases or their assets: if a release with
-    the same tag already exists the script stops unless -AssetOnly is given.
+    listed in -Assets (default: the rebuilt installer). It never touches existing
+    releases or their assets: if a release with the same tag already exists the
+    script stops unless -AssetOnly is given.
 
     The script is deliberately ASCII-only so Windows PowerShell 5.1 cannot mangle
     it by reading UTF-8 as ANSI; the Chinese release notes come from the notes
@@ -25,7 +25,7 @@
 [CmdletBinding()]
 param(
     [string]$Repo = 'f246813/praat-simplified-chinese-ai',
-    [string]$Tag = 'v7.0-zh.5',
+    [string]$Tag = 'v7.0-zh.6',
     [string]$TargetCommitish = 'modern',
     [string]$Notes = '',
     [string[]]$Assets = @(),
@@ -62,11 +62,10 @@ function Invoke-GitHub {
 }
 
 $root = Split-Path -Parent $PSScriptRoot           # repository root (contains docs\, ai\)
-if (-not $Notes) { $Notes = Join-Path $root 'docs\2026-10-02-release-notes-v7.0-zh.5.md' }
+if (-not $Notes) { $Notes = Join-Path $root 'docs\2026-10-04-release-notes-v7.0-zh.6.md' }
 if (-not $Assets -or $Assets.Count -eq 0) {
     $Assets = @(
-        (Join-Path $root 'AIPraat-install.exe'),
-        (Join-Path $root 'AIPraat-frontend-fix-20261002.zip')
+        (Join-Path $root 'AIPraat-install.exe')
     )
 }
 

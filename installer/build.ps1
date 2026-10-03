@@ -43,23 +43,39 @@ foreach ($relative in @('praat_ai','plugin','tools')) {
         $files[$name] = $_.FullName
     }
 }
+$frontendDist = Join-Path $aiRoot 'frontend\dist'
+if (-not (Test-Path -LiteralPath (Join-Path $frontendDist 'index.html'))) { throw 'Modern frontend production assets are missing; build ai/frontend first.' }
+Get-ChildItem -LiteralPath $frontendDist -Recurse -File | ForEach-Object {
+    $name = $_.FullName.Substring($projectRoot.Length+1).Replace('\','/')
+    $files[$name] = $_.FullName
+}
 $template = '{"qwen":{"base_url":"http://127.0.0.1:8000/v1","model":"local-model","api_key":"EMPTY","enable_thinking":false,"limit_tokens":true,"max_context_tokens":32768,"plan_max_tokens":4096},"api":{"enabled":false,"locked":false,"limit_tokens":false,"api_key":""},"server":{"llama_server":"","model_path":"","mmproj_path":"","host":"127.0.0.1","port":8000,"n_gpu_layers":-1,"threads":8,"parallel":1,"auto_start":false,"presets":[],"active_preset":"","mmproj_by_model":{}},"alignment":{"backend":"auto","mfa":{"enabled":false},"wav2vec2":{"enabled":false}}}'
 $templateFile = Join-Path $buildRoot 'ai_config.example.json'
 [IO.File]::WriteAllText($templateFile,$template,[Text.UTF8Encoding]::new($false))
 $files['ai/ai_config.example.json'] = $templateFile
 foreach ($name in $files.Keys) {
-    if ($name -match '(^|/)(ai_config\.json|runtime|logs|tests|__pycache__)(/|$)' -or $name -match '\.pyc$') {
+    $testPath = $name -match '(^|/)tests(/|$)' -and $name -notmatch '^ai/frontend/dist/pi-desktop-source/rebuild/tests(/|$)'
+    if ($name -match '(^|/)(ai_config\.json|runtime|logs|__pycache__)(/|$)' -or $name -match '\.pyc$' -or $testPath) {
         throw "Forbidden development file in payload: $name"
     }
 }
+function Get-Sha256([string]$Path) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try { return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $algorithm.Dispose() }
+}
 $hashes = [ordered]@{}
-foreach ($name in $files.Keys) { $hashes[$name] = (Get-FileHash -LiteralPath $files[$name] -Algorithm SHA256).Hash.ToLowerInvariant() }
-$manifest = Join-Path $buildRoot 'payload-manifest.json'
-[IO.File]::WriteAllText($manifest,($hashes | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
-$files['payload-manifest.json'] = $manifest
+$manifest = [ordered]@{}
+foreach ($name in $files.Keys) {
+    $hashes[$name] = Get-Sha256 -Path $files[$name]
+    $manifest[$name] = $hashes[$name]
+}
+$manifestPath = Join-Path $buildRoot 'payload-manifest.json'
 Add-Type -AssemblyName System.IO.Compression
+[IO.File]::WriteAllText($manifestPath,($manifest | ConvertTo-Json -Depth 4),[Text.UTF8Encoding]::new($false))
 $zipPath = Join-Path $buildRoot 'payload.zip'
-$stream = [IO.FileStream]::new($zipPath,[IO.FileMode]::Create,[IO.FileAccess]::Write)
+$stream = [IO.File]::Open($zipPath,[IO.FileMode]::Create,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
 try {
     $archive = [IO.Compression.ZipArchive]::new($stream,[IO.Compression.ZipArchiveMode]::Create,$true)
     try {
@@ -69,6 +85,12 @@ try {
             $output = $entry.Open()
             try { $input.CopyTo($output) } finally { $input.Dispose(); $output.Dispose() }
         }
+        $entry = $archive.CreateEntry('payload-manifest.json',[IO.Compression.CompressionLevel]::Optimal)
+        $output = $entry.Open()
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes(($manifest | ConvertTo-Json -Depth 4))
+            $output.Write($bytes,0,$bytes.Length)
+        } finally { $output.Dispose() }
     } finally { $archive.Dispose() }
 } finally { $stream.Dispose() }
 $installer = Join-Path $projectRoot 'AIPraat-install.exe'
@@ -78,10 +100,9 @@ if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed: $LASTEXITCODE" }
 $report = [ordered]@{
     installer = $installer
     size = (Get-Item -LiteralPath $installer).Length
-    sha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+    sha256 = Get-Sha256 -Path $installer
     praat_sha256 = $hashes['Praat.exe']
     payload_files = $files.Count
     built_at = [DateTime]::UtcNow.ToString('o')
 }
 [IO.File]::WriteAllText((Join-Path $buildRoot 'build-report.json'),($report | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
-$report | ConvertTo-Json

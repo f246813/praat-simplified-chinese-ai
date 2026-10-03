@@ -631,6 +631,26 @@ class SettingsValidationTests(unittest.TestCase):
         self.assertEqual(values["local_plan_max_tokens"], 5000)
         self.assertFalse(values["local_limit_tokens"])
 
+
+    def test_dialogue_reply_limit_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = write_config(Path(raw), LOCAL_ONLY)
+            api_settings.save_settings({
+                "enabled": True, "base_url": "https://api.example.com/v1", "model": "big-model",
+                "dialogue_max_tokens": 3000,
+            }, path)
+            config = load_config(path)
+            values = api_settings.settings_from_config(config)
+        self.assertEqual(config.api.dialogue_max_tokens, 3000)
+        self.assertEqual(values["dialogue_max_tokens"], 3000)
+
+    def test_dialogue_reply_limit_is_clamped_to_a_sane_range(self) -> None:
+        clean, errors = api_settings.normalize_settings({
+            "enabled": False, "dialogue_max_tokens": 1})
+        self.assertEqual(errors, [])
+        # 与 cloud_agent.OUTPUT_REQUEST_FLOOR 对齐：再小的值实际也是 256。
+        self.assertEqual(clean["dialogue_max_tokens"], 256)
+
     def test_partial_api_save_preserves_existing_local_limits(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             payload = {**LOCAL_ONLY, "qwen": {**LOCAL_ONLY["qwen"],

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from pydantic_ai.models.function import FunctionModel
 from praat_ai import cloud_agent, cloud_workflow
+from praat_ai.dialogue_policy import reasoning_reserve
 from praat_ai.config import AppConfig, apply_api_to_qwen
 from praat_ai.conversation_store import ConversationStore
 from praat_ai.escape_policy import AnalysisState
@@ -117,6 +118,7 @@ class DialogueStreamTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+
     def test_runtime_failure_is_a_safe_report_not_an_uncaught_worker_error(self):
         class Broken:
             def run(self,*_): raise OSError('fixture secret failed')
@@ -152,6 +154,63 @@ class RuntimeTests(unittest.TestCase):
         finally: runtime.close(wait=True)
         self.assertTrue(made[-1].client.closed)
         self.assertFalse(runtime.thread.is_alive())
+
+
+class DialogueOutputLimitTests(unittest.TestCase):
+    """对话回复的正文上限来自设置，推理额度额外留出（见 reasoning_reserve）。"""
+
+    def run_dialogue(self, text, cfg=None, stream=None):
+        seen=[]
+        async def respond(messages, info):
+            seen.append(copy.deepcopy(info.model_settings))
+            yield '答案'
+        runtime=cloud_agent.CloudRuntime(model_factory=lambda _:FunctionModel(stream_function=stream or respond))
+        with tempfile.TemporaryDirectory() as directory:
+            store=ConversationStore(Path(directory)/'records.sqlite3')
+            window=SimpleNamespace(config=cfg or config(),pending_analysis=None,history=[],task_materials=[],
+                current_materials=None,analysis_state=None,store=store,session_id=store.new_session(),
+                cancel_event=threading.Event(),messages=queue.Queue(),cloud_runtime=runtime,_closed=False)
+            try:
+                cloud_workflow.process_cloud(window,text)
+                turns=[e['payload'] for e in store.records(window.session_id) if e['kind']=='turn']
+            finally:
+                runtime.close(wait=True)
+        return window.analysis_state, seen, turns
+
+    def test_concept_body_limit_comes_from_the_setting(self):
+        cfg=config(); cfg.api.dialogue_max_tokens=4000
+        state, seen, turns = self.run_dialogue('什么是HNR', cfg)
+        # 正文 4000（设置），推理按最高档额外留 8192；不再被写死的 2048 压住。
+        self.assertEqual(seen[0]['max_tokens'], 4000 + reasoning_reserve('high'))
+        self.assertEqual(state.status,'complete')
+        self.assertEqual(turns[0]['status'],'complete')
+
+    def test_concept_limit_still_respects_the_reply_budget(self):
+        cfg=config(); cfg.api.dialogue_max_tokens=4000
+        cfg.api.limit_tokens=True; cfg.api.plan_max_tokens=1500; cfg.api.max_context_tokens=32768
+        state, seen, turns = self.run_dialogue('什么是HNR', cfg)
+        # 「云端最大回复 token」更小时以预算为准；推理照旧额外留出。
+        self.assertEqual(seen[0]['max_tokens'], 1500 + reasoning_reserve('high'))
+
+    def test_setting_can_lower_below_the_old_hard_coded_cap(self):
+        cfg=config(); cfg.api.dialogue_max_tokens=400
+        state, seen, turns = self.run_dialogue('什么是HNR', cfg)
+        self.assertEqual(seen[0]['max_tokens'], 400 + reasoning_reserve('high'))
+
+    def test_fast_greeting_keeps_its_small_cap_without_reasoning(self):
+        state, seen, turns = self.run_dialogue('what can u do for me?')
+        self.assertEqual(state.metrics['effective_thinking_level'],'off')
+        self.assertEqual(seen[0]['max_tokens'], cloud_agent.DIALOGUE_FAST_TOKENS)
+
+    def test_context_that_cannot_hold_body_and_reasoning_shrinks_reasoning_first(self):
+        cfg=config(); cfg.api.dialogue_max_tokens=4000
+        cfg.api.limit_tokens=True; cfg.api.plan_max_tokens=2000; cfg.api.max_context_tokens=6000
+        state, seen, turns = self.run_dialogue('什么是HNR', cfg)
+        # 正文（2000，受预算压着）必须放得下；推理额度按剩余空间缩，不能让整轮失败。
+        self.assertEqual(state.status,'complete',state.reason)
+        self.assertLess(seen[0]['max_tokens'], 2000 + reasoning_reserve('high'))
+        self.assertGreaterEqual(seen[0]['max_tokens'], 2000)
+        self.assertEqual(turns[0]['status'],'complete')
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,0 +1,31 @@
+import {test,expect} from '@playwright/test';
+test('Pi extracted session menu: toggle, keyboard, outside, scroll, right click, pin and legacy guards',async({page})=>{
+  await page.goto('/?demo=1');await page.getByRole('button',{name:'展开会话侧栏'}).click();
+  const trigger=page.getByRole('button',{name:'会话操作 新的分析',exact:true}); const menu=page.getByRole('menu');
+  await trigger.click(); await expect(menu).toBeVisible();await expect(page.getByRole('menuitem',{name:'重命名',exact:true})).toBeFocused();
+  await page.keyboard.press('ArrowDown');await expect(page.getByRole('menuitem',{name:'置顶',exact:true})).toBeFocused();
+  await page.keyboard.press('End');await expect(page.getByRole('menuitem',{name:'删除',exact:true})).toBeFocused();
+  await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(trigger).toBeFocused();
+  await trigger.click();await trigger.click();await expect(menu).toHaveCount(0);
+  await trigger.click();await page.locator('.chat-header h1').click();await expect(menu).toHaveCount(0);
+  await trigger.click();await page.locator('.session-list').dispatchEvent('scroll');await expect(menu).toHaveCount(0);
+  await page.locator('[data-session-id="demo-history"]').click({button:'right'});await expect(menu).toHaveCount(1);
+  await page.getByRole('menuitem',{name:'置顶',exact:true}).click();await expect(page.locator('.session-row').first()).toHaveAttribute('data-session-id','demo-history');
+  await expect(page.locator('.session-row').first()).toHaveAttribute('data-pinned','true');await expect(page.locator('.chat-header h1')).toContainText('新的分析');
+  await page.getByRole('button',{name:'会话操作 长历史与渲染夹具',exact:true}).click();await page.getByRole('menuitem',{name:'取消置顶',exact:true}).click();await expect(page.locator('[data-session-id="demo-history"]')).toHaveAttribute('data-pinned','false');
+  await page.getByRole('button',{name:'会话操作 演示旧记录（只读）',exact:true}).click();for(const item of ['重命名','置顶','删除'])await expect(page.getByRole('menuitem',{name:item,exact:true})).toBeDisabled();
+});
+test('running session cannot delete but may pin; narrow viewport and exact 6px scrollbar',async({page})=>{
+  await page.goto('/?demo=1');await page.getByRole('textbox',{name:'消息输入'}).fill('后台夹具');await page.getByRole('button',{name:'发送消息'}).click();
+  await page.getByRole('button',{name:'展开会话侧栏'}).click();await page.getByRole('button',{name:'会话操作 新的分析',exact:true}).click();
+  await expect(page.getByRole('menuitem',{name:'删除',exact:true})).toBeDisabled();await expect(page.getByRole('menuitem',{name:'置顶',exact:true})).toBeEnabled();
+  await page.getByRole('menuitem',{name:'置顶',exact:true}).click();await expect(page.locator('[data-session-id="demo-1"]')).toHaveAttribute('data-pinned','true');
+  await page.getByRole('button',{name:'取消当前任务'}).click();await page.setViewportSize({width:390,height:700});
+  await page.locator('[data-session-id="demo-history"]').click({button:'right',position:{x:225,y:45}});
+  const box=await page.getByRole('menu').boundingBox();expect(box!.x).toBeGreaterThanOrEqual(8);expect(box!.x+box!.width).toBeLessThanOrEqual(382);expect(box!.y+box!.height).toBeLessThanOrEqual(692);
+  await page.keyboard.press('Escape');await page.locator('[data-session-id="demo-history"] .session-select').click();
+  const transcript=page.locator('.transcript');expect(await transcript.evaluate(el=>getComputedStyle(el,'::-webkit-scrollbar').width)).toBe('6px');
+  expect(await transcript.evaluate(el=>getComputedStyle(el).scrollbarWidth)).toBe('auto');
+  await transcript.evaluate(el=>el.dispatchEvent(new Event('scroll')));await expect(transcript).toHaveAttribute('data-scrolling','');
+  await page.waitForTimeout(400);await expect(transcript).not.toHaveAttribute('data-scrolling','');
+});
