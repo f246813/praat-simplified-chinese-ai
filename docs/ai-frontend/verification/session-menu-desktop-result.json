@@ -1,0 +1,16 @@
+{
+  "checks": [
+    "left-click-menu-host-pin-order-and-original-dialogue-view-preserved",
+    "pin-survives-store-reopen-and-production-page-reload-not-OS-process-restart",
+    "unpin-and-rename-use-host-delete-requires-confirmation-cancel-preserves-record",
+    "6px-production-scrollbar-reveal-and-no-config-task-model-or-Praat-operation"
+  ],
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedData": true,
+  "realModelRequest": false,
+  "realPraat": false,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "scrollbar": "6px",
+  "passed": true
+}

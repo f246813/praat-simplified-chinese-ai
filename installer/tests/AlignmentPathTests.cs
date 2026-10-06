@@ -27,11 +27,21 @@ static class AlignmentPathTests
     static void CheckFields(Form form,string[] names){Assert(!form.Controls.OfType<TabControl>().Any()&&!Descendants(form).OfType<TabControl>().Any(),"添加了标签页");int previous=-1;foreach(string name in names){var field=form.Controls.Find(name,true);Assert(field.Length==1&&field[0] is TextBox,"缺少路径输入框 "+name);Assert(field[0].Top>previous,"字段不是依次纵向排列");previous=field[0].Top;var browse=form.Controls.Find("Browse"+name,true);Assert(browse.Length==1&&browse[0] is OutlineButton&&browse[0].Text=="浏览…","浏览按钮样式不一致");}}
     static IEnumerable<Control> Descendants(Control parent){foreach(Control c in parent.Controls){yield return c;foreach(var child in Descendants(c))yield return child;}}
     [STAThread]static int Main(string[] args){python=args[0];root=Path.Combine(Path.GetTempPath(),"AIPraat alignment 中文 "+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);wav=Path.Combine(root,"wav 模型");Directory.CreateDirectory(wav);exe=Path.Combine(root,"mfa.exe");acoustic=Path.Combine(root,"声学.zip");dictionary=Path.Combine(root,"发音.dict");foreach(var file in new[]{exe,acoustic,dictionary})File.WriteAllText(file,"fixture");Application.EnableVisualStyles();
-        Case("both_forms_append_same_vertical_path_fields_and_browse_buttons",()=>{
-            using(var form=new PathSettingsForm(Settings("ui"),"",0)){form.Show();Application.DoEvents();CheckFields(form,new[]{"PythonPath","LlamaServerPath","MmprojPath","Wav2Vec2ModelPath","MfaExecutablePath","MfaAcousticModelPath","MfaDictionaryPath"});form.Close();}
+        Case("path_form_leaves_MFA_resources_to_manager_and_installer_keeps_its_fields",()=>{
+            using(var form=new PathSettingsForm(Settings("ui"),"",0)){form.Show();Application.DoEvents();CheckFields(form,new[]{"PythonPath","LlamaServerPath","MmprojPath","Wav2Vec2ModelPath","MfaExecutablePath"});Assert(form.Controls.Find("MfaAcousticModelPath",true).Length==0&&form.Controls.Find("MfaDictionaryPath",true).Length==0,"路径配置仍包含声学模型或词典");form.Close();}
             using(var form=new WizardForm(new InstallRequest{InstallDirectory=Path.Combine(root,"install")},()=>null)){form.Show();((Button)form.Controls.Find("Next",true)[0]).PerformClick();CheckFields(form,new[]{"PythonPath","LlamaServerPath","ModelPath","MmprojPath","Wav2Vec2ModelPath","MfaExecutablePath","MfaAcousticModelPath","MfaDictionaryPath"});form.Close();}
         });
         Case("read_backfills_existing_model_ids_and_mfa_paths",()=>{var p=Read(json.Deserialize<Dictionary<string,object>>(source));Assert(Value(p,"Wav2Vec2ModelPath")=="org/model"&&Value(p,"MfaExecutablePath")=="mfa"&&Value(p,"MfaAcousticModelPath")=="english_us_arpa"&&Value(p,"MfaDictionaryPath")=="","回填有误");});
+        Case("hidden_MFA_resources_preserve_changes_from_manager_when_path_form_saves",()=>{
+            var settings=Settings("hidden-resources");var field=typeof(PathSettingsForm).GetField("alignmentFields",BindingFlags.NonPublic|BindingFlags.Instance);AlignmentPaths paths;
+            using(var form=new PathSettingsForm(settings,"",0)){paths=((AlignmentPathFields)field.GetValue(form)).Read();}
+            string path=Path.Combine(root,"hidden-resources","ai","ai_config.json");var latest=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(path));var mfa=Configuration.Object(Configuration.Object(latest,"alignment"),"mfa");
+            mfa["acoustic_model"]="manager-model";mfa["acoustic_models"]=new[]{"manager-model"};mfa["dictionary_path"]=dictionary;mfa["dictionary_paths"]=new[]{dictionary};File.WriteAllText(path,json.Serialize(latest));
+            settings.SavePaths(python,"","","",paths);
+            var saved=Configuration.Object(Configuration.Object(json.Deserialize<Dictionary<string,object>>(File.ReadAllText(path)),"alignment"),"mfa");
+            Assert((string)saved["acoustic_model"]=="manager-model"&&(string)saved["dictionary_path"]==dictionary,"路径保存覆盖了管理窗口选择");
+            Assert(saved.ContainsKey("acoustic_models")&&saved.ContainsKey("dictionary_paths"),"资源列表被清除");
+        });
         Case("optional_paths_validate_local_files_keep_existing_named_models_and_allow_empty",()=>{
             var valid=Paths(wav,exe,acoustic,dictionary);var method=PathsType().GetMethod("ValidationError");Assert(method.Invoke(valid,null)==null,"已有本地路径被拒绝");Assert(method.Invoke(Paths("","","",""),null)==null,"可选空路径被拒绝");Assert(method.Invoke(Paths("org/model","mfa","english_us_arpa",""),null)==null,"现有模型名称被拒绝");Assert(method.Invoke(Paths(Path.Combine(root,"missing"),"","",""),null)!=null,"无效模型目录被接受");Assert(method.Invoke(Paths("",exe,acoustic,Path.Combine(root,"missing.dict")),null)!=null,"无效词典被接受");
         });

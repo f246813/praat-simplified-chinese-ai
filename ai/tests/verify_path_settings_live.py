@@ -123,10 +123,10 @@ def main():
                     assert i>0 and any(x in labels[i-1][0] for x in ("添加模型路径","Add model path")),labels
         passed("path_menu_immediately_below_add_model")
         press(editor[0],path_command);dialog=wait(path_window,"path dialog with invalid Python")
-        inputs=edits(dialog[0]);assert len(inputs)==7,len(inputs)
+        inputs=edits(dialog[0]);assert len(inputs)==5,len(inputs)
         assert text(inputs[0])=="missing-python" and not user32.IsWindowEnabled(button(dialog[0],"保存")),[text(x) for x in inputs]
         assert process.poll() is None
-        passed("dialog_opens_without_usable_python_with_seven_path_fields")
+        passed("dialog_opens_without_usable_python_with_five_path_fields")
         before=config.read_bytes();click(button(dialog[0],"取消"));wait(lambda:not path_window(),"cancel")
         assert config.read_bytes()==before;passed("cancel_leaves_configuration_unchanged")
         press(editor[0],path_command);dialog=wait(path_window,"reopened path dialog");inputs=edits(dialog[0])

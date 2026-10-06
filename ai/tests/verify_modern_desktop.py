@@ -99,6 +99,13 @@ def main():
                 assert js('Object.keys(window.pywebview.api)') == ['rpc']
                 assert 'fixture-key-never-returned' not in js('document.body.innerText')
                 passed('real-WebView2-single-restricted-RPC-React-startup')
+                wait("document.querySelector('.chat-header h1')?.textContent==='新会话'")
+                initial_sessions = application.store.sessions()
+                opened = next(s for s in initial_sessions if s['id'] not in {first['id'], second['id']} and not s['id'].startswith('legacy:'))
+                assert application.store.get(opened['id'])['messages'] == []
+                assert js("document.querySelectorAll('.message').length") == 0
+                assert js("document.querySelector('[role=textbox][aria-label=消息输入]').textContent") == ''
+                passed('opening-selects-blank-new-session-and-preserves-history')
                 click('展开会话侧栏'); session('会话A')
                 wait("!!document.querySelector('.katex') && !!document.querySelector('.hljs') && !!document.querySelector('.diagram svg')")
                 passed('offline-Markdown-code-KaTeX-Mermaid')
@@ -117,9 +124,20 @@ def main():
                 passed('cancellation-isolated-and-delivery-facts-preserved')
                 click('打开设置')
                 wait("!!document.querySelector('[aria-label=设置分类]')")
+                assert js('document.querySelector(".settings-main h1").textContent') == '会话与存储'
+                js('[...document.querySelectorAll(".settings-nav button")].find(e=>e.textContent.trim()==="模型").click()')
+                wait("!!document.querySelector('[aria-label=\"API Key\"]')")
                 assert js("document.querySelector('[aria-label=\"API Key\"]').value") == ''
                 assert js("document.querySelectorAll('.test-result').length") == 2
                 passed('settings-dashboard-and-credential-redaction')
+                js('[...document.querySelectorAll(".settings-nav button")].find(e=>e.textContent.trim()==="会话与存储").click()')
+                session_count = len(application.store.sessions())
+                js('[...document.querySelectorAll("button")].find(e=>e.textContent.trim()==="刷新宿主记录").click()')
+                wait("document.body.innerText.includes('会话与任务状态已刷新')")
+                assert len(application.store.sessions()) == session_count
+                js('[...document.querySelectorAll("button")].find(e=>e.textContent.trim()==="返回聊天").click()')
+                wait("document.querySelector('.chat-header h1')?.textContent==='会话B'")
+                passed('refresh-keeps-current-session-without-creating-another')
                 # Swap only the test facade's private service, then reload the actual desktop.
                 application.close()
                 executor = MockExecutor()
@@ -134,6 +152,10 @@ def main():
                 js('setTimeout(() => location.reload(), 50); true')
                 wait(f'performance.timeOrigin !== {previous_origin}')
                 wait("!!document.querySelector('[aria-label=展开会话侧栏]')")
+                wait("document.querySelector('.chat-header h1')?.textContent==='新会话'")
+                assert js("document.querySelectorAll('.message').length") == 0
+                assert len(application.store.sessions()) == len(initial_sessions) + 1
+                passed('reopening-selects-another-blank-session')
                 click('展开会话侧栏'); session('会话A')
                 wait("document.body.innerText.includes('MOCK 完成：任务A')")
                 assert not executor.calls

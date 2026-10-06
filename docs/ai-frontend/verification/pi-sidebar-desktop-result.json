@@ -1,0 +1,55 @@
+{
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedData": true,
+  "checks": [
+    "70 real host sessions: 14px native lane at frame, no resize overlap",
+    "time grouping expands/collapses the host session list",
+    "hidden native test window: hover behavior covered separately by Edge regression",
+    "search grows native thumb and removes overflow for one result",
+    "sort saved through host config and restored across production page reload",
+    "isolated data only; no model calls, task creation or Praat operations"
+  ],
+  "samples": [
+    {
+      "count": 70,
+      "rightGap": 0.7999954223632812,
+      "border": 0.8,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 13,
+      "viewport": 217,
+      "content": 2197,
+      "ratio": 0.09877105143377332,
+      "horizontalOverflow": false
+    },
+    {
+      "count": 35,
+      "rightGap": 0.7999954223632812,
+      "border": 0.8,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 13,
+      "viewport": 217,
+      "content": 1084,
+      "ratio": 0.20018450184501846,
+      "horizontalOverflow": false
+    },
+    {
+      "count": 1,
+      "rightGap": 0.7999954223632812,
+      "border": 0.8,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 13,
+      "viewport": 217,
+      "content": 217,
+      "ratio": 1,
+      "horizontalOverflow": false
+    }
+  ],
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "devicePixelRatio": 1.25,
+  "hiddenWindow": true,
+  "passed": true
+}

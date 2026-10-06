@@ -11,6 +11,7 @@ from collections import deque
 from dataclasses import asdict
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .config import default_config_path
 from .modern_store import ModernStore, identity, now
@@ -43,7 +44,14 @@ class LocalResources:
                 self.users += 1
             key = (config.qwen.base_url, config.qwen.model, config.qwen.max_context_tokens,
                    config.qwen.vision_when_requested, json.dumps(asdict(config.server), sort_keys=True))
-            if config.server.auto_start:
+            endpoint = urlsplit(config.qwen.base_url)
+            configured_local = (endpoint.hostname in {'127.0.0.1', 'localhost', '::1'}
+                and endpoint.port == config.server.port
+                and bool(config.server.llama_server.strip() and config.server.model_path.strip()))
+            # A submitted local task is an explicit request to use its configured
+            # model. Legacy auto_start=False must not bypass readiness now that
+            # opening the desktop no longer eagerly starts the model service.
+            if not config.api.enabled and (config.server.auto_start or configured_local):
                 from .server import QwenServerManager
                 from .vram import detect_gpu, select_runtime_profile
                 if self.manager and key != self.key:
@@ -54,7 +62,9 @@ class LocalResources:
                     gpu = detect_gpu()
                     profile = select_runtime_profile(gpu.free_mb if gpu else None, config.qwen.vision_when_requested)
                     profile.context_tokens = config.qwen.max_context_tokens
-                    self.manager = QwenServerManager(config, profile, progress=lambda fraction, text: emit('activity', dict(
+                    launch_config = copy.deepcopy(config)
+                    launch_config.server.auto_start = True
+                    self.manager = QwenServerManager(launch_config, profile, progress=lambda fraction, text: emit('activity', dict(
                         id='local-load', type='progress', text=text, status='running')))
                     self.key = key
                 self.manager.ensure_started()
@@ -137,16 +147,19 @@ class Attachments:
 
 class ModernApplication:
     def __init__(self, root: Path, config_path: Path | None = None, legacy_path: Path | None = None,
-                 *, allow_cloud=False, executor=None):
+                 *, allow_cloud=False, configured_cloud=False, executor=None):
         self.root = Path(root)
         self.settings = SettingsService(config_path or default_config_path())
         cfg = self.settings.candidate()
-        self.store = ModernStore(self.root / 'sessions.sqlite3', legacy_path, secrets=(cfg.api.api_key, cfg.qwen.api_key))
+        self.store = ModernStore(self.root / 'sessions.sqlite3', legacy_path, secrets=(cfg.api.api_key, cfg.qwen.api_key),project_path=Path(__file__).resolve().parents[2])
         if executor is None:
             from .modern_execution import ModernExecutor
             executor = ModernExecutor(runtime_directory=self.root, config_path=self.settings.path)
         self.executor = executor
         self.allow_cloud = allow_cloud
+        # Interactive desktop requests honor the enabled API configuration.
+        # This is host policy, not an editable setting or a network probe.
+        self.configured_cloud = configured_cloud
         self.attachments = Attachments(self.root / 'attachments')
         self.local = LocalResources()
         self.guard = threading.RLock()
@@ -155,6 +168,7 @@ class ModernApplication:
         self.cursor = 0
         self.closed = False
         self.window = None
+        self.navigation_id = ''
 
     def event(self, task, kind, payload):
         with self.guard:
@@ -169,9 +183,9 @@ class ModernApplication:
         from .api_settings import PROVIDERS
         from .desktop_launch import praat_snapshot
         with self.guard:
-            return dict(sessions=self.store.sessions(), settings=self.settings.get(),
+            return dict(sessions=self.store.sessions(), sections=self.store.organization.sections(), settings=self.settings.get(),
                         tasks=[self.public_task(t) for t in self.tasks.values()], providers=list(PROVIDERS), models=budget.MODELS,
-                        host=dict(name='pywebview / WebView2', version='6.2.1', cloudAllowed=self.allow_cloud,
+                        host=dict(name='pywebview / WebView2', version='6.2.1', cloudAllowed=self.allow_cloud or self.configured_cloud,
                                   praat=praat_snapshot()))
 
     def get_session(self, sid):
@@ -228,7 +242,7 @@ class ModernApplication:
         cfg = self.settings.candidate(settings)
         if cfg.api.enabled and (not cfg.api.base_url.strip() or not cfg.api.model.strip()):
             raise ValueError('请填写云端 API 地址和模型名')
-        assert_endpoint(cfg.qwen.base_url, allow_cloud=self.allow_cloud)
+        assert_endpoint(cfg.qwen.base_url, allow_cloud=self.allow_cloud or (self.configured_cloud and cfg.api.enabled))
         raw_section = self.settings.raw().get('api' if cfg.api.enabled else 'qwen', {})
         incoming = (settings or {}).get('api' if cfg.api.enabled else 'local', {})
         return budget.prepare(cfg, explicit_window='max_context_tokens' in raw_section or 'max_context_tokens' in incoming)
@@ -241,6 +255,8 @@ class ModernApplication:
             if self.closed:
                 raise RuntimeError('桌面服务正在关闭')
             self.store.writable(sid)
+            if self.store.get(sid)['session']['archived']:
+                raise ValueError('请先恢复已归档会话再继续聊天')
             if any(t['sessionId'] == sid and t['status'] in ACTIVE for t in self.tasks.values()):
                 raise ValueError('本会话已有任务；请等待完成或取消，其他会话仍可提交')
             if sum(t['status'] in ACTIVE for t in self.tasks.values()) >= 8:
@@ -296,6 +312,7 @@ class ModernApplication:
         try:
             def execute():
                 nonlocal history
+                task_metrics = dict(session_id=sid, task_id=task['id'], context_epoch=self.store.context_epoch(sid))
                 material_input, material_bytes = text, 0
                 for attachment in attachments:
                     if attachment['mime'].startswith('text/') or attachment['mime'] == 'application/json':
@@ -304,10 +321,19 @@ class ModernApplication:
                         if material_bytes > 1024 * 1024:
                             raise ValueError('文本附件总量须不超过 1 MiB')
                         material_input += '\n用户附件 ' + attachment['name'] + ':\n' + data.decode('utf-8-sig')
-                history = budget.compact(self.store, sid, cfg, history, evidence, material_input, target, cancel=cancel, emit=emit)
-                if evidence:
+                from .dialogue_policy import dialogue_kind, direct_measurement
+                phase = 'dialogue' if not attachments and dialogue_kind(text) else 'planner'
+                runtime = self.executor.session_runtime(sid) if cfg.api.enabled and hasattr(self.executor, 'session_runtime') else None
+                # Duration fast path still makes zero model calls, including summaries.
+                if not (not attachments and direct_measurement(text)):
+                    history = budget.compact(self.store, sid, cfg, history, evidence, material_input, target,
+                                             cancel=cancel, emit=emit, phase=phase, runtime=runtime, metrics=task_metrics)
+                if evidence and not cfg.api.enabled:
                     history = [*history, dict(role='user', content='历史专业证据与投递事实（保留来源/原范围；不能当作本轮新测量，不能重放操作）：\n' + json.dumps(evidence, ensure_ascii=False))]
-                return self.executor.run(config=cfg, text=text, history=history, target=target, cancel=cancel, emit=emit, attachments=attachments)
+                extra = dict(session_id=sid, task_id=task['id'], phase_context=self.store.model_context(sid, 'dialogue'),
+                             context_epoch=self.store.context_epoch(sid), historical_evidence=evidence,
+                             task_metrics=task_metrics) if cfg.api.enabled else {}
+                return self.executor.run(config=cfg, text=text, history=history, target=target, cancel=cancel, emit=emit, attachments=attachments, **extra)
             if not cfg.api.enabled:
                 with self.local.lease(cfg, cancel, emit):
                     result = execute()
@@ -317,10 +343,16 @@ class ModernApplication:
                 result = execute()
             message['content'] = result.get('content', message['content'])
             message['status'] = result.get('status', 'complete')
+            message['formal_content'] = result.get('formal_content', message['content'])
+            message['formal'] = result.get('formal', message['status'] == 'complete')
             # UI cancellation does not rewrite the separate execution facts.
             if cancel.is_set():
                 message['status'] = 'cancelled'
-            self.store.save_evidence(sid, task['id'], {k: result[k] for k in ('evidence', 'attempts', 'target', 'metrics') if k in result})
+                message['formal'] = False
+            self.store.save_evidence(sid, task['id'], {k: result[k] for k in ('evidence', 'attempts', 'target', 'metrics', 'material_metadata') if k in result})
+            for phase, context in result.get('model_contexts', {}).items():
+                status = 'complete' if context.complete and message['formal'] and not cancel.is_set() else 'incomplete'
+                self.store.save_model_context(sid, task['id'], phase, context, status=status)
         except Exception as error:
             message['status'] = 'cancelled' if cancel.is_set() else 'failed'
             message['content'] += '\n\n' + safe_error(error, cfg.qwen.api_key)
@@ -348,9 +380,16 @@ class ModernApplication:
 
     def poll(self, after):
         with self.guard:
+            from .desktop_launch import model_settings_request
+            navigation = model_settings_request(self.navigation_id)
+            if navigation:
+                self.navigation_id = navigation['id']
             after = int(after)
             reset = after > self.cursor or bool(self.events and after < self.events[0]['seq'] - 1)
-            return dict(events=[e for e in self.events if e['seq'] > after], cursor=self.cursor, reset=reset)
+            result = dict(events=[e for e in self.events if e['seq'] > after], cursor=self.cursor, reset=reset)
+            if navigation:
+                result['navigation'] = navigation
+            return result
 
     def test_connection(self, kind, settings):
         cfg = self.prepared(settings)
@@ -363,7 +402,11 @@ class ModernApplication:
             result = probe_audio(cfg, self.root / 'tasks')
         elif kind == 'text':
             try:
-                response = budget.text_request(cfg, [dict(role='user', content='Reply OK.')])
+                if cfg.api.enabled:
+                    response = budget.text_request(cfg, [dict(role='user', content='Reply OK.')])
+                else:
+                    with self.local.lease(cfg, threading.Event(), lambda *args: None):
+                        response = budget.text_request(cfg, [dict(role='user', content='Reply OK.')])
                 result = dict(status='verified' if response.strip() else 'unverified', reason='文字连接返回真实响应（不表示音频能力通过）', details=response)
             except Exception as error:
                 result = dict(status='failed', reason=safe_error(error, cfg.qwen.api_key))
@@ -392,13 +435,46 @@ class ModernApplication:
         params = params or {}
         if not isinstance(params, dict):
             raise ValueError('参数必须是对象')
+        if method == 'sessions.search':
+            # Read-only metadata result; same guard captures unflushed stream text.
+            from .modern_search import literal_matcher
+            term, archived = params.get('searchTerm'), params.get('archived', False)
+            matcher = literal_matcher(term, archived)
+            with self.guard:
+                result = self.store.search(term, archived)
+                if matcher and not archived:
+                    for task in self.tasks.values():
+                        if task['status'] in ACTIVE and matcher.search(self.store.clean(task['message']['content'])) and task['sessionId'] not in result['sessionIds']:
+                            result['sessionIds'].append(task['sessionId'])
+                return result
         if method == 'sessions.pin':
             # Metadata only, including errors: no task gate or config/provider access.
             with self.guard:
                 return self.store.pin(params.get('sessionId'), params.get('pinned'))
+        if method in {'sections.create','sections.update','sections.delete','sections.archive','sessions.section','sessions.archive','sessions.fork','sessions.group'}:
+            with self.guard:
+                organization=self.store.organization
+                if method=='sessions.group':
+                    ids=params.get('sessionIds');action=params.get('action')
+                    if isinstance(ids,list) and action in ('delete','archive') and any(t['sessionId'] in ids and t['status'] in ACTIVE for t in self.tasks.values()):
+                        raise ValueError('分组中有运行会话，不能删除或归档')
+                    return organization.group_action(ids,action)
+                if method=='sections.create':return organization.create(params.get('name'),params.get('appearance'))
+                if method=='sections.update':return organization.update(params.get('sectionId'),params.get('name'),params.get('appearance',...))
+                if method=='sections.delete':return organization.delete(params.get('sectionId'))
+                if method=='sessions.section':
+                    if 'sectionId' not in params:raise ValueError('缺少目标分区标识')
+                    return organization.move(params.get('sessionId'),params.get('sectionId'),params.get('beforeSessionId'))
+                if method=='sessions.fork':return organization.fork(self.get_session(params.get('sessionId')))
+                if method=='sections.archive' and 'sectionId' not in params:raise ValueError('缺少分区标识')
+                ids=organization.members(params.get('sectionId')) if method=='sections.archive' else [params.get('sessionId')]
+                if params.get('archived') is True and any(t['sessionId'] in ids and t['status'] in ACTIVE for t in self.tasks.values()):
+                    raise ValueError('分区中有运行会话，不能归档')
+                return organization.archive(ids,params.get('archived'))
         try:
             if method == 'bootstrap': return self.bootstrap()
-            if method == 'sessions.create': return self.store.new_session(params.get('title', '新会话'))
+            if method == 'sessions.create':
+                with self.guard:return self.store.organization.create_session(params.get('title', '新会话'),params.get('sectionId'))
             if method == 'sessions.get': return self.get_session(params['sessionId'])
             if method == 'sessions.context': return self.context_status(params['sessionId'], params.get('text', ''), params.get('attachmentIds', []))
             if method == 'sessions.rename':
@@ -408,9 +484,11 @@ class ModernApplication:
                     if any(t['sessionId'] == params['sessionId'] and t['status'] in ACTIVE for t in self.tasks.values()):
                         raise ValueError('运行中的会话不能删除')
                     self.store.delete(params['sessionId'])
+                    if hasattr(self.executor, 'release_session'):
+                        self.executor.release_session(params['sessionId'])
                 return dict(ok=True)
             if method == 'sessions.view':
-                self.store.view(params['sessionId'], draft=params.get('draft'), scroll=params.get('scroll')); return dict(ok=True)
+                self.store.view(params['sessionId'], draft=params.get('draft'), scroll=params.get('scroll'), anchor=params.get('anchor')); return dict(ok=True)
             if method == 'tasks.submit': return self.submit(params['sessionId'], params['text'], params.get('attachmentIds', []))
             if method == 'tasks.cancel': return self.cancel(params['taskId'])
             if method == 'events.poll': return self.poll(params.get('after', 0))

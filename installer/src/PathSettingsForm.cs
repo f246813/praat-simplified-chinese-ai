@@ -1,8 +1,9 @@
 using System;
 using System.Drawing;
-using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32.SafeHandles;
 
 namespace AIPraat.Setup
 {
@@ -22,6 +23,20 @@ namespace AIPraat.Setup
         PythonProbe probe;
         int generation;
         bool saving,configuringPython;
+        [DllImport("kernel32.dll",SetLastError=true)]
+        static extern SafeProcessHandle OpenProcess(uint access,bool inheritHandle,int processId);
+        [DllImport("kernel32.dll",SetLastError=true)]
+        static extern bool GetExitCodeProcess(SafeProcessHandle process,out uint exitCode);
+        static bool ParentHasExited(int processId)
+        {
+            // Process.GetProcessById can report a live higher-integrity parent as absent.
+            // Query only its exit status; failure to query is not evidence of an exit.
+            using(var process=OpenProcess(0x1000,false,processId)) { // PROCESS_QUERY_LIMITED_INFORMATION
+                if(process.IsInvalid)return Marshal.GetLastWin32Error()==87; // ERROR_INVALID_PARAMETER: PID no longer exists
+                uint exitCode;
+                return GetExitCodeProcess(process,out exitCode) && exitCode!=259; // STILL_ACTIVE
+            }
+        }
         public PathSettingsForm(PathSettings settings,string resultPath,int parentPid)
         {
             this.settings=settings; this.resultPath=resultPath; this.parentPid=parentPid;
@@ -36,7 +51,7 @@ namespace AIPraat.Setup
             FilePathField.Add(fields,python,"Python 环境（必需）","选择环境中的 python.exe",0,"PythonPath","Python 解释器|python.exe|可执行文件|*.exe",tips);
             FilePathField.Add(fields,llama,"llama.cpp（可选）","选择 llama-server.exe，可留空",79,"LlamaServerPath","llama-server|llama-server.exe|可执行文件|*.exe",tips);
             FilePathField.Add(fields,mmproj,"视觉投影（可选）","选择与模型匹配的 mmproj .gguf，可留空",158,"MmprojPath","GGUF 视觉投影|*.gguf",tips);
-            alignmentFields.Add(fields,237,tips);
+            alignmentFields.Add(fields,237,tips,false);
             var validation=new Panel {Dock=DockStyle.Fill};layout.Controls.Add(validation,0,2);
             note.Location=new Point(0,4);note.Size=new Size(820,46);note.Anchor=AnchorStyles.Top|AnchorStyles.Left|AnchorStyles.Right;validation.Controls.Add(note);
             setup.Location=new Point(0,52);validation.Controls.Add(setup);setup.LinkClicked+=(s,e)=>ConfigurePython();
@@ -52,7 +67,7 @@ namespace AIPraat.Setup
             pythonTimer.Tick+=(s,e)=>{pythonTimer.Stop();CheckPython();};
             parentTimer.Tick+=(s,e)=>{
                 if(parentPid<=0 || saving || configuringPython) return;
-                try {using(var p=Process.GetProcessById(parentPid)) {if(!p.HasExited)return;}} catch(ArgumentException) { }
+                if(!ParentHasExited(parentPid))return;
                 Close();
             };
             save.Click+=(s,e)=>Save();cancel.Click+=(s,e)=>Close();

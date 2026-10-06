@@ -1,0 +1,39 @@
+/* Pi renderer theme tokens mapped to the existing assistant-ui/Praat palette. */
+:root{--ds-text-primary:var(--text);--ds-text-secondary:var(--muted);--ds-text-muted:var(--muted);--ds-text-faint:var(--muted);--ds-bg-primary:var(--bg);--ds-bg-elevated-opaque:var(--panel);--ds-bg-hover:var(--soft);--ds-bg-active:var(--accent-soft);--ds-border-default:var(--border);--ds-border-strong:var(--border);--ds-accent:var(--accent);--ds-error:var(--bad);--ds-warning:var(--warning);--ds-tile-deep:var(--soft);--ds-shadow-dialog:0 12px 40px #102c2526;--font-sans:system-ui,"Microsoft YaHei",sans-serif;--font-weight-medium:500;--font-weight-semibold:600;--leading-compact:1.3;--leading-normal:1.6;--leading-row:20px;--leading-tight:1.2;--motion-duration-fast:120ms;--motion-duration-normal:180ms;--motion-ease-out:ease-out;--radius-2xs:4px;--radius-sm:8px;--radius-md:10px;--radius-full:999px;--radius-round:999px;--text-2xs:10px;--text-xs:11px;--text-xs-plus:12px;--text-sm:12px;--text-md:13px;--tracking-normal:0;--tracking-wide:.03em}
+.pi-session-sidebar{padding:0!important}
+.pi-session-sidebar .sidebar-header{display:flex;align-items:center;justify-content:space-between;flex-direction:column;gap:10px;padding:16px 10px 12px;flex-shrink:0}
+.sidebar-expanded .pi-session-sidebar .sidebar-header{flex-direction:row;padding:16px 14px 12px}
+.pi-session-sidebar .new-session{margin:0 10px;flex-shrink:0;width:auto}
+.pi-session-sidebar .session-search{margin:14px 10px 0;flex-shrink:0}
+.pi-session-sidebar .sidebar-list-toolbar{margin:3px 10px 0;flex-shrink:0}
+.pi-session-sidebar .sidebar-toolbar-button{background:none;border:0;padding:3px;opacity:1;width:26px;height:26px}
+.pi-session-sidebar .session-list{margin-top:12px;min-height:0;flex:1;overflow-y:auto;overflow-x:hidden;padding:0 8px}
+.sidebar-expanded .pi-session-sidebar .session-list{margin-inline:0;margin-top:6px;padding-inline:8px;scrollbar-gutter:stable;overscroll-behavior-y:contain}
+/* Usability adaptation: the native hit lane is 14px, with a 6px quiet thumb
+   that grows to 10px directly under the pointer. Native geometry and input
+   keep the content-proportional thumb and the platform's full drag behavior. */
+.sidebar-expanded .pi-session-sidebar .session-list::-webkit-scrollbar{width:14px;height:14px}
+.sidebar-expanded .pi-session-sidebar .session-list::-webkit-scrollbar-thumb{border-width:4px;min-height:68px}
+.sidebar-expanded .pi-session-sidebar .session-list::-webkit-scrollbar-thumb:hover,
+.sidebar-expanded .pi-session-sidebar .session-list::-webkit-scrollbar-thumb:active{border-width:2px}
+.pi-session-sidebar .thread-item{margin:0;border:0;min-height:30px;padding:0 2px 0 0;border-radius:var(--radius-sm);box-shadow:none}
+.pi-session-sidebar .thread-item-main{border:0;background:none;border-radius:0;padding:5px 6px 5px 20px;gap:5px;color:inherit;min-height:30px}
+.pi-session-sidebar .thread-item-main .thread-item-title{flex:1;min-width:0;font-size:13px}
+.pi-session-sidebar .thread-item-main strong{font-size:13px;font-weight:400}
+.pi-session-sidebar .thread-item-main .thread-item-source{flex:0 0 auto;font-size:10px;color:var(--muted)}
+.pi-session-sidebar .thread-item.selected{background:var(--accent-soft)}
+.pi-session-sidebar .thread-item-more{flex:0 0 26px;width:26px;height:26px;padding:4px;margin:0;border:0;background:none;color:var(--muted)}
+.pi-session-sidebar .sidebar-group-toggle{display:flex;align-items:center;gap:5px;width:100%;background:none;border:0;border-radius:4px;padding:6px 4px 4px;text-align:left;color:var(--muted);font-size:11px;font-weight:500}
+.pi-session-sidebar .sidebar-group-toggle:hover{background:var(--soft)}
+.pi-session-sidebar .sidebar-group-toggle .collapsed{transform:rotate(-90deg)}
+.pi-session-sidebar .sidebar-group-toggle>span{margin-left:auto;font-size:10px}
+.pi-session-sidebar .sidebar-pinned-sessions .sidebar-time-group-header{padding:6px 4px 4px}
+.pi-session-sidebar .sidebar-selection-bar{display:flex;align-items:center;gap:4px;flex-shrink:0;padding:5px 10px;font-size:11px;background:var(--soft)}
+.pi-session-sidebar .sidebar-selection-bar>span{flex:1}
+.pi-session-sidebar .sidebar-selection-bar>button{background:none;padding:3px 5px;font-size:11px;border:0}
+.pi-session-sidebar .sidebar-bottom{margin:10px 10px 0;padding:10px 0 12px}
+.sidebar-session-hover-card{background:var(--panel);color:var(--text);border-color:var(--border);box-shadow:var(--ds-shadow-dialog);max-height:calc(100vh - 16px);overflow-y:auto}
+.sidebar-session-hover-card-meta{font-size:10px;color:var(--muted);margin-top:4px}
+.sidebar-preview-open{margin-top:8px;padding:4px 8px;font-size:11px;background:var(--soft);border:1px solid var(--border);border-radius:5px}
+@media(max-width:900px){.sidebar-expanded .pi-session-sidebar .sidebar-header{padding-inline:10px}}
+@media(hover:none){.pi-session-sidebar .thread-item-more{opacity:1}}

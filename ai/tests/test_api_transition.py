@@ -344,32 +344,16 @@ class ApiTransitionTests(unittest.TestCase):
                 control.reconcile_api_transition(path)
         self.assertEqual(launch.call_count, 1)
 
-    def test_standalone_dialog_reconciles_after_save(self) -> None:
+    def test_standalone_entry_redirects_without_changing_service_or_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = write_config(Path(raw), enabled=True)
-
-            class FakeWindow:
-                def __init__(self, on_saved):
-                    self.on_saved = on_saved
-
-                def mainloop(self) -> None:
-                    if self.on_saved is not None:
-                        self.on_saved({"enabled": True})
-
-                def destroy(self) -> None:
-                    return None
-
-            class FakeDialog:
-                def __init__(self, *_args, on_saved=None, **_kwargs):
-                    self.window = FakeWindow(on_saved)
-
-            with (
-                patch.object(api_settings, "ApiSettingsDialog", FakeDialog),
-                patch("praat_ai.parent_watch.should_watch", return_value=False),
-                patch.object(control, "reconcile_api_transition") as reconcile,
-            ):
+            before = path.read_bytes()
+            with patch("start_api_settings.main", return_value=0) as navigate, \
+                 patch.object(control, "reconcile_api_transition") as reconcile:
                 self.assertEqual(api_settings.run_standalone(path), 0)
-        reconcile.assert_called_once_with(path)
+            navigate.assert_called_once_with(path)
+            reconcile.assert_not_called()
+            self.assertEqual(path.read_bytes(), before)
 
     def test_chat_dialog_queues_same_transition_for_api_and_local_modes(self) -> None:
         for enabled in (True, False):

@@ -1,0 +1,21 @@
+{
+  "repository": "https://github.com/vastsa/PI-Desktop",
+  "revision": "0d47d26769ecbeca1c3ab56fa83b58a91de8190e",
+  "files": [
+    {
+      "path": "apps/desktop/src/components/SearchDialog.tsx",
+      "gitBlob": "df806ccdd6902fe3a3e45eac41f25a831afbf78a",
+      "sha256": "3e69b3670f0e5c7d77631b106e881e0006f9259404257e282cce12f6c7639651"
+    },
+    {
+      "path": "apps/desktop/src/features/app/useAppShellRuntime.tsx",
+      "gitBlob": "8b16e8b525e85914124ded2d1aeb8f9a0f353161",
+      "sha256": "e0b649f88adbe0e2d71528d0809b0c46a34a18a17d04bd4f99053118db7cd2c7"
+    },
+    {
+      "path": "apps/desktop/src/styles/overlays.css",
+      "gitBlob": "8c15ac09ca54a810d31354162c19d79c8a01e03c",
+      "sha256": "82bff2e6f0d0ad22ce4e33b6f40b04ee56f3c0d99156fb6a333847a2b161528c"
+    }
+  ]
+}

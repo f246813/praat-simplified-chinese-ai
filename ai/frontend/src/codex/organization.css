@@ -1,0 +1,21 @@
+.context-submenu-arrow{margin-left:auto;font-size:18px;line-height:14px;color:var(--muted)}
+.history-section-header{display:flex;align-items:center;gap:2px;padding:4px 0 3px;min-height:28px;border-radius:6px}
+.history-section-header.is-drop-target{background:var(--accent-soft);outline:1px solid var(--accent)}
+.history-section-toggle{display:flex;align-items:center;flex:1;min-width:0;gap:5px;border:0;background:none;text-align:left;padding:4px;color:var(--muted);font-size:12px}
+.history-section-toggle:hover{background:var(--soft)}
+.history-section-toggle>.collapsed{transform:rotate(-90deg)}
+.history-section-symbol{display:flex;align-items:center;flex:0 0 auto;font-size:13px}
+.history-section-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.history-section-count{margin-left:auto;font-size:10px}
+.history-section-more{display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:4px;border:0;background:none;color:var(--muted);opacity:0}
+.history-section-header:hover .history-section-more,.history-section-header:focus-within .history-section-more{opacity:1}
+.history-section-empty{margin:2px 0 6px;padding-left:23px;color:var(--muted);font-size:11px}
+.history-archive-entry{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:var(--muted);padding:6px 4px;border:0;background:none}
+.sidebar-toolbar-actions{display:flex;align-items:center;gap:4px}
+.section-appearance-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.section-appearance-fields>.field{min-width:0;grid-template-columns:minmax(0,1fr);gap:6px}
+.section-appearance-fields input,.section-appearance-fields select{min-width:0}
+@media(max-width:480px){.section-appearance-fields{grid-template-columns:minmax(0,1fr);gap:0}}
+.archived-conversation{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 24px;background:var(--soft);font-size:12px;color:var(--muted)}
+.fork-origin{padding:4px 24px;color:var(--muted);font-size:11px}
+@media(hover:none){.history-section-more{opacity:1}}

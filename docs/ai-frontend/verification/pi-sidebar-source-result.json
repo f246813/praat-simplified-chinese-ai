@@ -1,0 +1,68 @@
+{
+  "passed": true,
+  "revision": "0d47d26769ecbeca1c3ab56fa83b58a91de8190e",
+  "originals": [
+    {
+      "name": "chrome.css",
+      "source": "styles/chrome.css",
+      "sha256": "a31ed9f035051279437dd664cfe3b79ba17f30b73f1028476d63ebc735ad2ca4"
+    },
+    {
+      "name": "session-collaboration-view.ts",
+      "source": "features/sessions/session-collaboration-view.ts",
+      "sha256": "3445ed58f46582fddf157e9f6602a2f18f74d150a77de3fd25c15b0977c04f68"
+    },
+    {
+      "name": "SessionHoverCard.tsx",
+      "source": "features/sessions/SessionHoverCard.tsx",
+      "sha256": "5459bc892bb13a05d5a5e66db7c99cb8de8507ce608a818e4e56ae9535500ccd"
+    },
+    {
+      "name": "sessions.css",
+      "source": "styles/sessions.css",
+      "sha256": "23573d01bc9896d64ea76301e6fee10cafec27b2e159fcdac9135aa9258fe02d"
+    },
+    {
+      "name": "sidebar-preferences.ts",
+      "source": "lib/sidebar-preferences.ts",
+      "sha256": "8657e8c76f5ff1a7dc6afc2849a6154399aae02285c82b5f9c8f14414f381d15"
+    },
+    {
+      "name": "sidebar-resize.ts",
+      "source": "lib/sidebar-resize.ts",
+      "sha256": "a04f760f822815793e2309fed20c9b5d823d8825693ae0fedcbb62a10ac6b624"
+    },
+    {
+      "name": "sidebar-session-groups.ts",
+      "source": "lib/sidebar-session-groups.ts",
+      "sha256": "a74d52ee15242276c0788016b07975af3fd7d5d9bdd9b8c7c3403d20339a5fef"
+    },
+    {
+      "name": "sidebar-session-status.ts",
+      "source": "lib/sidebar-session-status.ts",
+      "sha256": "a82bb7eda1a69a54ee88765714b2df69b8dc39199544b0003be834e5ba9cea18"
+    },
+    {
+      "name": "sidebar-threads.css",
+      "source": "styles/sidebar-threads.css",
+      "sha256": "1a2107d7d99b8bb16b26cd790cd70e14e8528ca53b8a22b5e2a7f81fc2399893"
+    },
+    {
+      "name": "Sidebar.tsx",
+      "source": "components/Sidebar.tsx",
+      "sha256": "a4aca84552f67346b1e0ca67db0c8bce6a96adac6911905ed5a912b253c1e31a"
+    },
+    {
+      "name": "use-armed-delete.ts",
+      "source": "hooks/use-armed-delete.ts",
+      "sha256": "eb1202618ac839d6044fe5adf78a1e3bf0a474eaa54130289e8f9ad5b5780283"
+    },
+    {
+      "name": "useSessionHoverCard.ts",
+      "source": "features/sessions/useSessionHoverCard.ts",
+      "sha256": "d1476b990e33980a9a0370200350c5fd199f4be030d2a09290bee84961aec1b4"
+    }
+  ],
+  "usedSourcesMatchProduction": true,
+  "noticeMatchesProduction": true
+}

@@ -94,7 +94,7 @@ class ModernTests(unittest.TestCase):
         self.assertEqual([s['id'] for s in store.sessions()], [b, a, c])
         restored = ModernStore(store.path)
         self.assertEqual([s['id'] for s in restored.sessions()], [b, a, c])
-        self.assertEqual(restored.get(a), {**snapshot, 'session': {**snapshot['session'], 'pinned': True}})
+        self.assertEqual(restored.get(a), {**snapshot, 'session': {**snapshot['session'], 'pinned': True, 'sectionId': restored.organization.sections()[0]['id'], 'sectionPosition': 1000000}})
         self.assertEqual(restored.context(a), context)
         with restored.connect() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM session_pins').fetchone()[0], 2)
@@ -145,7 +145,7 @@ class ModernTests(unittest.TestCase):
             with patch.object(self.app.settings, 'candidate') as candidate, patch.object(self.app.settings, 'save') as save, patch.object(self.fake, 'capture_target') as capture, patch.object(self.fake, 'run') as execute, patch.object(budget, 'text_request') as request, patch.object(self.app.local, 'lease') as lease:
                 for value in (True, False):
                     result = self.app.rpc('sessions.pin', dict(sessionId=sid, pinned=value))
-                    self.assertEqual(result, {**snapshot['session'], 'pinned': value})
+                    self.assertEqual(result, {**snapshot['session'], 'pinned': value, 'sectionId': self.app.store.organization.sections()[0]['id'] if value else None, 'sectionPosition': 1000000 if value else None})
                 candidate.assert_not_called(); save.assert_not_called(); capture.assert_not_called()
                 execute.assert_not_called(); request.assert_not_called(); lease.assert_not_called()
             self.assertIs(self.app.tasks[task['id']], active)
@@ -280,7 +280,8 @@ class ModernTests(unittest.TestCase):
             task2 = restored.submit(sid, 'followup')
             self.wait(lambda: len(self.fake.calls) == 2)
             self.assertIn('original-result', json.dumps(self.fake.calls[1]['history']))
-            self.assertIn('15 ms', json.dumps(self.fake.calls[1]['history']))
+            self.assertIn('15 ms', json.dumps(self.fake.calls[1]['historical_evidence']))
+            self.assertNotIn('历史专业证据与投递事实', json.dumps(self.fake.calls[1]['history']))
             self.fake.gates['followup'].set()
             self.wait(lambda: restored.tasks[task2['id']]['status'] == 'complete')
         finally: restored.close()
@@ -307,13 +308,33 @@ class ModernTests(unittest.TestCase):
             candidate.assert_not_called(); capture.assert_not_called(); execute.assert_not_called(); request.assert_not_called()
         with store.connect() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM session_pins').fetchone()[0], 0)
-        for operation in (lambda: store.delete('legacy:' + sid), lambda: store.rename('legacy:' + sid, 'bad'), lambda: store.view('legacy:' + sid, draft='bad')):
+        for operation in (lambda: store.rename('legacy:' + sid, 'bad'), lambda: store.view('legacy:' + sid, draft='bad')):
             with self.assertRaises(ValueError): operation()
         with store.legacy_connect() as db:
             with self.assertRaises(sqlite3.OperationalError): db.execute('DELETE FROM sessions')
         self.assertEqual(before, path.read_bytes())
         self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before_hash)
         with self.assertRaises(ValueError): ModernStore(path, path)
+
+    def test_derived_token_mode_is_not_persisted_by_a_full_section_save(self):
+        """2026-10-04：``token_mode`` 是给界面看的派生值，回显保存不许落盘。
+
+        一旦落盘，所有按 ``token_mode is not None`` 分支的读者（老 Tk 窗口
+        ``cloud_workflow``、本地模型的 payload）都会换一条路，而用户并没有做过
+        这个选择；只有用户真的选了另一种模式才写。
+        """
+
+        raw = json.loads(self.config.read_text())
+        raw['api'].pop('token_mode', None)
+        self.config.write_text(json.dumps(raw), encoding='utf8')
+        settings = self.app.settings.get()
+        self.assertEqual(settings['api']['token_mode'], 'provider')   # 派生：limit_tokens 为假
+        self.app.settings.save(settings)
+        saved = json.loads(self.config.read_text())
+        self.assertNotIn('token_mode', saved['api'])
+        self.assertNotIn('token_mode', saved['qwen'])
+        self.app.settings.save(dict(api=dict(token_mode='manual')))
+        self.assertEqual(json.loads(self.config.read_text())['api']['token_mode'], 'manual')
 
     def test_configuration_merge_preserves_credentials_unknown_and_local(self):
         settings = self.app.settings.get()
@@ -328,6 +349,56 @@ class ModernTests(unittest.TestCase):
         settings['api']['clear_api_key'] = True
         self.app.settings.save(settings)
         self.assertEqual(json.loads(self.config.read_text())['api']['api_key'], '')
+
+    def test_layout_preferences_persist_clamped_without_dropping_other_preferences(self):
+        settings = self.app.settings.get()
+        # The drag handles persist here because WebView2 private mode discards localStorage.
+        self.assertEqual(settings['preferences']['sidebar_width'], 272)
+        self.assertEqual(settings['preferences']['conversation_width'], 850)
+        self.app.settings.save(dict(preferences=dict(sidebar_width=300)))
+        prefs = json.loads(self.config.read_text())['modern']['preferences']
+        self.assertEqual((prefs['sidebar_width'], prefs['conversation_width'], prefs['theme'], prefs['smooth_stream']), (300, 850, 'system', True))
+        self.app.settings.save(dict(preferences=dict(sidebar_width=9999, conversation_width=1)))
+        prefs = json.loads(self.config.read_text())['modern']['preferences']
+        self.assertEqual((prefs['sidebar_width'], prefs['conversation_width']), (520, 560))
+        # A garbage value falls back to the default instead of raising or persisting NaN.
+        self.app.settings.save(dict(preferences=dict(sidebar_width='wide')))
+        self.assertEqual(json.loads(self.config.read_text())['modern']['preferences']['sidebar_width'], 272)
+
+    def test_reading_anchor_persists_without_disturbing_the_pixel_fallback(self):
+        sid = self.session()
+        self.app.rpc('sessions.view', dict(sessionId=sid, scroll=1600, anchor=dict(messageId='m-1', offset=-359)))
+        session = self.app.store.get(sid)['session']
+        self.assertEqual(session['anchor'], {'messageId': 'm-1', 'offset': -359.0})
+        self.assertEqual(session['scroll'], 1600)
+        # An additive write (a draft keystroke) must not clear the reading position.
+        self.app.rpc('sessions.view', dict(sessionId=sid, draft='草稿'))
+        self.assertEqual(self.app.store.get(sid)['session']['anchor'], {'messageId': 'm-1', 'offset': -359.0})
+        # A windowed transcript cannot trust a pixel offset, so a bad anchor is refused outright.
+        for bad in (dict(messageId='', offset=0), dict(messageId='m'), dict(messageId='m', offset=float('nan')),
+                    dict(messageId='m', offset=True), dict(messageId='x' * 201, offset=0), 'not-an-object'):
+            with self.assertRaises(ValueError):
+                self.app.rpc('sessions.view', dict(sessionId=sid, anchor=bad))
+        self.assertEqual(self.app.store.get(sid)['session']['anchor'], {'messageId': 'm-1', 'offset': -359.0})
+        # A legacy read-only record never accepts one.
+        with self.assertRaises(ValueError):
+            self.app.rpc('sessions.view', dict(sessionId='legacy:fixture', anchor=dict(messageId='m', offset=0)))
+
+    def test_reading_anchor_column_is_added_to_an_existing_database(self):
+        old = self.root / 'pre-anchor.sqlite3'
+        db = sqlite3.connect(old)
+        try:
+            db.executescript("CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT NOT NULL,created TEXT NOT NULL,"
+                             "updated TEXT NOT NULL,draft TEXT NOT NULL DEFAULT '',scroll REAL NOT NULL DEFAULT 0,"
+                             "summary TEXT NOT NULL DEFAULT '',summarized INTEGER NOT NULL DEFAULT 0);")
+            db.execute("INSERT INTO sessions(id,title,created,updated) VALUES ('old','旧库','2026-01-01T00:00:00+00:00','2026-01-01T00:00:00+00:00')")
+            db.commit()
+        finally:
+            db.close()
+        store = ModernStore(old)
+        self.assertIsNone(store.get('old')['session']['anchor'])
+        store.view('old', anchor=dict(messageId='m', offset=-12.5))
+        self.assertEqual(store.get('old')['session']['anchor'], {'messageId': 'm', 'offset': -12.5})
 
     def test_sensitive_content_and_binary_excluded_from_history(self):
         sid = self.session()
@@ -381,6 +452,55 @@ class ModernTests(unittest.TestCase):
         self.assertEqual(calls, ['stop'])
         resource.request_stop()
         self.assertEqual(calls, ['stop'])
+
+    def test_configured_local_model_starts_on_demand_despite_legacy_auto_start(self):
+        config = AppConfig()
+        config.server.llama_server = 'configured-llama-server.exe'
+        config.server.model_path = 'configured-model.gguf'
+        resource = LocalResources()
+        with patch('praat_ai.server.QwenServerManager') as factory, patch('praat_ai.vram.detect_gpu', return_value=None):
+            with resource.lease(config, threading.Event(), lambda *args: None):
+                factory.assert_called_once()
+                factory.return_value.ensure_started.assert_called_once()
+            self.assertTrue(factory.call_args.args[0].server.auto_start)
+            self.assertFalse(config.server.auto_start)
+            with resource.lease(config, threading.Event(), lambda *args: None):
+                self.assertEqual(factory.call_count, 1)
+                self.assertEqual(factory.return_value.ensure_started.call_count, 2)
+            resource.request_stop()
+
+    def test_unmanaged_endpoint_does_not_launch_configured_local_files(self):
+        config = AppConfig()
+        config.server.llama_server = 'configured-llama-server.exe'
+        config.server.model_path = 'configured-model.gguf'
+        for address in ('https://example.invalid/v1', 'http://127.0.0.1:8999/v1'):
+            config.qwen.base_url = address
+            with patch('praat_ai.server.QwenServerManager') as factory:
+                with LocalResources().lease(config, threading.Event(), lambda *args: None):
+                    factory.assert_not_called()
+
+    def test_local_connection_test_waits_for_model_lease(self):
+        from contextlib import contextmanager
+        order = []
+        @contextmanager
+        def lease(*args):
+            order.append('ready')
+            yield
+            order.append('released')
+        self.app.settings.save({'api': {'enabled': False}})
+        with patch.object(self.app.local, 'lease', side_effect=lease), patch.object(
+                budget, 'text_request', side_effect=lambda *args: order.append('request') or 'OK'):
+            result = self.app.test_connection('text', {})
+        self.assertEqual(result['status'], 'verified')
+        self.assertEqual(order, ['ready', 'request', 'released'])
+
+    def test_local_load_failure_prevents_connection_request(self):
+        self.app.settings.save({'api': {'enabled': False}})
+        with patch.object(self.app.local, 'lease', side_effect=RuntimeError('模型加载失败')), patch.object(budget, 'text_request') as request:
+            result = self.app.test_connection('text', {})
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('模型加载失败', result['reason'])
+        request.assert_not_called()
 
     def test_new_token_modes_request_fields_and_sdk_same_policy(self):
         from praat_ai.cloud_agent import CloudSession

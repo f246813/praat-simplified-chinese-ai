@@ -154,7 +154,9 @@ class MfaAlignmentConfig:
     conda_executable: str = ""
     conda_environment: str = ""
     dictionary_path: str = ""
+    dictionary_paths: list[str] = field(default_factory=list)
     acoustic_model: str = ""
+    acoustic_models: list[str] = field(default_factory=list)
     beam: int = 10
     retry_beam: int = 40
 

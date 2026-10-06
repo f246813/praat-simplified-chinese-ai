@@ -1,0 +1,13 @@
+{
+  "executable": "C:\\Users\\f2468\\Desktop\\Praat\\稳定早期版\\Praat-model-settings.exe",
+  "checks": [
+    "closed_desktop_native_API_menu_opens_model_API_page",
+    "no_standalone_API_window",
+    "existing_desktop_reused_after_returning_to_chat",
+    "repeated_API_menu_restores_model_page_preserving_unsaved_edit",
+    "single_desktop_and_saved_configuration_unchanged",
+    "bound_test_desktop_closes_with_its_Praat_parent"
+  ],
+  "command_id": 4662,
+  "menu_state": 0
+}

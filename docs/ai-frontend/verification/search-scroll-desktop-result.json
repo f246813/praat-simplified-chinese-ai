@@ -1,0 +1,13 @@
+{
+  "productionAssets": true,
+  "realWebView2": true,
+  "isolatedData": true,
+  "checks": [
+    "80 body results keep the same DOM rows and scroll position while scrolling the result list, prefetching a preview and refreshing unchanged history",
+    "real persisted message update still invalidates search and adds the newly matching conversation"
+  ],
+  "searchCallsDuringBrowsing": 1,
+  "passed": true,
+  "searchCallsAfterContentChange": 2,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0"
+}

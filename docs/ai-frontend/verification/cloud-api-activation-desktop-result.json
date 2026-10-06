@@ -1,0 +1,14 @@
+{
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedData": true,
+  "mockRequestsOnly": true,
+  "checks": [
+    "normal desktop policy enables settings test controls without CLI or startup requests",
+    "API enable/save takes effect in current desktop; saved key retained; no request on save",
+    "test click retains confirmation and submits exactly one MOCK remote-config request",
+    "normal task submit accepts enabled cloud configuration and uses MOCK executor"
+  ],
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "passed": true
+}

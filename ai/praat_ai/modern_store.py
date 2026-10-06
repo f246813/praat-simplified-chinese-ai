@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -20,8 +21,9 @@ def identity():
 
 
 class ModernStore:
-    def __init__(self, path: Path, legacy: Path | None = None, *, secrets=()):
+    def __init__(self, path: Path, legacy: Path | None = None, *, secrets=(), project_path=None):
         self.path, self.legacy = Path(path), Path(legacy) if legacy else None
+        self.project_path = str(project_path) if project_path else None
         if self.legacy and self.path.resolve() == self.legacy.resolve():
             raise ValueError('新会话库不能覆盖旧记录库')
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +34,7 @@ class ModernStore:
                 CREATE TABLE IF NOT EXISTS sessions(
                   id TEXT PRIMARY KEY,title TEXT NOT NULL,created TEXT NOT NULL,updated TEXT NOT NULL,
                   draft TEXT NOT NULL DEFAULT '',scroll REAL NOT NULL DEFAULT 0,
+                  anchor TEXT NOT NULL DEFAULT '',
                   summary TEXT NOT NULL DEFAULT '',summarized INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS session_pins(
                   session TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE);
@@ -42,7 +45,24 @@ class ModernStore:
                 CREATE TABLE IF NOT EXISTS evidence(
                   seq INTEGER PRIMARY KEY AUTOINCREMENT,session TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                   task TEXT NOT NULL,payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS model_events(
+                  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                  session TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                  task TEXT NOT NULL,phase TEXT NOT NULL,epoch INTEGER NOT NULL,
+                  status TEXT NOT NULL,payload TEXT NOT NULL);
             ''')
+            # An existing database predates the reading anchor; adding it is additive.
+            if 'anchor' not in {column[1] for column in db.execute('PRAGMA table_info(sessions)')}:
+                db.execute("ALTER TABLE sessions ADD COLUMN anchor TEXT NOT NULL DEFAULT ''")
+            columns = {column[1] for column in db.execute('PRAGMA table_info(sessions)')}
+            if 'context_epoch' not in columns:
+                db.execute('ALTER TABLE sessions ADD COLUMN context_epoch INTEGER NOT NULL DEFAULT 0')
+            for name, declaration in [('project_path','TEXT'),('connection_id',"TEXT NOT NULL DEFAULT 'local'"),('connection_label',"TEXT NOT NULL DEFAULT '本地'")]:
+                if name not in columns: db.execute(f'ALTER TABLE sessions ADD COLUMN {name} {declaration}')
+            if self.project_path:
+                # Existing modern records belong to this host's project DB. Never
+                # replace an already recorded origin or write the legacy database.
+                db.execute('UPDATE sessions SET project_path=? WHERE project_path IS NULL AND connection_id=?',(self.project_path,'local'))
             # Restart means no task is resumed. Preserve partial text and delivery facts.
             for mid, payload in db.execute('SELECT id,payload FROM messages').fetchall():
                 message = json.loads(payload)
@@ -50,6 +70,8 @@ class ModernStore:
                     message['status'] = 'interrupted'
                     message['content'] += '\n\n[桌面进程已中断；未恢复或重放任何工具操作]'
                     db.execute('UPDATE messages SET payload=? WHERE id=?', (self.encode(message), mid))
+        from .modern_organization import HistoryOrganization
+        self.organization=HistoryOrganization(self)
 
     def clean(self, value):
         return self.cleaner.clean(value)
@@ -94,18 +116,22 @@ class ModernStore:
                     if row:
                         title = '旧记录 · ' + str(json.loads(row[0]).get('prompt', title))[:40]
                     result.append(dict(id='legacy:' + sid, title=title, created=created, updated=created,
-                                       readOnly=True, pinned=False, draft='', scroll=0))
-        return self.clean(result)
+                                       readOnly=True, pinned=False, draft='', scroll=0, anchor=None,
+                                       projectPath=None,connectionId='local',connectionLabel='本地'))
+        return self.clean(self.organization.project(result))
 
     @staticmethod
     def session_row(row):
+        raw = row['anchor'] if 'anchor' in row.keys() else ''
         return {**{key: row[key] for key in ('id', 'title', 'created', 'updated', 'draft', 'scroll')},
-                'readOnly': False, 'pinned': bool(row['pinned'])}
+                'anchor': json.loads(raw) if raw else None,
+                'readOnly': False, 'pinned': bool(row['pinned']),
+                'projectPath':row['project_path'],'connectionId':row['connection_id'],'connectionLabel':row['connection_label']}
 
     def new_session(self, title='新会话'):
         sid, stamp = identity(), now()
         with self.connect() as db:
-            db.execute('INSERT INTO sessions(id,title,created,updated) VALUES (?,?,?,?)', (sid, self.clean(str(title)[:100]), stamp, stamp))
+            db.execute('INSERT INTO sessions(id,title,created,updated,project_path) VALUES (?,?,?,?,?)', (sid, self.clean(str(title)[:100]), stamp, stamp, self.project_path))
         return self.get(sid)['session']
 
     def writable(self, sid):
@@ -115,7 +141,12 @@ class ModernStore:
             if not db.execute('SELECT 1 FROM sessions WHERE id=?', (sid,)).fetchone():
                 raise ValueError('会话不存在')
 
+    def search(self, search_term, archived=False):
+        from .modern_search import search_sessions
+        return search_sessions(self, search_term, archived)
+
     def get(self, sid):
+        if not isinstance(sid,str) or not sid.strip():raise ValueError('会话标识无效')
         if sid.startswith('legacy:'):
             sessions = {s['id']: s for s in self.sessions()}
             if sid not in sessions:
@@ -142,17 +173,16 @@ class ModernStore:
                 WHERE sessions.id=?
             ''', (sid,)).fetchone()
             messages = [json.loads(row['payload']) for row in db.execute('SELECT payload FROM messages WHERE session=? ORDER BY seq', (sid,))]
-        return dict(session=self.session_row(row), messages=messages)
+        return dict(session=self.organization.project([self.session_row(row)])[0], messages=messages)
 
     def pin(self, sid, pinned):
         if type(pinned) is not bool:
             raise ValueError('pinned 必须是布尔值')
         self.writable(sid)
-        with self.connect() as db:
-            if pinned:
-                db.execute('INSERT INTO session_pins(session) VALUES (?) ON CONFLICT(session) DO NOTHING', (sid,))
-            else:
-                db.execute('DELETE FROM session_pins WHERE session=?', (sid,))
+        from .modern_organization import PINNED_SECTION
+        current=self.get(sid)['session']
+        if current['pinned']==pinned and (not pinned or current['sectionId']==PINNED_SECTION):return current
+        self.organization.move(sid,PINNED_SECTION if pinned else None)
         return self.get(sid)['session']
 
     def rename(self, sid, title):
@@ -163,17 +193,41 @@ class ModernStore:
             db.execute('UPDATE sessions SET title=?,updated=? WHERE id=?', (self.clean(str(title).strip()[:100]), now(), sid))
 
     def delete(self, sid):
+        if isinstance(sid,str) and sid.startswith('legacy:'):
+            # Remove the entry through local metadata; keep the legacy source read-only.
+            self.get(sid)
+            with self.connect() as db:
+                db.execute('INSERT INTO history_metadata(session,deleted) VALUES (?,1) ON CONFLICT(session) DO UPDATE SET deleted=1',(sid,))
+            return
         self.writable(sid)
         with self.connect() as db:
+            db.execute('DELETE FROM history_metadata WHERE session=?',(sid,))
             db.execute('DELETE FROM sessions WHERE id=?', (sid,))
 
-    def view(self, sid, *, draft=None, scroll=None):
+    def view(self, sid, *, draft=None, scroll=None, anchor=None):
         self.writable(sid)
         with self.connect() as db:
             if draft is not None:
                 db.execute('UPDATE sessions SET draft=? WHERE id=?', (self.clean(str(draft)[:100000]), sid))
             if scroll is not None:
                 db.execute('UPDATE sessions SET scroll=? WHERE id=?', (max(0, float(scroll)), sid))
+            # The anchor is the durable reading position; `scroll` is only a pixel
+            # fallback that stops being meaningful once the transcript is windowed.
+            if anchor is not None:
+                db.execute('UPDATE sessions SET anchor=? WHERE id=?', (json.dumps(self.reading_anchor(anchor), ensure_ascii=False), sid))
+
+    @staticmethod
+    def reading_anchor(anchor):
+        """Validate a reading anchor: a real message id plus a finite offset."""
+        if not isinstance(anchor, dict):
+            raise ValueError('阅读锚点必须是对象')
+        message = anchor.get('messageId')
+        offset = anchor.get('offset')
+        if not isinstance(message, str) or not message.strip() or len(message) > 200:
+            raise ValueError('阅读锚点的消息标识无效')
+        if isinstance(offset, bool) or not isinstance(offset, (int, float)) or not math.isfinite(float(offset)):
+            raise ValueError('阅读锚点的偏移无效')
+        return {'messageId': message.strip(), 'offset': round(float(offset), 2)}
 
     def put_message(self, sid, message):
         self.writable(sid)
@@ -201,12 +255,37 @@ class ModernStore:
             history.append(dict(role='user', content='较早对话摘要（非测量证据）：\n' + session['summary']))
         for row in rows:
             message = json.loads(row['payload'])
-            if row['seq'] > session['summarized'] and message.get('status') != 'running':
-                history.append(dict(role=message['role'], content=message['content'], _seq=row['seq']))
+            if (row['seq'] > session['summarized'] and message.get('status') not in {'running', 'failed', 'cancelled', 'interrupted'}
+                    and (message.get('role') != 'assistant' or message.get('status') != 'partial' or message.get('formal'))):
+                history.append(dict(role=message['role'], content=message.get('formal_content', message['content']), _seq=row['seq']))
         return history, evidence
 
     def summarize(self, sid, summary, through):
         # Original history/evidence are never replaced or deleted by compaction.
         self.writable(sid)
         with self.connect() as db:
-            db.execute('UPDATE sessions SET summary=?,summarized=? WHERE id=?', (self.clean(summary), int(through), sid))
+            db.execute('UPDATE sessions SET summary=?,summarized=?,context_epoch=context_epoch+1 WHERE id=?', (self.clean(summary), int(through), sid))
+
+    def context_epoch(self, sid):
+        with self.connect() as db:
+            return db.execute('SELECT context_epoch FROM sessions WHERE id=?', (sid,)).fetchone()[0]
+
+    def save_model_context(self, sid, task, phase, context, status='complete'):
+        self.writable(sid)
+        payload = context.payload()
+        if payload is None:
+            return  # Task-local binary chain cannot be recovered as accessible audio.
+        with self.connect() as db:
+            epoch = max(context.epoch, self.context_epoch(sid))
+            db.execute('UPDATE sessions SET context_epoch=? WHERE id=?', (epoch, sid))
+            payload['epoch'] = epoch
+            db.execute('INSERT INTO model_events(session,task,phase,epoch,status,payload) VALUES (?,?,?,?,?,?)',
+                       (sid, task, phase, epoch, status, self.encode(payload)))
+
+    def model_context(self, sid, phase):
+        from .session_context import PhaseContext
+        epoch = self.context_epoch(sid)
+        with self.connect() as db:
+            row = db.execute('SELECT payload FROM model_events WHERE session=? AND phase=? AND epoch=? AND status=? ORDER BY seq DESC LIMIT 1',
+                             (sid, phase, epoch, 'complete')).fetchone()
+        return PhaseContext.restore(json.loads(row[0])) if row else None

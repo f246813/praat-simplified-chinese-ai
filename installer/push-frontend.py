@@ -1,6 +1,7 @@
 """把工作目录同步到 public 镜像的 modern 分支（只动前端/文档/安装器，绝不覆盖原生 C++）。
 
-    python installer/push-frontend.py            # dry run：列出将上传/将跳过的文件
+    python installer/push-frontend.py            # dry run：统计将上传/将跳过的文件
+    python installer/push-frontend.py --list-files  # dry run：列出待上传路径
     python installer/push-frontend.py --push     # 真的建 blob/tree/commit 并更新分支
 
 为什么要这样写（2026-10-02 实测定下的规则）：
@@ -42,14 +43,16 @@ BRANCH = 'modern'
 TOKEN = os.environ.get('GITHUB_TOKEN', '')
 ROOT = Path(__file__).resolve().parents[1]
 
-EXCLUDE_DIRS = {'.build-tools', '.git', '__pycache__', 'backups', 'runtime', 'logs',
-                'installer/build', 'ai/runtime', '.aipraat-backups'}
-EXCLUDE_SUFFIX = {'.exe', '.dll', '.zip', '.gguf', '.wav', '.pyc', '.pyd', '.so', '.dylib',
+EXCLUDE_DIRS = {'.build-tools', '.git', '__pycache__', 'backups', 'logs',
+                'node_modules', '.aipraat-backups', '.pi', '_diag'}
+EXCLUDE_PATHS = {'installer/build', 'ai/runtime'}
+EXCLUDE_SUFFIX = {'.exe', '.dll', '.zip', '.gguf', '.wav', '.pyc', '.pyd', '.so', '.dylib', '.log',
                   '.lib', '.obj', '.pdb', '.msi', '.7z', '.tar', '.gz', '.bin', '.bak', '.a', '.o'}
 EXCLUDE_NAMES = {'ai_config.json', 'ai_config.json.lock', 'chat.pid', 'conversations.sqlite3',
-                 'payload.zip'}
+                 'payload.zip', 'debug_translations.txt', 'translation_candidates.txt'}
 EXCLUDE_PREFIX = ('installer/verification/python-live-', 'installer/verification/python_setup_',
-                  'installer/verification/python-workspace-', 'installer/verification/installed')
+                  'installer/verification/python-workspace-', 'installer/verification/installed',
+                  'verify-')
 MAX_FILE_BYTES = 8 * 1024 * 1024
 
 NATIVE_SUFFIX = {'.cpp', '.h', '.hpp', '.c', '.cc', '.cxx', '.in', '.am', '.ac', '.m', '.mm', '.rc'}
@@ -128,13 +131,27 @@ def is_native(relative: str) -> bool:
 
 def excluded(relative: str) -> bool:
     parts = relative.split('/')
-    if any(part in EXCLUDE_DIRS for part in parts[:-1]):
+    parent = '/'.join(parts[:-1])
+    if parent and excluded_directory(parent):
         return True
     if relative.startswith(EXCLUDE_PREFIX):
         return True
     if parts[-1] in EXCLUDE_NAMES:
         return True
     return Path(parts[-1]).suffix.lower() in EXCLUDE_SUFFIX
+
+
+def excluded_directory(relative: str) -> bool:
+    parts = relative.split('/')
+    if any(part in EXCLUDE_DIRS for part in parts):
+        return True
+    normalized = relative.strip('/')
+    if any(normalized == path or normalized.startswith(path + '/') for path in EXCLUDE_PATHS):
+        return True
+    if any(normalized.startswith(prefix) for prefix in EXCLUDE_PREFIX):
+        return True
+    # Export snapshots contain randomly named temporary test directories at the root.
+    return len(parts) > 0 and bool(re.fullmatch(r'tmp[a-z0-9_]{5,}', parts[0]))
 
 
 def secret_patterns() -> list[re.Pattern]:
@@ -204,50 +221,57 @@ def collect(remote: Remote) -> tuple[dict[str, bytes], dict[str, str], dict[str,
     modes: dict[str, str] = {}
     skipped: dict[str, list[str]] = {'native': [], 'pure_loss': [], 'binary': [], 'too_big': []}
     counts = {'added': 0, 'modified': 0}
-    for path in sorted(ROOT.rglob('*')):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(ROOT).as_posix()
-        if excluded(relative):
-            continue
-        if is_native(relative) and not relative.startswith('docs/'):
-            skipped['native'].append(relative)
-            continue
-        data = path.read_bytes()
-        if len(data) > MAX_FILE_BYTES:
-            skipped['too_big'].append(relative)
-            continue
-        try:
-            data.decode('utf-8')
-        except UnicodeDecodeError:
-            skipped['binary'].append(relative)
-            continue
-        sha = blob_sha(data)
-        info = remote.info(relative)
-        if info is not None and info['sha'] == sha:
-            continue                                        # 线上已经是这份内容
-        if info is not None:
-            blob = api('GET', f"/repos/{REPO}/git/blobs/{info['sha']}")
-            old = base64.b64decode(blob['content']).decode('utf-8', 'replace').splitlines()
-            new = data.decode('utf-8').splitlines()
-            old_set, new_set = set(old), set(new)
-            lost = [line for line in old if line.strip() and line not in new_set]
-            gained = [line for line in new if line.strip() and line not in old_set]
-            if lost and not gained:
-                skipped['pure_loss'].append(relative)
+    for directory, subdirectories, filenames in os.walk(ROOT, topdown=True):
+        directory_path = Path(directory)
+        relative_directory = directory_path.relative_to(ROOT).as_posix()
+        if relative_directory == '.':
+            relative_directory = ''
+        subdirectories[:] = sorted(name for name in subdirectories
+                                   if not excluded_directory('/'.join(filter(None, (relative_directory, name)))))
+        for filename in sorted(filenames):
+            path = directory_path / filename
+            relative = path.relative_to(ROOT).as_posix()
+            if excluded(relative):
                 continue
-            counts['modified'] += 1
-            modes[relative] = '100755' if info.get('mode') == '100755' else '100644'
-        else:
-            counts['added'] += 1
-            modes[relative] = '100644'
-        upload[relative] = data
+            if is_native(relative) and not relative.startswith('docs/'):
+                skipped['native'].append(relative)
+                continue
+            data = path.read_bytes()
+            if len(data) > MAX_FILE_BYTES:
+                skipped['too_big'].append(relative)
+                continue
+            try:
+                data.decode('utf-8')
+            except UnicodeDecodeError:
+                skipped['binary'].append(relative)
+                continue
+            sha = blob_sha(data)
+            info = remote.info(relative)
+            if info is not None and info['sha'] == sha:
+                continue                                        # 线上已经是这份内容
+            if info is not None:
+                blob = api('GET', f"/repos/{REPO}/git/blobs/{info['sha']}")
+                old = base64.b64decode(blob['content']).decode('utf-8', 'replace').splitlines()
+                new = data.decode('utf-8').splitlines()
+                old_set, new_set = set(old), set(new)
+                lost = [line for line in old if line.strip() and line not in new_set]
+                gained = [line for line in new if line.strip() and line not in old_set]
+                if lost and not gained:
+                    skipped['pure_loss'].append(relative)
+                    continue
+                counts['modified'] += 1
+                modes[relative] = '100755' if info.get('mode') == '100755' else '100644'
+            else:
+                counts['added'] += 1
+                modes[relative] = '100644'
+            upload[relative] = data
     return upload, modes, skipped, counts
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--push', action='store_true')
+    parser.add_argument('--list-files', action='store_true', help='列出 dry run 的待上传路径')
     parser.add_argument('-m', '--message', default='', help='覆盖提交信息（默认见 MESSAGE）')
     args = parser.parse_args()
     if not TOKEN:
@@ -270,6 +294,9 @@ def main() -> int:
     for relative in skipped['pure_loss']:
         print('   会丢线上内容:', relative)
     if not args.push:
+        if args.list_files:
+            for relative in sorted(upload):
+                print(relative)
         print('（dry run，没有写任何东西；加 --push 才推送）')
         return 0
 

@@ -513,6 +513,7 @@ EXACT_MAP = {
     "Run AI tutor": "开始 AI 纠音",
     "Auto": "自动",
     "Alignment": "对齐",
+    "Manage speech dictionaries and models": "管理语音词典与模型",
     "Frontend": "前端",
     "Frontend: ": "前端: ",
     "not selected": "未选择",

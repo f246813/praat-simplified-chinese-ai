@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
-import { activeTask, readOnly, type Attachment, type Bootstrap, type HostEvent, type Message, type Rpc, type Session, type Settings, type Task } from './types';
-export interface State { boot?: Bootstrap; sessions: Session[]; messages: Record<string, Message[]>; tasks: Record<string, Task>; selected?: string; loading: Record<string, boolean>; submitting: Record<string, boolean>; error?: string; connected: boolean }
+import { activeTask, readOnly, type Attachment, type Bootstrap, type HistorySection, type HistoryGroupAction, type OrganizationSnapshot, type HostEvent, type Message, type ReadingAnchor, type Rpc, type Session, type Settings, type Task } from './types';
+export interface State { boot?: Bootstrap; sessions: Session[]; messages: Record<string, Message[]>; tasks: Record<string, Task>; selected?: string; loading: Record<string, boolean>; submitting: Record<string, boolean>; error?: string; connected: boolean; organizationBusy?: boolean; modelSettingsRequest?: string }
+const organizationMetadata=(session:Session):Partial<Session>=>Object.fromEntries((['pinned','sectionId','sectionPosition','archived','timeGroupDetached','forkedFrom','forkedFromTitle'] as const).filter(key=>key in session).map(key=>[key,session[key]]));
 export function applyEvent(state: State, event: HostEvent): State {
   const {sessionId, taskId, payload} = event;
   // Never infer attribution from the selected UI thread.
@@ -44,9 +45,12 @@ export class ChatStore {
   private snapshotStreams = new Set<string>();
   private watermarks = new Map<string, number>();
   private pinRevisions = new Map<string, number>();
+  private renameRevisions = new Map<string, number>();
+  private organizationRevision=0;
+  private organizationQueue:Promise<unknown>=Promise.resolve();
   private stopped = true;
   private timer?: ReturnType<typeof setTimeout>;
-  private views = new Map<string, {draft?: string; scroll?: number}>();
+  private views = new Map<string, {draft?: string; scroll?: number; anchor?: ReadingAnchor}>();
   private viewTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private viewChains = new Map<string, Promise<void>>();
   readonly attachments = new Map<string, Attachment[]>(); // transient metadata only; bytes stay in host
@@ -56,13 +60,21 @@ export class ChatStore {
   private update(next: State) { this.state = next; this.listeners.forEach(l => l()); }
   report = (error: unknown) => this.update({...this.state, error: error instanceof Error ? error.message : String(error)});
   clearError = () => this.update({...this.state, error: undefined});
-  async initialize() {
+  async initialize({newSession = false} = {}) {
+    const revision=this.organizationRevision;
     const revisions = new Map(this.pinRevisions);
-    const boot = await this.rpc('bootstrap', {});
+    const remote = await this.rpc('bootstrap', {});
+    // Retain newer organization state, but still reconcile tasks/settings after
+    // an event reset: the cursor has advanced and terminal events cannot replay.
+    const boot=revision!==this.organizationRevision?{...remote,sections:this.state.boot?.sections||remote.sections,sessions:this.state.sessions}:remote;
     const local = new Map(this.state.sessions.map(s => [s.id, s]));
     this.update({...this.state, boot, connected: true, sessions: sortSessions(boot.sessions.map(s => ({...s, ...this.views.get(s.id), ...(local.has(s.id) ? {draft: local.get(s.id)!.draft, scroll: local.get(s.id)!.scroll} : {}), ...(revisions.get(s.id) !== this.pinRevisions.get(s.id) ? {pinned: local.get(s.id)?.pinned} : {})}))), tasks: Object.fromEntries(boot.tasks.map(t => [t.id, t]))});
+    if (newSession) {
+      await this.create();
+      return;
+    }
     if (!this.state.selected || !boot.sessions.some(s => s.id === this.state.selected)) {
-      this.update({...this.state, selected: boot.sessions[0]?.id});
+      this.update({...this.state, selected: boot.sessions.find(s=>!s.archived)?.id});
     }
     if (this.state.selected) await this.load(this.state.selected);
   }
@@ -70,6 +82,8 @@ export class ChatStore {
     if (this.fetching.has(id)) return this.fetching.get(id);
     const start = this.cursor;
     const pinRevision = this.pinRevisions.get(id);
+    const renameRevision=this.renameRevisions.get(id);
+    const organizationRevision=this.organizationRevision;
     this.update({...this.state, loading: {...this.state.loading, [id]: true}});
     const job = (async () => {
       try {
@@ -78,7 +92,7 @@ export class ChatStore {
         const watermark = result.cursor;
         if (watermark !== undefined) this.watermarks.set(id, watermark);
         else if (this.running(id) || result.messages.some(m => m.status === 'running')) this.snapshotStreams.add(id);
-        let next = {...this.state, sessions: sortSessions(this.state.sessions.map(s => s.id === id ? {...result.session, ...(pinRevision !== this.pinRevisions.get(id) ? {pinned: s.pinned} : {}), draft: local?.draft ?? result.session.draft, scroll: local?.scroll ?? result.session.scroll} : s)), messages: {...this.state.messages, [id]: result.messages}};
+        let next = {...this.state, sessions: sortSessions(this.state.sessions.map(s => s.id === id ? {...result.session, ...(organizationRevision!==this.organizationRevision?organizationMetadata(s):{}), ...(pinRevision !== this.pinRevisions.get(id) ? {pinned: s.pinned} : {}), ...(renameRevision!==this.renameRevisions.get(id)?{title:s.title}:{}), draft: local?.draft ?? result.session.draft, scroll: local?.scroll ?? result.session.scroll, anchor: local?.anchor ?? result.session.anchor ?? null} : s)), messages: {...this.state.messages, [id]: result.messages}};
         // Production snapshots and their event watermark are captured atomically.
         // Only replay later events; old message creation must not erase live text.
         // Legacy fixtures without a watermark retain invalidation-based reconciliation.
@@ -97,38 +111,101 @@ export class ChatStore {
     this.update({...this.state, selected: id});
     await this.load(id);
   }
-  async create() {
-    const session = await this.rpc('sessions.create', {});
+  async create(sectionId?:string|null) {
+    return this.organize(async()=>{
+    const session = await this.rpc('sessions.create', sectionId===undefined?{}:{sectionId});
+    this.organizationRevision++;
     this.update({...this.state, sessions: sortSessions([session, ...this.state.sessions]), messages: {...this.state.messages, [session.id]: []}});
     await this.select(session.id);
+    });
   }
   async rename(id: string, title: string) {
+    return this.organize(async()=>{
     const session = this.state.sessions.find(s => s.id === id);
     if (!session || readOnly(session)) throw new Error('旧会话只读，不能重命名');
     const value = title.trim(); if (!value) throw new Error('请输入会话名称');
     await this.rpc('sessions.rename', {sessionId: id, title: value});
+    this.organizationRevision++;
+    this.renameRevisions.set(id,(this.renameRevisions.get(id)||0)+1);
     this.update({...this.state, sessions: this.state.sessions.map(s => s.id === id ? {...s, title: value} : s)});
+    });
   }
   async pin(id: string, pinned: boolean) {
+    return this.organize(async()=>{
     const current = this.state.sessions.find(s => s.id === id);
     if (!current || readOnly(current)) throw new Error('旧会话只读，不能置顶');
     const result = await this.rpc('sessions.pin', {sessionId: id, pinned});
+    this.organizationRevision++;
     this.pinRevisions.set(id, (this.pinRevisions.get(id) || 0) + 1);
     // Authoritative metadata only; never replace local draft, reading position or messages.
-    this.update({...this.state, sessions: sortSessions(this.state.sessions.map(s => s.id === id ? {...s, pinned: result.pinned} : s))});
+    this.update({...this.state, sessions: sortSessions(this.state.sessions.map(s => s.id === id ? {...s, ...organizationMetadata(result), pinned: result.pinned} : s))});
+    });
+  }
+  private organize<T>(operation:()=>Promise<T>):Promise<T> {
+    const job=this.organizationQueue.then(async()=>{this.update({...this.state,organizationBusy:true});try{return await operation();}finally{this.update({...this.state,organizationBusy:false});}});
+    this.organizationQueue=job.catch(()=>undefined);return job;
+  }
+  private applyOrganization(snapshot:OrganizationSnapshot) {
+    this.organizationRevision++;
+    const local=new Map(this.state.sessions.map(s=>[s.id,s]));
+    this.update({...this.state,boot:this.state.boot?{...this.state.boot,sections:snapshot.sections}:undefined,sessions:sortSessions(snapshot.sessions.map(s=>({...s,...(local.has(s.id)?{draft:local.get(s.id)!.draft,scroll:local.get(s.id)!.scroll,anchor:local.get(s.id)!.anchor}:{}),...this.views.get(s.id)})))});
+  }
+  async moveToSection(id:string,sectionId:string|null,beforeSessionId?:string) {
+    return this.organize(async()=>this.applyOrganization(await this.rpc('sessions.section',{sessionId:id,sectionId,...(beforeSessionId?{beforeSessionId}:{})})));
+  }
+  async createSection(name:string,appearance:HistorySection['appearance']=null) {
+    return this.organize(async()=>{const section=await this.rpc('sections.create',{name,appearance});this.organizationRevision++;this.update({...this.state,boot:this.state.boot?{...this.state.boot,sections:[...(this.state.boot.sections||[]),section]}:undefined});return section;});
+  }
+  async updateSection(sectionId:string,name:string,appearance:HistorySection['appearance']) {
+    return this.organize(async()=>{const section=await this.rpc('sections.update',{sectionId,name,appearance});this.organizationRevision++;this.update({...this.state,boot:this.state.boot?{...this.state.boot,sections:(this.state.boot.sections||[]).map(s=>s.id===sectionId?section:s)}:undefined});});
+  }
+  async removeSection(sectionId:string) {
+    return this.organize(async()=>this.applyOrganization(await this.rpc('sections.delete',{sectionId})));
+  }
+  private async selectAfterArchive() {
+    if(this.state.sessions.find(s=>s.id===this.state.selected)?.archived){const next=this.state.sessions.find(s=>!s.archived);if(next)await this.select(next.id);else this.update({...this.state,selected:undefined});}
+  }
+  async archive(id:string,archived:boolean) {
+    return this.organize(async()=>{this.applyOrganization(await this.rpc('sessions.archive',{sessionId:id,archived}));if(archived)await this.selectAfterArchive();});
+  }
+  async archiveSection(sectionId:string|null,archived:boolean) {
+    return this.organize(async()=>{this.applyOrganization(await this.rpc('sections.archive',{sectionId,archived}));if(archived)await this.selectAfterArchive();});
+  }
+  async manageGroup(sessionIds:string[],action:HistoryGroupAction) {
+    return this.organize(async()=>{
+      const ids=new Set(sessionIds);
+      if(action!=='detach'&&sessionIds.some(id=>this.running(id)||this.state.submitting[id]))throw new Error('分组中有运行会话，不能删除或归档');
+      const snapshot=await this.rpc('sessions.group',{sessionIds,action});
+      const selectedDeleted=action==='delete'&&Boolean(this.state.selected&&ids.has(this.state.selected));
+      if(action==='delete') {
+        const messages={...this.state.messages};
+        for(const id of ids){clearTimeout(this.viewTimers.get(id));this.views.delete(id);this.attachments.delete(id);delete messages[id];}
+        this.update({...this.state,messages});
+      }
+      this.applyOrganization(snapshot);
+      if(selectedDeleted){const next=this.state.sessions.find(s=>!s.archived);if(next)await this.select(next.id);else this.update({...this.state,selected:undefined});}
+      if(action==='archive')await this.selectAfterArchive();
+    });
+  }
+  async fork(id:string) {
+    return this.organize(async()=>{await this.flushView(id);const session=await this.rpc('sessions.fork',{sessionId:id});this.organizationRevision++;this.update({...this.state,sessions:sortSessions([session,...this.state.sessions])});await this.select(session.id);});
   }
   async delete(id: string) {
+    return this.organize(async()=>{
     const session = this.state.sessions.find(s => s.id === id);
-    if (!session || readOnly(session) || this.running(id) || this.state.submitting[id]) throw new Error('只读或运行中的会话不能删除');
+    if (!session || this.running(id) || this.state.submitting[id]) throw new Error('会话不存在或正在运行，不能删除');
     await this.rpc('sessions.delete', {sessionId: id});
+    this.organizationRevision++;
     clearTimeout(this.viewTimers.get(id)); this.views.delete(id); this.attachments.delete(id);
     const messages = {...this.state.messages}; delete messages[id];
     const sessions = this.state.sessions.filter(s => s.id !== id);
-    this.update({...this.state, messages, sessions, selected: this.state.selected === id ? sessions[0]?.id : this.state.selected});
-    if (this.state.selected) await this.load(this.state.selected);
+    const selectedDeleted=this.state.selected===id;
+    this.update({...this.state, messages, sessions, selected: selectedDeleted ? sessions.find(s=>!s.archived)?.id : this.state.selected});
+    if (selectedDeleted && this.state.selected) await this.load(this.state.selected);
+    });
   }
   running(id: string) { return Object.values(this.state.tasks).find(t => t.sessionId === id && activeTask(t)); }
-  view(id: string, patch: {draft?: string; scroll?: number}) {
+  view(id: string, patch: {draft?: string; scroll?: number; anchor?: ReadingAnchor}) {
     const session = this.state.sessions.find(s => s.id === id);
     if (!session) return;
     if (readOnly(session)) {
@@ -146,10 +223,12 @@ export class ChatStore {
     this.views.delete(id);
     const chain = (this.viewChains.get(id) || Promise.resolve()).then(async () => { await this.rpc('sessions.view', {sessionId: id, ...patch}); }).catch(this.report);
     this.viewChains.set(id, chain);
+    return chain;
   }
   async submit(id: string, text: string, attachmentIds: string[]) {
     const session = this.state.sessions.find(s => s.id === id);
     if (!session || readOnly(session)) throw new Error('旧记录只能查看，请新建会话');
+    if (session.archived) throw new Error('请先恢复已归档的会话');
     if (this.running(id) || this.state.submitting[id]) throw new Error('本会话任务尚未结束；可以在其他会话继续工作');
     if (!text.trim() && !attachmentIds.length) return;
     this.update({...this.state, submitting: {...this.state.submitting, [id]: true}});
@@ -175,6 +254,7 @@ export class ChatStore {
   stop() { this.stopped = true; clearTimeout(this.timer); for (const id of this.views.keys()) this.flushView(id); }
   async pollOnce() {
     const result = await this.rpc('events.poll', {after: this.cursor});
+    if (result.navigation?.category === '模型') this.update({...this.state, modelSettingsRequest: result.navigation.id});
     if (result.reset) {
       this.cursor = result.cursor; this.journal = []; this.watermarks.clear(); this.snapshotStreams.clear();
       await this.initialize();

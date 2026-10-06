@@ -238,6 +238,14 @@ def process_cloud(window, text: str):
                 state.events.append({'mode':'binding', 'reason':str(error)})
         return step
 
+    def refresh_context():
+        nonlocal original, ready
+        ready = False
+        ensure_praat()
+        original = bound_context(original, chat.object_context())
+        state.context_text = object_context_text(original.objects, state.context_text)
+        return state.context_text
+
     def prepare_audio():
         if materials is None: raise BranchExit('直接测量不准备音频材料')
         if materials.audio_path is not None:
@@ -322,7 +330,7 @@ def process_cloud(window, text: str):
             if getattr(window, 'cloud_runtime', None) is None: window.cloud_runtime = CloudRuntime()
             run_cloud_turn(config, state, execute_action=execute_action, cancel=window.cancel_event,
                            progress=progress, materials=materials, prepare_audio=prepare_audio, correct_audio=correct_audio,
-                           runtime=window.cloud_runtime)
+                           runtime=window.cloud_runtime, refresh_context=refresh_context)
         labels = {'complete':'完成', 'partial':'部分完成', 'missing':'缺证据'}
         coverage = '\n'.join('- ' + item['item'] + '：' + labels[item['status']] + '。' + item['explanation'] for item in state.coverage)
         body = state.report + ('\n\n交付项状态：\n' + coverage if coverage else '')

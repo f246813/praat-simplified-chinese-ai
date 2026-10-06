@@ -1,4 +1,19 @@
 Source commit: 2f699d8a5382a3965adf364c9e6561a1bcc90291
+Speech dictionary management: 2026-10-05
+Delivered binary: Praat-dictionaries.exe (running original Praat.exe preserved).
+Alignment menu opens a standalone assistant-style dictionary manager.
+Configured paths can be added through the native picker or removed by right-click.
+Dictionary files are retained; configuration merges preserve other settings.
+Native launch avoids selected-audio export and follows the bound Praat parent.
+Validation: 21 related Python tests, 22 frontend tests, 6 real WebView2 checks,
+4 native menu checks, production frontend build and C++ link passed.
+SHA256: 0e1d8e970358996bef98f32bde1a3e88b637c4ac190071eead4ac26f0abdc1c7
+Acceptance: docs/2026-10-05-语音词典管理验收.md
+Dictionary selection follow-up: right-click "选用该词典" updates MFA dictionary_path.
+Active dictionary shows a green check and green outline; window reopens with saved choice.
+Validation: 17 related Python tests, 6 UI tests, 7 real WebView2 checks, frontend build.
+Python and production assets updated; native binary unchanged. Reopen the manager.
+
 Source date: 2026-09-24 14:19:00 +08:00
 Source title: fix(ai): stabilize UI and frontend service transitions
 Export: git archive snapshot; this folder is not a Git working tree.
@@ -125,3 +140,70 @@ Installer SHA256: F79C21296BFB68E8C74636CF88EC9F53630803722349171EE7921F677B744A
 Acceptance: docs/2026-10-02-普通对话响应优化验收.md
 Backup: backups/dialogue-fastpath-20261002-d5ed1a31/
 Restart the chat frontend and reopen API advanced settings to use the new control.
+Frontend menu status repair: 2026-10-05 (started at Shanghai 16:15).
+Delivered: Praat.exe and Praat-frontend-status.exe (same verified binary).
+Free VRAM warning: red <0.5 GiB; yellow [0.5,1.5); green >=1.5; unavailable is explicit.
+Model: current saved local preset label, or cloud API mode.
+State: unconfigured / running / stopped, based on saved configuration and live desktop identity.
+Native Win32 timer fixes the prior 2000-second refresh; samples every 2 seconds off the UI thread.
+Preserves dictionary management, selected MFA dictionary and green check/outline.
+Validation: 35 related Python tests, 11 real native frontend checks, 4 dictionary menu checks,
+7 real WebView2 dictionary interactions, native compile/link and real GPU sampling passed.
+SHA256: 33AF39C525DF647DD8156AF1F80160835F80A57FD67001C69A4A3F2F71359248
+Sources/licenses/reuse and acceptance: docs/2026-10-05-前端菜单状态修复验收.md
+Backup: backups/frontend-menu-20261005. No GitHub push or publication.
+Frontend menu layout correction: 2026-10-05.
+Delivered: Praat.exe and Praat-menu-fixed.exe. Running Praat-frontend-status.exe preserved.
+Native menu layout retained; trailing red/yellow/green dot painted inside the existing popup.
+Removed owner-draw row metrics and refresh-time type changes; text updates preserve flags.
+Validation: 9 real menu geometry/popup/repaint checks, 18 Python tests, 4 dictionary menu checks.
+SHA256: 345453EC7BDDA4833A829182265A7361CC22628B202D0A0EA37F835980F58100
+Acceptance: docs/2026-10-05-前端菜单布局修复验收.md
+Backup: backups/frontend-menu-layout-20261005
+API-mode VRAM menu dot correction: 2026-10-05.
+Root cause: frontend_status published local GPU colours even for cloud API inference.
+API now publishes unknown/null GPU warning; local thresholds and menu layout retained.
+Validation: 10 real API hover/reopen/mode-switch checks, 9 local layout checks,
+19 related Python status/dictionary tests passed. User configuration hash unchanged.
+Python sampler fix is loaded on the next refresh; no native binary changes required.
+Acceptance: docs/2026-10-05-API模式显存圆点修复验收.md
+Backup: backups/api-vram-dot-20261005
+API menu -> assistant Model/API page: 2026-10-05.
+Delivered Praat.exe and Praat-model-settings.exe; existing user processes preserved.
+Old standalone API settings entries redirect to the modern single desktop.
+Navigation uses existing events.poll; repeated clicks preserve unsaved settings.
+Native launcher uses detached CreateProcessW and wide-character environment paths,
+with no selected-audio export. Python helpers and offline React assets updated.
+Validation: native compile/link, TypeScript/Vite builds, 6 real native/WebView2 checks,
+76 related Python checks, 25 frontend checks and modern boundary checks passed.
+SHA256: D252E6D60F304A42EA6F3B8606A57821DDC9EFB7E6E69210B4B7EFB7854F7366
+Acceptance: docs/2026-10-05-API设置跳转模型页验收.md
+Backup: backups/api-model-page-20261005
+Restart the existing AI desktop once to load its new Python/event and React navigation.
+
+2026-10-05 Message.txt permission repair:
+Restored per-file Medium integrity labels on Praat.exe, Praat-model-settings.exe and Praat-menu-fixed.exe. Binary bytes unchanged.
+Latest build-frontend-model-settings.ps1 applies Medium to stage output; -Deliver copies final entry points and reapplies labels after copying.
+Live native -> Python checks: all three reproduced Low/Errno 13 before repair; all three Medium/write-access passed after repair.
+Existing user Praat/chat processes preserved and require restart to adopt new token. See docs/2026-10-05-本地模型消息文件权限修复.md.
+
+2026-10-05 Local model on-demand startup repair:
+modern_app.LocalResources now starts configured loopback llama-server before local tasks even with legacy server.auto_start=false, using a private configuration copy. Local text connection tests share this lease.
+95 related Python tests passed. Real model cold start, PID reuse and API-to-local restart verified in isolated config/runtime; user configuration unchanged.
+Python backend change only: reopen the AI desktop to load it; no native rebuild required.
+Details: docs/2026-10-05-本地模型按需启动修复.md
+
+2026-10-05 Native menu text/repaint repair:
+Model/status enabled; VRAM enabled only in local mode. Native mode flag suppresses API dots. WM_MENUSELECT schedules repaint and menu close clears popup subclass bindings.
+12 isolated native popup checks and 8 sampler tests passed. Build succeeded.
+Delivered Praat-menu-status.exe and Praat-model-settings.exe, both Medium integrity.
+SHA256 DCEF65ADF12E644ECFBC37B70CAB257A27531B69B5995561E47FCE0D54DAFF5D
+Running Praat.exe left intact; restart using the new menu-status executable to load the native changes.
+Details: docs/2026-10-05-菜单文字与圆点重绘修复.md
+
+2026-10-05 Menu hover flicker fix:
+Removed full-popup invalidation on WM_MENUSELECT; posted message redraws only a visible local GPU dot after native selection drawing. API mode queues no dot paint.
+16 native checks passed, including 48 cursor moves per mode with stable untouched menu text and correct dot persistence/removal.
+Updated Praat.exe and Praat-model-settings.exe, Medium integrity.
+SHA256 8F0820CBC0F96506E6518039548EB5DD4A0178B9DA8BF9A48AD638D052ABB271
+Existing Praat-menu-status.exe session preserved. Restart from Praat.exe.

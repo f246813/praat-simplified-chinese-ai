@@ -59,11 +59,14 @@ def create_window(application, *, assets=None, hidden=False):
         raise RuntimeError('现代前端离线资产未构建；请在 ai/frontend 运行 npm ci && npm run build，或使用 --legacy')
     server = AssetServer(assets)
     api = HostAPI(application)
-    window = webview.create_window('AIPraat · AI 工作台', server.url, js_api=api, width=1180, height=820,
+    window = webview.create_window('AIPraat · AI 工作台', server.url, js_api=api, width=900, height=640,
                                    min_size=(800, 600), hidden=hidden, text_select=True)
     application.window = window
     api._origin = server.url.rsplit('/', 1)[0]
     window.events.closed += application.close
+    # Adapt the pywebview examples/events.py closed-event subscription (BSD-3-Clause).
+    from .desktop_launch import clear_own_records
+    window.events.closed += clear_own_records
     return window, server
 
 
@@ -100,7 +103,7 @@ def main(argv=None):
             import webview
             args.data_dir.mkdir(parents=True, exist_ok=True)
             application = ModernApplication(args.data_dir, args.config, shared_runtime / 'conversations.sqlite3',
-                                            allow_cloud=args.allow_cloud)
+                                            allow_cloud=args.allow_cloud, configured_cloud=True)
             window, server = create_window(application)
             from .desktop_launch import connected_record
             window._js_api._on_connected = lambda: connected_record(type(application.executor).__name__)

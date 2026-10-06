@@ -53,7 +53,38 @@ if all = 1 or parameter$ = "mean_pitch"
     selectObject: soundId
     pitchId = To Pitch: 0, 75.000000, 600.000000
     selectObject: pitchId
-    value = Get mean: start, end, "Hertz"
+    median = Get quantile: start, end, 0.5, "Hertz"
+    firstFrameTime = Get frame number from time: start
+    lastFrameTime = Get frame number from time: end
+    nFrames = Get number of frames
+    firstFrame = round (firstFrameTime)
+    lastFrame = round (lastFrameTime)
+    if firstFrame < 1
+    firstFrame = 1
+    endif
+    if lastFrame > nFrames
+    lastFrame = nFrames
+    endif
+    if lastFrame < 1
+    lastFrame = 1
+    endif
+    value = undefined
+    if median <> undefined
+    ceilingValue = median * 1.5
+    floorValue = median * 0.5
+    totalValue = 0
+    countValue = 0
+    for pitchFrame from firstFrame to lastFrame
+    f = Get value in frame: pitchFrame, "Hertz"
+    if f <> undefined and f <= ceilingValue and f >= floorValue
+    totalValue = totalValue + f
+    countValue = countValue + 1
+    endif
+    endfor
+    if countValue > 0
+    value = totalValue / countValue
+    endif
+    endif
     selectObject: tableId
     Append row
     row = Get number of rows

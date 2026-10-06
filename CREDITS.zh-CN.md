@@ -44,6 +44,8 @@
 
 ## 这个副本改了什么
 
+2026-10-05 前端菜单使用 picojson（BSD-2-Clause，完整单头文件）、gpustat 的显存非负处理（MIT，适配片段）和 pywebview 关闭事件绑定示例（BSD-3-Clause，适配片段）。来源版本、实际复用范围与许可证位置见 [前端菜单状态修复验收](docs/2026-10-05-前端菜单状态修复验收.md)。
+
 在基座 `modern` 分支之上加的是**本地 AI 前端**（对话窗口、规划循环、表驱动声学测量、
 Praat 原生插件、社区脚本包装、token 预算与可取消的等待）。逐条改动看 git 历史，
 设计取舍看 [`ai/docs/adr/`](ai/docs/adr/README.md)，踩过的坑看 [`guide.md`](guide.md) §8。

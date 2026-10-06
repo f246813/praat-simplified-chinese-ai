@@ -25,7 +25,7 @@
 [CmdletBinding()]
 param(
     [string]$Repo = 'f246813/praat-simplified-chinese-ai',
-    [string]$Tag = 'v7.0-zh.6',
+    [string]$Tag = 'v7.0-zh.7',
     [string]$TargetCommitish = 'modern',
     [string]$Notes = '',
     [string[]]$Assets = @(),
@@ -62,7 +62,7 @@ function Invoke-GitHub {
 }
 
 $root = Split-Path -Parent $PSScriptRoot           # repository root (contains docs\, ai\)
-if (-not $Notes) { $Notes = Join-Path $root 'docs\2026-10-04-release-notes-v7.0-zh.6.md' }
+if (-not $Notes) { $Notes = Join-Path $root 'docs\2026-10-06-release-notes-v7.0-zh.7.md' }
 if (-not $Assets -or $Assets.Count -eq 0) {
     $Assets = @(
         (Join-Path $root 'AIPraat-install.exe')

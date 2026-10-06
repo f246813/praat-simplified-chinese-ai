@@ -1,0 +1,24 @@
+{
+  "executable": "C:\\Users\\f2468\\Desktop\\Praat\\稳定早期版\\Praat-menu-fixed.exe",
+  "checks": [
+    "api_open_0",
+    "api_hover_0",
+    "api_open_1",
+    "api_hover_1",
+    "api_open_2",
+    "api_hover_2",
+    "local_dot_restored",
+    "local_to_api_removes_dot_in_open_popup",
+    "switched_api_hover",
+    "switched_api_reopen"
+  ],
+  "snapshot": {
+    "success": true,
+    "frontend_model": "云端API模式",
+    "frontend_status": "已停止",
+    "frontend_running": false,
+    "configured": true,
+    "vram_warning": "unknown",
+    "vram_free_gb": null
+  }
+}

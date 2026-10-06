@@ -237,6 +237,21 @@ class ModernExecutor:
         self._guard = threading.Lock()
         self._closed = False
         self._active: set[threading.Event] = set()
+        self._runtimes = {}
+
+    def session_runtime(self, sid):
+        with self._guard:
+            if self._closed:
+                raise RuntimeError('Modern executor is closed')
+            if sid not in self._runtimes:
+                self._runtimes[sid] = CloudRuntime()
+            return self._runtimes[sid]
+
+    def release_session(self, sid):
+        with self._guard:
+            runtime = self._runtimes.pop(sid, None)
+        if runtime is not None:
+            runtime.close()
 
     def capture_target(self, text: str) -> str:
         with self._guard:
@@ -269,11 +284,15 @@ class ModernExecutor:
             self._closed = True
             for cancel in self._active:
                 cancel.set()
+            runtimes, self._runtimes = list(self._runtimes.values()), {}
+        for runtime in runtimes:
+            runtime.close()
         # Task finally blocks close their own clients/materials; never reset poison.
 
     def run(self, *, config: AppConfig, text: str, history: list[dict], target: str,
             cancel: threading.Event, emit: Callable[[str, dict], None],
-            attachments: list[dict] = []) -> dict:
+            attachments: list[dict] = [], session_id='', task_id='', phase_context=None,
+            context_epoch=0, historical_evidence=(), task_metrics=None) -> dict:
         with self._guard:
             if self._closed:
                 raise RuntimeError('Modern executor is closed')
@@ -287,6 +306,13 @@ class ModernExecutor:
         state = AnalysisState(text, target, budget=Budget(config.api.max_context_tokens,
                                                         config.api.plan_max_tokens))
         state.dialogue_context = copy.deepcopy(history)
+        state.phase_context = phase_context
+        state.context_epoch, state.session_id, state.task_id = context_epoch, session_id, task_id
+        state.historical_evidence = copy.deepcopy(list(historical_evidence))
+        state.metrics.update(task_metrics or {})
+        if phase_context is not None:
+            phase_context.sync_formal(history)
+        state.requests = len(state.metrics.get('request_timings', []))
 
         def activity(kind='progress', **payload):
             item = {'id':uuid.uuid4().hex, 'type':kind, **payload}
@@ -322,6 +348,7 @@ class ModernExecutor:
                         if materials.audio_path is not None:
                             raise ValueError('每次只能绑定一个 WAV 主材料')
                         _snapshot_wav(materials, path, explicit_range(text))
+                        materials.original_filename = str(item.get('name') or path.name)
                     elif mime.startswith('text/') or path.suffix.lower() in {'.txt', '.md', '.csv', '.tsv', '.json'}:
                         with path.open('rb') as stream:
                             data = stream.read(_MAX_TEXT_BYTES + 1)
@@ -344,6 +371,22 @@ class ModernExecutor:
                     state.direction = '分析用户提交的原始音频材料'
                     if not config.api.audio_input_enabled:
                         progress('直接音频输入未启用；本轮未将 WAV 发送给模型')
+                if materials is not None and materials.original_filename:
+                    from .materials import filename_pronunciation, pronunciation_statement
+                    mfa = config.alignment.mfa
+                    dictionary_available = any(Path(p).is_file() for p in
+                                               [mfa.dictionary_path, *mfa.dictionary_paths] if p)
+                    # Carry explicit speech only for the same original recording;
+                    # another attachment/temporary export must not inherit it.
+                    prior = next((item.get('material_metadata', {}) for item in reversed(state.historical_evidence)
+                                  if item.get('material_metadata', {}).get('recording_source') == materials.source), {})
+                    user_words = [prior.get('user_pronunciation', ''), text]
+                    hint = filename_pronunciation(materials.original_filename, user_words,
+                                                  dictionary_available=dictionary_available)
+                    state.material_metadata = dict(original_filename=materials.original_filename,
+                                                   recording_source=materials.source,
+                                                   user_pronunciation=pronunciation_statement(user_words),
+                                                   pronunciation_hint=hint)
                 dispatcher = _Dispatcher(target, cancel, activity, self.runtime_directory)
 
                 def prepare_audio():
@@ -416,7 +459,7 @@ class ModernExecutor:
                         state.status = 'complete' if step.ok and step.results else 'partial'
                         state.metrics = {'requests':0, 'route':'direct_measurement'}
                     else:
-                        runtime = CloudRuntime()  # Config/model/client is task-local.
+                        runtime = self.session_runtime(session_id) if session_id else CloudRuntime()
                         if kind:
                             run_dialogue_turn(config, state, kind=kind, cancel=cancel,
                                               progress=progress, on_text=delta, runtime=runtime)
@@ -434,7 +477,8 @@ class ModernExecutor:
                                     progress('原目标音频快照未取得：' + str(error))
                             run_cloud_turn(config, state, execute_action=cloud_action,
                                 cancel=cancel, progress=progress, materials=materials,
-                                prepare_audio=prepare_audio, correct_audio=correct_audio, runtime=runtime)
+                                prepare_audio=prepare_audio, correct_audio=correct_audio, runtime=runtime,
+                                refresh_context=dispatcher.refresh_context)
                 else:
                     if materials is not None and materials.audio_path is not None:
                         raise BranchExit('本地 turn 适配器不支持 WAV 模型输入；未发送或伪造音频证据')
@@ -462,6 +506,8 @@ class ModernExecutor:
         finally:
             for resource in (runtime, materials):
                 if resource is not None:
+                    if resource is runtime and session_id:
+                        continue
                     try:
                         resource.close(wait=True) if resource is runtime else resource.close()
                     except Exception as error:
@@ -472,6 +518,11 @@ class ModernExecutor:
             state.status = 'cancelled'  # Does not change delivered/unknown facts.
             if deltas:
                 state.report = ''.join(deltas)
+        formal_content = state.report
+        formal = not cancel.is_set() and (state.status == 'complete' or state.metrics.get('report_verified', False))
+        if formal and state.phase_contexts.get('dialogue'):
+            state.phase_contexts['dialogue'].mark_formal([*history, dict(role='user', content=text),
+                                                        dict(role='assistant', content=formal_content)])
         if state.coverage:
             state.report += '\n\n交付项状态：\n' + '\n'.join(
                 '- ' + item['item'] + '：' + item['status'] + '。' + item['explanation'] for item in state.coverage)
@@ -490,6 +541,8 @@ class ModernExecutor:
                 activity('tool', name=item.get('tool'), args=item.get('arguments', {}),
                          text=item.get('reason', ''), status='not_executed', execution=item.get('execution', ''))
         return {'content':state.report, 'status':state.status, 'activities':activities,
+                'formal_content':formal_content, 'formal':bool(formal), 'model_contexts':state.phase_contexts,
+                'material_metadata':state.material_metadata,
                 'evidence':[asdict(item) for item in state.evidence], 'attempts':attempts,
                 'target':dispatcher.target if dispatcher else target, 'metrics':state.metrics,
                 'audio_observations':copy.deepcopy(state.audio_observations)}

@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "revision": "ab45264919aaeb8a421cc156f1a5459ef9d60b72",
+  "exactOriginals": [
+    {
+      "path": "codex-rs/tui/src/task_mentions.rs",
+      "gitBlob": "5c1f7900a974e6e45f55a34d930fb546d804a60b",
+      "sha256": "5c76f7fc525caf850cec61f2d6aa9b6a274bfc9981e9276696e6c93266c7144b"
+    },
+    {
+      "path": "codex-rs/rollout/src/search.rs",
+      "gitBlob": "b0f1a68f87aa999d60d56d43fd84d11a32ad7ae6",
+      "sha256": "889efdbf1a966d64224f95a03a3a4e17e393a34d190ae2d24ec2df794632906a"
+    },
+    {
+      "path": "codex-rs/thread-store/src/local/search_threads.rs",
+      "gitBlob": "7e8401aa036e168c595a4e1aee2018ffcd37a9d1",
+      "sha256": "62b157981a90d55b60317c5585b65f5a79f215ec9ec0cf8bb0b2186d295c9ee5"
+    },
+    {
+      "path": "codex-rs/thread-store/src/local/thread_history/search.rs",
+      "gitBlob": "7fa10e2419d1c729587cc9824eca99e9c20c319d",
+      "sha256": "c8770dab2cfc225e7b8b27523dce0623ae56f7437eb878b9a6e65804064d6036"
+    }
+  ],
+  "checks": [
+    "Pinned originals verified against Git blob/SHA-256 and shipped unchanged",
+    "Current renderer and SQLite/RPC adaptations shipped exactly",
+    "Original license and modification/source notice retained"
+  ],
+  "browserChecks": 10,
+  "frontendUnitChecks": 27,
+  "pythonChecks": 42,
+  "productionBuild": true
+}

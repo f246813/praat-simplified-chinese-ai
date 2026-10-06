@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "checks": [
+    "3 Codex and 1 Pi pinned original files/hashes shipped unchanged",
+    "2 Codex types and exact Pi folderNameFromPath extraction reused",
+    "Radix 2.1.24 pinned; exact current menu/frontend/host adaptations distributed",
+    "licenses/notices supplied; scrollbar unchanged; production assets resolve"
+  ],
+  "assets": [
+    {
+      "path": "assets/index-B29Z_vTx.js",
+      "sha256": "cb64924c48904969abde72e9b70c5a4c1e9f71805004ba251b8fba535cd54a06"
+    },
+    {
+      "path": "assets/index-CxNLZ44d.css",
+      "sha256": "f6b59d4a55ca23000e813815e7a12d0c20e297c1ee639a18040aa74dd066b99a"
+    }
+  ]
+}

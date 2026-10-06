@@ -172,6 +172,13 @@ class AnalysisObjectTypeTests(unittest.TestCase):
         self.assertIn("floorValue = median * 0.5", script)
         self.assertIn("maximum = highest", script)
         self.assertIn("maxtime = Get time from frame number: pitchFrame", script)
+        # 2026-10-04：平均值必须和最高/最低统计同一批帧。裸 Get mean 会把被剔除的
+        # 倍频误判帧也算进去，于是报告里出现「平均 139.8 Hz、最高 119.2 Hz」这种
+        # 自相矛盾的数字，模型只能写「含误判帧」把它绕过去。
+        self.assertIn('rawMean = Get mean: tmin, tmax, "Hertz"', script)
+        self.assertIn("pitchTotal = pitchTotal + frameValue", script)
+        self.assertIn("mean = pitchTotal / pitchCount", script)
+        self.assertIn("meanNote$", script)
         # 裸最大值只允许出现在「剔除了什么」的披露里，而且必须报给用户看。
         self.assertIn("已按倍频误判剔除", script)
         self.assertIn('rawMaximum = Get maximum: tmin, tmax, "Hertz", "Parabolic"', script)

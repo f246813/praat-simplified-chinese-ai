@@ -1,0 +1,37 @@
+/* User's Codex screenshot: search + source/project filters, retained groups,
+   one bordered group list, row trash/Unarchive, global Delete all. */
+.archived-sessions{max-width:900px;outline:none}
+.settings-page-actions{display:flex;gap:12px;align-items:center}
+.settings-main:has(.archived-sessions)>header h1{margin-top:0;font-size:28px}
+.archived-inline-actions{display:flex;justify-content:flex-end;margin-bottom:24px}
+.settings-main header .archived-delete-all,.archived-delete-all{color:var(--bad);background:color-mix(in srgb,var(--bad) 11%,var(--panel));border-color:transparent;font-size:13px;border-radius:12px;padding:8px 12px}
+.archived-delete-all:hover{background:color-mix(in srgb,var(--bad) 17%,var(--panel))}
+.archived-toolbar{display:grid;grid-template-columns:minmax(180px,1fr) 180px 220px;gap:12px;align-items:center;margin:36px 0 40px}
+.archived-search{display:flex;align-items:center;gap:10px;min-width:0;border:1px solid var(--border);border-radius:24px;padding:0 13px;background:var(--panel);color:var(--muted)}
+.archived-search input{min-width:0;border:0;background:transparent;padding:8px 0;font-size:14px;border-radius:0}
+.archived-search input:focus,.archived-search input:focus-visible{outline:none;box-shadow:none}
+.archived-search .icon-button{width:20px;height:26px;padding:0}
+.archived-filter{min-width:0;justify-content:flex-start;background:var(--panel);border-radius:11px;font-size:14px;padding:7px 14px}
+.archived-filter>span{min-width:0;flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.archived-filter>svg:last-child{color:var(--muted)}
+.archived-filter-menu{max-height:320px;overflow-y:auto}
+.archived-group{margin-top:26px}
+.archived-group-header{display:flex;align-items:center;gap:10px;margin-bottom:17px;min-width:0}
+.archived-group-header .archived-group-name{font-size:15px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;gap:7px;margin:0}
+.archived-group-count{margin-left:auto;flex-shrink:0;color:var(--muted);font-size:12px}
+.archived-group-more{flex-shrink:0;padding:4px;width:28px;height:28px;background:transparent;border-color:transparent;color:var(--muted)}
+.archived-group-list{border:1px solid var(--border);border-radius:18px;padding:0 20px;background:var(--panel)}
+.archived-session-row{display:flex;align-items:center;gap:16px;min-width:0;padding:16px 0}
+.archived-session-row+.archived-session-row{border-top:1px solid var(--border)}
+.archived-session-details{flex:1;min-width:0}
+.archived-session-title{display:block;max-width:100%;padding:0;border:0;background:transparent;font-size:14px;font-weight:600;text-align:left;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border-radius:3px}
+.archived-session-title:hover{background:transparent;color:var(--accent)}
+.archived-session-meta{display:block;margin-top:2px;font-size:12px;color:var(--muted)}
+.archived-session-delete{flex-shrink:0;width:28px;height:28px;background:transparent;border-color:transparent;padding:4px;color:var(--muted)}
+.archived-session-delete:hover{color:var(--bad);background:var(--soft)}
+.archived-session-restore{flex-shrink:0;padding:7px 12px;background:var(--soft);border-color:transparent;border-radius:12px;font-size:13px}
+.archived-sessions-empty{color:var(--muted);font-size:13px;margin:0;padding:24px 0}
+.archived-search-status{display:block;margin-bottom:12px}
+@media(max-width:1050px){.archived-toolbar{grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:24px;gap:10px}.archived-search{grid-column:1/-1}}
+@media(max-width:650px){.settings-main:has(.archived-sessions)>header h1{font-size:22px}.archived-toolbar{margin-bottom:26px}.archived-group-list{padding:0 14px}.archived-session-row{gap:10px}.archived-group-header{gap:8px}.archived-filter{padding:7px 10px;font-size:12px}}
+@media(max-width:500px){.archived-session-row{flex-wrap:wrap}.archived-session-details{flex-basis:100%}.archived-session-delete{margin-left:auto}.archived-filter>svg:first-child{display:none}.settings-page-actions{flex-wrap:wrap;justify-content:flex-end}}

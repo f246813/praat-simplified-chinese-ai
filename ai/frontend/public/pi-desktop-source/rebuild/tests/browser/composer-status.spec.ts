@@ -28,6 +28,7 @@ test('Pi-style status, numbers, popover dismissal, model and strength changes', 
   if(process.env.PI_SCRATCH_DIR)await page.screenshot({path:join(process.env.PI_SCRATCH_DIR,'composer-model-demo.png')});
   await page.keyboard.press('Escape');await expect(popup).toBeHidden();
   await page.getByRole('button',{name:'打开设置'}).click();
+  await page.getByRole('button',{name:'模型',exact:true}).click();
   await expect(page.getByLabel('API Key',{exact:true})).toHaveValue('');
   await expect(page.getByText('已保存凭据（不可读取）。留空保存会保留原 Key。',{exact:true})).toBeVisible();
   expect(errors).toEqual([]);

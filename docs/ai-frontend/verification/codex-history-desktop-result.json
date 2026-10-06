@@ -1,0 +1,14 @@
+{
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedData": true,
+  "checks": [
+    "native menus create/edit section and move session; rename preserves stable membership",
+    "right-click forks independent message identities and evidence; parent draft/history unchanged; no tasks",
+    "create within section; bulk archive persists across production reload; restore retains all membership/history",
+    "remove section detaches only; original messages preserved; 14px lane and 68px minimum unchanged",
+    "isolated database/config only; no model, executor or Praat calls"
+  ],
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "passed": true
+}

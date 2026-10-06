@@ -1,0 +1,34 @@
+{
+  "checks": [
+    "host-backed-estimated-context-numbers-and-above-composer-popover",
+    "quick-model-and-strength-persist-minimal-fields-with-key-and-endpoint-preserved",
+    "unknown-window-without-fabricated-percentage",
+    "no-task-no-Praat-execution-no-credential-exposure"
+  ],
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedSettings": true,
+  "realModelRequest": false,
+  "realPraat": false,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "context": {
+    "sessionId": "ffc621f441f14dcd9ed9321bad5bac1a",
+    "model": "fixture-model",
+    "estimated": true,
+    "inputTokens": 8756,
+    "overheadTokens": 8755,
+    "contextWindow": 32768,
+    "reservedTokens": 1000,
+    "availableTokens": 23012,
+    "percent": 26.7,
+    "tokenMode": "manual",
+    "windowSource": "configured",
+    "reason": "",
+    "exclusions": [
+      "尚未捕获的 Praat 对象与范围",
+      "音频／图片编码",
+      "正在生成的正文"
+    ]
+  },
+  "passed": true
+}

@@ -494,7 +494,7 @@ def _formant_lines(
     formatns = _formant_numbers(arguments)
     unit = _unit_literal(arguments, "hertz")
     unit_text = _unit_display(arguments, "hertz")
-    times = _query_times(arguments, fallback=_default_time_expression(row))
+    times = _query_times(arguments, fallback=_default_time_expression(row, arguments))
     temporary = row.class_name != "Formant"
     lines = [f"selectObject: {row.id}", "duration = Get total duration"]
     if temporary:
@@ -664,6 +664,7 @@ def _pitch_extreme_lines() -> list[str]:
         "minimum = undefined",
         "maximum = undefined",
         "maxtime = undefined",
+        "mean = undefined",
         "pitchLimit$ = \"\"",
         "if median <> undefined",
         # 注意两点：① Get frame number from time 返回的是**小数**（0.25 秒 → 31.5），
@@ -689,6 +690,11 @@ def _pitch_extreme_lines() -> list[str]:
         "    floorValue = median * 0.5",
         "    highest = 0",
         "    lowest = 0",
+        # 平均值必须和最高/最低统计同一批帧：裸 ``Get mean`` 会把被剔除的倍频误判帧
+        # 也算进去，于是「平均 139.8 Hz、最高 119.2 Hz」这种自相矛盾的数字会进报告
+        # （2026-10-04 实测：模型只好写「含误判帧」把它绕过去）。
+        "    pitchTotal = 0",
+        "    pitchCount = 0",
         "    for pitchFrame from firstFrame to lastFrame",
         '        frameValue = Get value in frame: pitchFrame, "Hertz"',
         "        if frameValue <> undefined and frameValue <= ceilingValue and frameValue > highest",
@@ -700,6 +706,10 @@ def _pitch_extreme_lines() -> list[str]:
         "                lowest = frameValue",
         "            endif",
         "        endif",
+        "        if frameValue <> undefined and frameValue <= ceilingValue and frameValue >= floorValue",
+        "            pitchTotal = pitchTotal + frameValue",
+        "            pitchCount = pitchCount + 1",
+        "        endif",
         "    endfor",
         "    if highest > 0",
         "        maximum = highest",
@@ -707,12 +717,16 @@ def _pitch_extreme_lines() -> list[str]:
         "    if lowest > 0",
         "        minimum = lowest",
         "    endif",
+        "    if pitchCount > 0",
+        "        mean = pitchTotal / pitchCount",
+        "    endif",
         "endif",
         'rawMaximum = Get maximum: tmin, tmax, "Hertz", "Parabolic"',
         "if rawMaximum <> undefined and median <> undefined and rawMaximum > median * 1.5",
         '    pitchLimit$ = "（该区间有一帧被自相关误判成 " + fixed$ (rawMaximum, 1)'
         ' + " Hz，约为中位数 " + fixed$ (median, 1) + " Hz 的 "'
-        ' + fixed$ (rawMaximum / median, 1) + " 倍，已按倍频误判剔除）"',
+        ' + fixed$ (rawMaximum / median, 1) + " 倍，已按倍频误判剔除；'
+        '平均、最低、最高都只统计剔除后的帧）"',
         "endif",
     ]
 
@@ -742,8 +756,8 @@ def _build_pitch_statistics(
     lines.extend(_pitch_extreme_lines())
     lines.extend(
         [
-            'mean = Get mean: tmin, tmax, "Hertz"',
-            "if mean = undefined",
+            'rawMean = Get mean: tmin, tmax, "Hertz"',
+            "if rawMean = undefined",
             _write_result(
                 context,
                 [
@@ -756,6 +770,15 @@ def _build_pitch_statistics(
                 ],
             ),
             "else",
+            # ``mean`` 来自逐帧限幅循环，和最低/最高同一批帧；median 取不到时
+            # （理论上 rawMean 有值就取得到）退回 Praat 自己的均值，宁可退回也不报 undefined。
+            "if mean = undefined",
+            "    mean = rawMean",
+            "endif",
+            'meanNote$ = ""',
+            "if abs (mean - rawMean) > 1",
+            '    meanNote$ = "（含被剔除帧的原始平均为 " + fixed$ (rawMean, 1) + " Hz）"',
+            "endif",
             "if minimum = undefined or maximum = undefined",
             _write_result(
                 context,
@@ -769,6 +792,7 @@ def _build_pitch_statistics(
                     quote(" Hz（这一段里没有可信的最高/最低值）"),
                     "rangeNote$",
                     "pitchLimit$",
+                    "meanNote$",
                 ],
             ),
             "else",
@@ -790,6 +814,7 @@ def _build_pitch_statistics(
                     quote(" 秒"),
                     "rangeNote$",
                     "pitchLimit$",
+                    "meanNote$",
                 ],
             ),
             "endif",
@@ -906,6 +931,25 @@ def _build_object_info(arguments: Mapping[str, Any], context: ToolContext) -> st
         )
     if not has_duration:
         fragments.append(quote("：这类对象没有时长信息"))
+    # 编辑器圈选写清楚占目标时长的百分比：报告阶段没有工具，只有这些数字；
+    # 「选段在词里哪个位置」必须能靠算术定，不能让模型凭印象说词首/词中
+    # （2026-10-04 实测：它把含「た」爆破点的选段说成「词首辅音之前」）。
+    selection = row.selection
+    if has_duration and selection and selection[0] is not None and selection[1] is not None:
+        lines.extend([f"selStart = {float(selection[0]):.6f}", f"selEnd = {float(selection[1]):.6f}"])
+        fragments.extend(
+            [
+                quote("；圈选 "),
+                "fixed$ (selStart, 3)",
+                quote("–"),
+                "fixed$ (selEnd, 3)",
+                quote(" 秒（占时长 "),
+                "fixed$ (selStart / duration * 100, 0)",
+                quote("–"),
+                "fixed$ (selEnd / duration * 100, 0)",
+                quote("%）"),
+            ]
+        )
     lines.append(_write_result(context, fragments))
     return _assemble(lines, context)
 
@@ -923,7 +967,7 @@ def _point_query_lines(
     """按 ``time``（可以是多个时刻）写若干行「某时刻 = 数值」的结果。"""
 
     lines: list[str] = []
-    fallback = "duration / 2" if row is None else _default_time_expression(row)
+    fallback = "duration / 2" if row is None else _default_time_expression(row, arguments)
     for expression in _query_times(arguments, fallback=fallback):
         lines.append(f"time = {expression}")
         lines.extend(_clamp_time_lines())
@@ -968,7 +1012,7 @@ def _selection_range(
     回话里才有"按编辑器圈选"的出处）。显式给了别的范围时不抢用户的数。
     """
 
-    if row is None:
+    if row is None or arguments.get('_whole_object'):
         return None
     selection = row.selection
     if selection is None:
@@ -1017,10 +1061,10 @@ def _range_lines(
     return lines
 
 
-def _default_time_expression(row: ObjectRow) -> str:
+def _default_time_expression(row: ObjectRow, arguments: Mapping[str, Any] | None = None) -> str:
     """点查询没给时刻时：圈了选区就用选区中点，否则用对象中点。"""
 
-    selection = row.selection
+    selection = None if (arguments or {}).get('_whole_object') else row.selection
     if selection is None:
         return "duration / 2"
     return f"{(selection[0] + selection[1]) / 2:.6f}"
@@ -1537,15 +1581,20 @@ def _build_vot_explicit(arguments: Mapping[str, Any], context: ToolContext) -> s
                         "fixed$ (tier, 0)",
                         quote(" 层 "),
                         "fixed$ (t1, 3)",
-                        quote(" 秒（爆破）→ "),
+                        quote(" 秒（爆破，占时长 "),
+                        "fixed$ (t1 / duration * 100, 0)",
+                        quote("%）→ "),
                         "fixed$ (t2, 3)",
-                        quote(" 秒（浊音起始）"),
+                        quote(" 秒（浊音起始，占时长 "),
+                        "fixed$ (t2 / duration * 100, 0)",
+                        quote("%）"),
                         "note$",
                     ],
                 ),
             ]
         )
     else:
+        lines.append("duration = Get total duration")
         lines.append(
             _write_result(
                 context,
@@ -1556,9 +1605,13 @@ def _build_vot_explicit(arguments: Mapping[str, Any], context: ToolContext) -> s
                     "fixed$ (vot * 1000, 1)",
                     quote(" 毫秒）："),
                     "fixed$ (t1, 3)",
-                    quote(" 秒（爆破）→ "),
+                    quote(" 秒（爆破，占时长 "),
+                    "fixed$ (t1 / duration * 100, 0)",
+                    quote("%）→ "),
                     "fixed$ (t2, 3)",
-                    quote(" 秒（浊音起始）；按给出的两个时刻相减，未做自动检测"),
+                    quote(" 秒（浊音起始，占时长 "),
+                    "fixed$ (t2 / duration * 100, 0)",
+                    quote("%）；按给出的两个时刻相减，未做自动检测"),
                 ],
             )
         )
@@ -1892,13 +1945,17 @@ def _build_vot_auto(arguments: Mapping[str, Any], context: ToolContext) -> str:
                     "fixed$ (vot * 1000, 1)",
                     quote(" 毫秒）：爆破 "),
                     "fixed$ (burstTime, 3)",
-                    quote(" 秒（"),
+                    quote(" 秒（占时长 "),
+                    "fixed$ (burstTime / duration * 100, 0)",
+                    quote("%，"),
                     "burstBand$",
                     quote(" 能量升 "),
                     "fixed$ (burstRise, 1)",
                     quote(" dB）→ 浊音起始 "),
                     "fixed$ (voicingTime, 3)",
-                    quote(" 秒（自相关基频 "),
+                    quote(" 秒（占时长 "),
+                    "fixed$ (voicingTime / duration * 100, 0)",
+                    quote("%，自相关基频 "),
                     "fixed$ (f0Onset, 1)",
                     quote(" Hz，之后 50 毫秒内谐噪比最高 "),
                     "fixed$ (hnrMax, 1)",
@@ -1906,7 +1963,11 @@ def _build_vot_auto(arguments: Mapping[str, Any], context: ToolContext) -> str:
                     "fixed$ (tmin, 3)",
                     quote("–"),
                     "fixed$ (tmax, 3)",
-                    quote(" 秒；爆破与浊音起始分开估计，请对着语图核对"),
+                    quote(" 秒（占时长 "),
+                    "fixed$ (tmin / duration * 100, 0)",
+                    quote("–"),
+                    "fixed$ (tmax / duration * 100, 0)",
+                    quote("%）；爆破与浊音起始分开估计，请对着语图核对"),
                     "caution$",
                     "secondNote$",
                     "rangeNote$",
@@ -2713,13 +2774,31 @@ def measure_signature() -> str:
     )
 
 
+#: ``parameter`` 里分隔多个参数名的字符（半角/全角逗号、顿号、分号）。
+MEASURE_SEPARATORS = ",，、;；"
+
+
+def _measure_pattern() -> str:
+    """``parameter`` 的合法写法：一个参数名，或用分隔符连起来的一串参数名。
+
+    工具说明（``summary`` / ``signature``）和 :func:`_measure_names` 一直允许
+    ``"f1,f2"``，但 schema 原来只写了 ``enum``（单个名字），于是按说明书传多个
+    名字会被 :mod:`praat_ai.tool_guards` 的 JSON Schema 校验判成非法参数
+    （2026-10-06 实测：连续两次被拒后 ``state.failed`` 触发 ``BranchExit``，
+    整个工具阶段终止）。这里让 schema 与说明书同源，仍然拦得住拼错的参数名。
+    """
+
+    names = "|".join(re.escape(name) for name in measures.load_table().parameters())
+    return rf"^\s*(?:{names})(?:\s*[{MEASURE_SEPARATORS}]\s*(?:{names}))*\s*$"
+
+
 def _measure_schema() -> dict[str, Any]:
     table = measures.load_table()
     properties: dict[str, Any] = {
         "parameter": {
             "type": "string",
-            "enum": table.parameters(),
-            "description": "要测哪一个参数：" + measure_parameter_help(),
+            "pattern": _measure_pattern(),
+            "description": "要测哪一个参数（多个用逗号隔开，如 \"f1,f2\"）：" + measure_parameter_help(),
         },
         "from": _seconds_arg("起点（秒），不填就是整个对象或编辑器圈选"),
         "to": _seconds_arg("终点（秒），不填就是整个对象或编辑器圈选"),
@@ -2744,7 +2823,7 @@ def _measure_names(arguments: Mapping[str, Any]) -> list[str]:
     if isinstance(raw, (list, tuple, set)):
         pieces = [str(item) for item in raw]
     else:
-        pieces = re.split(r"[,，、;；\s]+", str(raw))
+        pieces = re.split(rf"[{MEASURE_SEPARATORS}\s]+", str(raw))
     names = [piece.strip() for piece in pieces if piece.strip()]
     if not names:
         raise ToolError("measure 要用 parameter 指定参数名。")
@@ -3204,7 +3283,7 @@ class LocalTool:
 TOOLS: tuple[Tool, ...] = (
     Tool(
         name="object_info",
-        summary="查看对象的基本信息：类型、名称、时长、通道数和采样率。",
+        summary="查看对象的基本信息：类型、名称、时长、通道数和采样率；有编辑器圈选时额外给出圈选段占时长的百分比。",
         signature="object（可选，对象 id 或名称）",
         build=_build_object_info,
     ),
@@ -3288,7 +3367,7 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="vot",
-        summary="算 VOT（嗓音起始时间）：给了 burst（爆破）和 voicing（浊音起始）就直接相减；只给 from/to 就在这个大概范围里自动估计（结果标注是估计值）。",
+        summary="算 VOT（嗓音起始时间）：给了 burst（爆破）和 voicing（浊音起始）就直接相减；只给 from/to 就在这个大概范围里自动估计（结果标注是估计值）。结果同时给出爆破与浊音起始占目标时长的百分比。",
         signature="burst、voicing（秒，给全就相减）、from、to（秒，自动估计的范围）、burst_db（默认 6，爆破最小升幅 dB）、pitch_floor（默认 75）、tier（默认 1）、object（可选）",
         build=_build_vot,
     ),

@@ -1,0 +1,93 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "revision": "ab45264919aaeb8a421cc156f1a5459ef9d60b72",
+  "files": [
+    "codex-rs/app-server/src/request_processors/thread_sections.rs",
+    "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSection.ts",
+    "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSectionAppearance.ts",
+    "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSectionMoveParams.ts",
+    "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSectionUpdateParams.ts",
+    "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSectionCreateParams.ts",
+    "codex-rs/app-server-protocol/schema/typescript/v2/ThreadForkParams.ts",
+    "codex-rs/state/migrations/0045_threads_section.sql",
+    "codex-rs/state/migrations/0046_threads_section_order.sql",
+    "codex-rs/state/src/runtime/thread_sections.rs",
+    "codex-rs/thread-store/src/local/move_thread_to_section.rs",
+    "codex-rs/thread-store/src/local/paginated_fork.rs",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "verifiedFiles": [
+    {
+      "path": "codex-rs/app-server/src/request_processors/thread_sections.rs",
+      "gitBlob": "6491b3bc78391419ceaed0c093bc6b6dae16d379",
+      "sha256": "466d05e92b61020308d4b432869132e480ff00e1f4ba1866cf7a9d0b3e0dd989"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSection.ts",
+      "gitBlob": "17cde81af13c36111519670c4bb1ea10cf4c07cf",
+      "sha256": "c4bea0195a8cfa657f585db2698f4684a2bd1231f68c53f88f6aea87669f8ee5"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSectionAppearance.ts",
+      "gitBlob": "c6eab7343f9c5174d288bc2d9220ab2273ce4696",
+      "sha256": "e56160b23e50b1019b41e8d69c55d7a910fecd9a41f60e4657e49ea06a557827"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSectionMoveParams.ts",
+      "gitBlob": "b3b70cb68b098c4556c34222c47e7897cdaaba1e",
+      "sha256": "a0d261fe7558ad860d07f4faee25c8b58c821f34cb572bab89a73229de94a6c2"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSectionUpdateParams.ts",
+      "gitBlob": "1010200c3575dd4c3ce9187aba935bb40bca6402",
+      "sha256": "58b96ed72134ea5e8ebfb868718eb2589f66d0a69d0552348712cc0b48422ffc"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSectionCreateParams.ts",
+      "gitBlob": "e6272c3381278b57988bb210512509076498cbfc",
+      "sha256": "19a195f9f50ab377d933ccb0813ef7b2bc9ff6a70c5fd66041df155b5c85cdb3"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadForkParams.ts",
+      "gitBlob": "88ff693611b9026156791c24310beba072b89350",
+      "sha256": "0929c6464eef63b260b89dea161381698588e966b76ceb506ccd09cfba4a50cf"
+    },
+    {
+      "path": "codex-rs/state/migrations/0045_threads_section.sql",
+      "gitBlob": "84fb1c8f51daa39130ddfacb0a57bcecc0f77432",
+      "sha256": "50a7269c0b0b82d773431dccd22302b9c448fda42cd4a92b67ad050198b9526c"
+    },
+    {
+      "path": "codex-rs/state/migrations/0046_threads_section_order.sql",
+      "gitBlob": "ad16a06272fb1e7cd893e729afead9c5c27b6735",
+      "sha256": "71db2dc709d5aab0d62c1320bcb4ad7a77d0fb0a66a2a467d2de4bb5a3ed38ad"
+    },
+    {
+      "path": "codex-rs/state/src/runtime/thread_sections.rs",
+      "gitBlob": "f8c6f02378426f683a6e6a3e1692bae586f053c0",
+      "sha256": "240c62e1c904de101694a8d966b42ddd49f5bf76b09ba120306f834194eca3c3"
+    },
+    {
+      "path": "codex-rs/thread-store/src/local/move_thread_to_section.rs",
+      "gitBlob": "ef6d641d536b1899fa1c0af7e91702232b60b71f",
+      "sha256": "8b774b008cced3b052e73ff13d21573d2f1c779f3b4c4a68776dea0883c2b436"
+    },
+    {
+      "path": "codex-rs/thread-store/src/local/paginated_fork.rs",
+      "gitBlob": "0b14091267769ac55b5751e20ddb6798196f2431",
+      "sha256": "6ac306f8f8ddb83e977467f778cd18a7f67c083793784f4d70e9df13d24fd85c"
+    },
+    {
+      "path": "LICENSE",
+      "gitBlob": "4606e72e042564097e8780d66c1d4dcb611869bd",
+      "sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc"
+    },
+    {
+      "path": "NOTICE",
+      "gitBlob": "2805899d56d0332d175cfc613c67d45d6f006db7",
+      "sha256": "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915"
+    }
+  ],
+  "verifiedAgainst": "git ls-tree at fixed revision; Git blob SHA-1 and SHA-256"
+}

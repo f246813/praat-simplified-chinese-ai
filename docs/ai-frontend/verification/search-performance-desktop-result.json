@@ -1,0 +1,19 @@
+{
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedData": true,
+  "sessions": 500,
+  "messages": 6000,
+  "inputToResultMilliseconds": 1086.36,
+  "fullHistoryRequestsDuringSearch": 0,
+  "searchRequests": 1,
+  "searchRPC": [
+    {
+      "method": "sessions.search",
+      "ms": 380.2,
+      "bytes": 24
+    }
+  ],
+  "passed": true,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0"
+}

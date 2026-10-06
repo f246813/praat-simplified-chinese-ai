@@ -7,7 +7,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { placeContextMenu, type ContextMenuPlacement, type ContextMenuPoint } from './context-menu';
-export type ContextMenuItem = {id: string; label: string; icon?: ReactNode; disabled?: boolean; danger?: boolean; separatorBefore?: boolean; onSelect: () => void};
+export type ContextMenuItem = {id: string; label: string; icon?: ReactNode; disabled?: boolean; danger?: boolean; separatorBefore?: boolean; submenu?: boolean; back?: boolean; onSelect: () => void};
 export type ContextMenuState = {label: string; items: ContextMenuItem[]; point: ContextMenuPoint; trigger: HTMLElement | null};
 export function ContextMenu({state, onClose}: {state: ContextMenuState | null; onClose: () => void}) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -67,6 +67,11 @@ export function ContextMenu({state, onClose}: {state: ContextMenuState | null; o
     return () => cancelAnimationFrame(frame);
   }, [Boolean(placement), state?.point]);
   const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if(event.key==='ArrowRight'||event.key==='ArrowLeft'){
+      const focused=(document.activeElement as HTMLElement)?.dataset.contextMenuItem;
+      const item=event.key==='ArrowLeft'?state?.items.find(item=>item.back):state?.items.find(item=>item.id===focused&&item.submenu);
+      if(item&&!item.disabled){event.preventDefault();event.stopPropagation();onClose();item.onSelect();}return;
+    }
     if (event.key === 'Tab') { onClose(); return; }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'));
@@ -80,8 +85,8 @@ export function ContextMenu({state, onClose}: {state: ContextMenuState | null; o
   return createPortal(<div ref={menuRef} className={`context-menu${placement ? ' is-open' : ''}`} role="menu" aria-label={state.label} onKeyDown={onMenuKeyDown} onContextMenu={event => {event.preventDefault(); event.stopPropagation();}} style={placement ? {top: `${placement.top}px`, left: `${placement.left}px`} : undefined}>
     {state.items.map((item, index) => <Fragment key={item.id}>
       {item.separatorBefore && index > 0 ? <div className="context-menu-separator" role="separator"/> : null}
-      <button type="button" role="menuitem" className={`context-menu-item${item.danger ? ' danger' : ''}`} data-context-menu-item={item.id} disabled={item.disabled} onClick={() => {onClose(); item.onSelect();}}>
-        {item.icon ? <span className="context-menu-icon" aria-hidden>{item.icon}</span> : null}<span className="context-menu-label">{item.label}</span>
+      <button type="button" role="menuitem" aria-haspopup={item.submenu?'menu':undefined} className={`context-menu-item${item.danger ? ' danger' : ''}`} data-context-menu-item={item.id} disabled={item.disabled} onClick={() => {onClose(); item.onSelect();}}>
+        {item.icon ? <span className="context-menu-icon" aria-hidden>{item.icon}</span> : null}<span className="context-menu-label">{item.label}</span>{item.submenu&&<span className="context-submenu-arrow" aria-hidden>›</span>}
       </button>
     </Fragment>)}
   </div>, document.body);

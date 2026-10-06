@@ -1,0 +1,9 @@
+{
+  "success": true,
+  "frontend_model": "云端API模式",
+  "frontend_status": "已停止",
+  "frontend_running": false,
+  "configured": true,
+  "vram_warning": "green",
+  "vram_free_gb": 3.91015625
+}

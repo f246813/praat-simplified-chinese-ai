@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/vastsa/PI-Desktop",
+  "revision": "0d47d26769ecbeca1c3ab56fa83b58a91de8190e",
+  "files": [
+    {
+      "path": "apps/desktop/src/lib/project-name.ts",
+      "gitBlob": "6eeb97a59508725ba7e2f39f50c66544050cf9f7",
+      "sha256": "9b8ba18a552737e7df1d92f06261fd3c134892ce8e4c143b5539a62bc6db111f"
+    }
+  ]
+}

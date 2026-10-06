@@ -94,9 +94,9 @@ def focus_existing_window(process_id: int) -> bool:
     return True
 
 
-def main(runtime: Path | None = None) -> int:
+def main(runtime: Path | None = None, *, model_settings=False) -> int:
     """Native menu entry: quick detached spawn or identity-checked window reuse."""
-    from praat_ai.desktop_launch import check_desktop_dependencies, report_failure
+    from praat_ai.desktop_launch import check_desktop_dependencies, report_failure, request_model_settings
     from praat_ai.process import identities_match, process_identity
     from praat_ai.service_lock import service_transition_lock
     directory = Path(__file__).resolve().parent
@@ -114,14 +114,21 @@ def main(runtime: Path | None = None) -> int:
                 if process_id and process_alive(process_id):
                     # Focus the actual desktop, not an arbitrary window for a reused PID.
                     if focus_existing_window(process_id):
+                        if model_settings:
+                            request_model_settings(runtime, process_id)
                         return 0
                     try:
                         record = json.loads((runtime / 'chat-process.json').read_text(encoding='utf8'))
                         if record.get('pid') == process_id and identities_match(record.get('identity') or {}, process_identity(process_id)):
+                            if model_settings:
+                                request_model_settings(runtime, process_id)
                             return 0  # Same process is still initializing; do not duplicate it.
                     except (OSError, ValueError, AttributeError):
                         pass
-            return start_new_chat_window(directory, pid_path)
+            result = start_new_chat_window(directory, pid_path)
+            if result == 0 and model_settings:
+                request_model_settings(runtime, int(pid_path.read_text(encoding='utf8')))
+            return result
     except Exception as error:
         return report_failure(error, runtime=runtime)
 

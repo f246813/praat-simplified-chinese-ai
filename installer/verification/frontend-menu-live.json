@@ -1,0 +1,17 @@
+{
+  "checks": [
+    "cloud_label_and_configured_stopped",
+    "red_native_coloured_circle_at_511MiB",
+    "yellow_native_coloured_circle_at_512MiB",
+    "green_native_coloured_circle_at_1536MiB",
+    "unavailable_GPU_does_not_show_green",
+    "real_connected_desktop_running",
+    "stop_menu_closes_desktop_and_reports_stopped",
+    "local_saved_Unicode_quoted_preset",
+    "missing_local_file_unconfigured",
+    "incomplete_API_unconfigured",
+    "dictionary_menu_and_selected_configuration_preserved"
+  ],
+  "executable": "C:\\Users\\f2468\\Desktop\\Praat\\稳定早期版\\.build-tools\\frontend-menu-20261005\\Praat.exe",
+  "realCloud": false
+}

@@ -1,0 +1,328 @@
+--- before/ai/frontend/src/SessionRow.tsx
++++ ai/frontend/src/SessionRow.tsx
+@@ -23,7 +23,7 @@
+   useEffect(() => () => clearTimeout(prefetch.current),[session.id]);
+   const close = useCallback(() => setMenu(null), []);
+   const readonly = readOnly(session); const running = store.running(session.id);
+-  const cannotDelete = readonly || Boolean(running) || Boolean(state.submitting[session.id]);
++  const cannotDelete = Boolean(running) || Boolean(state.submitting[session.id]);
+   const menuState = useMemo<ContextMenuState | null>(() => menu ? {
+     ...menu, label: `会话操作 ${session.title}`,
+     items: [
+--- before/ai/frontend/src/store.ts
++++ ai/frontend/src/store.ts
+@@ -1,7 +1,7 @@
+ import { useSyncExternalStore } from 'react';
+-import { activeTask, readOnly, type Attachment, type Bootstrap, type HistorySection, type OrganizationSnapshot, type HostEvent, type Message, type ReadingAnchor, type Rpc, type Session, type Settings, type Task } from './types';
++import { activeTask, readOnly, type Attachment, type Bootstrap, type HistorySection, type HistoryGroupAction, type OrganizationSnapshot, type HostEvent, type Message, type ReadingAnchor, type Rpc, type Session, type Settings, type Task } from './types';
+ export interface State { boot?: Bootstrap; sessions: Session[]; messages: Record<string, Message[]>; tasks: Record<string, Task>; selected?: string; loading: Record<string, boolean>; submitting: Record<string, boolean>; error?: string; connected: boolean; organizationBusy?: boolean; modelSettingsRequest?: string }
+-const organizationMetadata=(session:Session):Partial<Session>=>Object.fromEntries((['pinned','sectionId','sectionPosition','archived','forkedFrom','forkedFromTitle'] as const).filter(key=>key in session).map(key=>[key,session[key]]));
++const organizationMetadata=(session:Session):Partial<Session>=>Object.fromEntries((['pinned','sectionId','sectionPosition','archived','timeGroupDetached','forkedFrom','forkedFromTitle'] as const).filter(key=>key in session).map(key=>[key,session[key]]));
+ export function applyEvent(state: State, event: HostEvent): State {
+   const {sessionId, taskId, payload} = event;
+   // Never infer attribution from the selected UI thread.
+@@ -171,13 +171,29 @@
+   async archiveSection(sectionId:string|null,archived:boolean) {
+     return this.organize(async()=>{this.applyOrganization(await this.rpc('sections.archive',{sectionId,archived}));if(archived)await this.selectAfterArchive();});
+   }
++  async manageGroup(sessionIds:string[],action:HistoryGroupAction) {
++    return this.organize(async()=>{
++      const ids=new Set(sessionIds);
++      if(action!=='detach'&&sessionIds.some(id=>this.running(id)||this.state.submitting[id]))throw new Error('分组中有运行会话，不能删除或归档');
++      const snapshot=await this.rpc('sessions.group',{sessionIds,action});
++      const selectedDeleted=action==='delete'&&Boolean(this.state.selected&&ids.has(this.state.selected));
++      if(action==='delete') {
++        const messages={...this.state.messages};
++        for(const id of ids){clearTimeout(this.viewTimers.get(id));this.views.delete(id);this.attachments.delete(id);delete messages[id];}
++        this.update({...this.state,messages});
++      }
++      this.applyOrganization(snapshot);
++      if(selectedDeleted){const next=this.state.sessions.find(s=>!s.archived);if(next)await this.select(next.id);else this.update({...this.state,selected:undefined});}
++      if(action==='archive')await this.selectAfterArchive();
++    });
++  }
+   async fork(id:string) {
+     return this.organize(async()=>{await this.flushView(id);const session=await this.rpc('sessions.fork',{sessionId:id});this.organizationRevision++;this.update({...this.state,sessions:sortSessions([session,...this.state.sessions])});await this.select(session.id);});
+   }
+   async delete(id: string) {
+     return this.organize(async()=>{
+     const session = this.state.sessions.find(s => s.id === id);
+-    if (!session || (readOnly(session) && !(id.startsWith('legacy:') && session.archived)) || this.running(id) || this.state.submitting[id]) throw new Error('只读或运行中的会话不能删除');
++    if (!session || this.running(id) || this.state.submitting[id]) throw new Error('会话不存在或正在运行，不能删除');
+     await this.rpc('sessions.delete', {sessionId: id});
+     this.organizationRevision++;
+     clearTimeout(this.viewTimers.get(id)); this.views.delete(id); this.attachments.delete(id);
+--- before/ai/frontend/src/demo.ts
++++ ai/frontend/src/demo.ts
+@@ -58,13 +58,24 @@
+       case 'sections.update': {requireSection(params.sectionId);const section=sections.find(s=>s.id===params.sectionId)!;if(section.builtin)throw new Error('内置置顶分区不能编辑');section.name=sectionName(params.name);if('appearance'in params)section.appearance=params.appearance;return structuredClone(section);}
+       case 'sections.delete': {requireSection(params.sectionId);if(params.sectionId===pinnedId)throw new Error('内置置顶分区不能移除');sessions.filter(s=>s.sectionId===params.sectionId).forEach(s=>move(s,null));sections.splice(sections.findIndex(s=>s.id===params.sectionId),1);return organization();}
+       case 'sessions.archive': if(!session)throw new Error('会话不存在');return archive([session],params.archived);
++      case 'sessions.group': {
++        const members:Session[]=params.sessionIds.map((id:string)=>{const value=sessions.find(s=>s.id===id);if(!value)throw new Error('会话不存在');return value;});
++        if(params.action==='archive')return archive(members,true);
++        if(params.action==='delete'&&members.some(s=>[...tasks.values()].some(t=>t.sessionId===s.id&&activeTask(t))))throw new Error('分组中有运行会话，不能删除');
++        for(const item of members){
++          if(params.action==='detach')item.timeGroupDetached=true;
++          else if(params.action==='delete'){sessions.splice(sessions.indexOf(item),1);delete messages[item.id];}
++          else throw new Error('分组操作无效');
++        }
++        return organization();
++      }
+       case 'sections.archive': requireSection(params.sectionId);return archive(sessions.filter(s=>(s.sectionId??null)===params.sectionId),params.archived);
+       case 'sessions.fork': {
+         if(!session)throw new Error('会话不存在');const s:Session={id:`demo-fork-${++nextId}`,title:(session.title+' · 分叉').slice(0,100),created:now,updated:now,readOnly:false,draft:'',scroll:0,anchor:null,archived:false,forkedFrom:session.id,forkedFromTitle:session.title};
+         messages[s.id]=structuredClone(messages[session.id]).map(message=>{message.id=`fork-message-${++nextId}`;delete message.taskId;if(message.status==='running')message.status='interrupted';message.activities?.forEach(a=>{a.id=`fork-activity-${++nextId}`;if(a.status==='running')a.status='interrupted';});return message;});
+         sessions.unshift(s);move(s,session.sectionId===pinnedId?null:session.sectionId??null);return structuredClone(s);
+       }
+-      case 'sessions.delete': if (!session || (session.readOnly && !(session.id.startsWith('legacy:') && session.archived)) || [...tasks.values()].some(t => t.sessionId === session.id && activeTask(t))) throw new Error('会话不能删除'); sessions.splice(sessions.indexOf(session),1); delete messages[session.id]; return {ok:true};
++      case 'sessions.delete': if (!session || [...tasks.values()].some(t => t.sessionId === session.id && activeTask(t))) throw new Error('会话不能删除'); sessions.splice(sessions.indexOf(session),1); delete messages[session.id]; return {ok:true};
+       case 'sessions.view': if (session) { if (params.draft !== undefined) session.draft=params.draft; if (params.scroll !== undefined) session.scroll=params.scroll; if (params.anchor !== undefined) { if (!params.anchor || typeof params.anchor.messageId !== 'string' || !Number.isFinite(params.anchor.offset)) throw new Error('阅读锚点无效'); session.anchor={messageId:params.anchor.messageId,offset:Number(params.anchor.offset)}; } } return {ok:true};
+       case 'sessions.context': {
+         if (!session) throw new Error('会话不存在');
+--- before/ai/frontend/src/types.ts
++++ ai/frontend/src/types.ts
+@@ -7,6 +7,8 @@
+ export interface ReadingAnchor { messageId: string; offset: number }
+ export interface Session { id: string; title: string; created: string; updated: string; readOnly: boolean; pinned?: boolean; draft: string; scroll: number; anchor?: ReadingAnchor | null; sectionId?: string | null; sectionPosition?: number | null; archived?: boolean; forkedFrom?: string | null; forkedFromTitle?: string | null }
+ export interface Session { projectPath?: string|null; connectionId?: string; connectionLabel?: string }
++export interface Session { timeGroupDetached?: boolean }
++export type HistoryGroupAction = 'delete' | 'detach' | 'archive';
+ export interface Attachment { id: string; name: string; mime: string; size: number }
+ export interface Activity { id: string; type: 'progress' | 'thinking' | 'tool' | 'compression'; text?: string; name?: string; args?: object; result?: unknown; status?: string; execution?: string }
+ export interface Message { id: string; role: 'user' | 'assistant'; content: string; status?: 'running' | 'complete' | 'partial' | 'cancelled' | 'failed' | 'interrupted'; taskId?: string; attachments?: Attachment[]; activities?: Activity[] }
+@@ -23,6 +25,7 @@
+   'sessions.fork': [{sessionId: string}, Session];
+   'sessions.section': [{sessionId: string; sectionId: string | null; beforeSessionId?: string}, OrganizationSnapshot];
+   'sessions.archive': [{sessionId: string; archived: boolean}, OrganizationSnapshot];
++  'sessions.group': [{sessionIds: string[]; action: HistoryGroupAction}, OrganizationSnapshot];
+   'sections.create': [{name: string; appearance?: HistorySection['appearance']}, HistorySection];
+   'sections.update': [{sectionId: string; name: string; appearance?: HistorySection['appearance']}, HistorySection];
+   'sections.delete': [{sectionId: string}, OrganizationSnapshot];
+--- before/ai/frontend/src/bridge.ts
++++ ai/frontend/src/bridge.ts
+@@ -1,6 +1,6 @@
+ import type { Methods, Rpc } from './types';
+ declare global { interface Window { pywebview?: {api?: {rpc?: (method: string, params: unknown) => Promise<unknown>}} } }
+-const allowed = new Set<keyof Methods>(['bootstrap', 'sessions.create', 'sessions.get', 'sessions.search', 'sessions.context', 'sessions.rename', 'sessions.pin', 'sessions.delete', 'sessions.view', 'sessions.fork', 'sessions.section', 'sessions.archive', 'sections.create', 'sections.update', 'sections.delete', 'sections.archive', 'tasks.submit', 'tasks.cancel', 'events.poll', 'settings.get', 'settings.save', 'settings.test', 'attachments.choose', 'attachments.import', 'attachments.preview', 'links.open']);
++const allowed = new Set<keyof Methods>(['bootstrap', 'sessions.create', 'sessions.get', 'sessions.search', 'sessions.context', 'sessions.rename', 'sessions.pin', 'sessions.delete', 'sessions.view', 'sessions.fork', 'sessions.section', 'sessions.archive', 'sessions.group', 'sections.create', 'sections.update', 'sections.delete', 'sections.archive', 'tasks.submit', 'tasks.cancel', 'events.poll', 'settings.get', 'settings.save', 'settings.test', 'attachments.choose', 'attachments.import', 'attachments.preview', 'links.open']);
+ export class HostBridge {
+   constructor(private adapter?: Rpc) {}
+   ready() { return Boolean(this.adapter || window.pywebview?.api?.rpc); }
+--- before/ai/frontend/src/HistoryOrganization.tsx
++++ ai/frontend/src/HistoryOrganization.tsx
+@@ -1,14 +1,16 @@
+ // Local renderer for the open Codex thread-section contract; see codex-source/NOTICE.md.
+-import {useState,type MouseEvent,type DragEvent} from 'react';
++import {useState,type MouseEvent,type KeyboardEvent,type DragEvent} from 'react';
+ import {Archive,ArchiveRestore,ChevronDown,Folder,FolderPlus,MoreHorizontal,Pencil,Plus,Trash2} from 'lucide-react';
+ import {ChatStore,useChatState} from './store';
+-import {readOnly,type HistorySection,type Session} from './types';
++import {readOnly,type HistorySection,type Session,type HistoryGroupAction} from './types';
+ import {ContextMenu,type ContextMenuState} from './pi/ContextMenu';
+ import {Modal} from './ui';
+ import './codex/organization.css';
+ 
+ type Anchor=Pick<ContextMenuState,'point'|'trigger'>;
+ type Editing={section?:HistorySection;session?:Session};
++type TimeGroup={name:string;sessionIds:string[]};
++const groupActionLabels:Record<HistoryGroupAction,string>={delete:'删除分区及其内容',detach:'仅删除分区',archive:'全部归档'};
+ const PINNED='01984de2-8f74-7c91-a3b2-5c5e937cf318';
+ export const ordinarySection:HistorySection={id:'',name:'对话历史',appearance:null,builtin:true};
+ 
+@@ -18,11 +20,14 @@
+   const [menu,setMenu]=useState<{section:HistorySection;anchor:Anchor}>();
+   const [editing,setEditing]=useState<Editing>();
+   const [confirm,setConfirm]=useState<{section:HistorySection;kind:'archive'|'restore'|'remove'}>();
++  const [groupMenu,setGroupMenu]=useState<TimeGroup & {anchor:Anchor}>();
++  const [groupConfirm,setGroupConfirm]=useState<TimeGroup & {action:HistoryGroupAction}>();
+   const [busy,setBusy]=useState(false);const [error,setError]=useState('');
+   const [name,setName]=useState('');const [icon,setIcon]=useState('');const [color,setColor]=useState('');
+   const edit=(request:Editing)=>{setName(request.section?.name||'');setIcon(request.section?.appearance?.icon||'');setColor(request.section?.appearance?.color||'');setError('');setEditing(request);};
+   const action=async(operation:()=>Promise<unknown>,close:()=>void)=>{setBusy(true);setError('');try{await operation();close();}catch(error){setError(error instanceof Error?error.message:String(error));}finally{setBusy(false);}};
+   const members=(section:HistorySection,inArchive=archived)=>state.sessions.filter(s=>Boolean(s.archived)===inArchive&&(section.builtin&&section.id===PINNED?Boolean(s.pinned):!s.pinned&&(s.sectionId||'')===section.id));
++  const groupMenuState:ContextMenuState|null=groupMenu?{...groupMenu.anchor,label:`分组操作 ${groupMenu.name}`,items:(['delete','detach','archive'] as const).map(kind=>({id:`group-${kind}`,label:groupActionLabels[kind],icon:kind==='archive'?<Archive size={14}/>:<Trash2 size={14}/>,danger:kind==='delete',separatorBefore:kind==='archive',disabled:state.organizationBusy||busy||(kind!=='detach'&&groupMenu.sessionIds.some(id=>store.running(id)||state.submitting[id])),onSelect:()=>{setError('');setGroupConfirm({...groupMenu,action:kind});}}))}:null;
+   const menuState:ContextMenuState|null=menu?{...menu.anchor,label:`分区操作 ${menu.section.name}`,items:[
+     {id:'edit-section',label:'编辑分区',icon:<Pencil size={14}/>,disabled:menu.section.builtin||state.organizationBusy,onSelect:()=>edit({section:menu.section})},
+     {id:'archive-section',label:archived?'恢复分区会话':'归档分区',icon:archived?<ArchiveRestore size={14}/>:<Archive size={14}/>,disabled:state.organizationBusy||!members(menu.section).length||(!archived&&members(menu.section).some(s=>store.running(s.id)||state.submitting[s.id])),onSelect:()=>{setError('');setConfirm({section:menu.section,kind:archived?'restore':'archive'});}},
+@@ -40,8 +45,14 @@
+     newSection:()=>edit({}),
+     move:(session:Session,anchor:Anchor,back:()=>void)=>setMoving({session,anchor,back}),
+     openMenu:(section:HistorySection,event:MouseEvent<HTMLButtonElement>)=>{const target=event.currentTarget,rect=target.getBoundingClientRect();setMenu(old=>old?.section.id===section.id?undefined:{section,anchor:{point:{x:rect.right+4,y:rect.bottom+4},trigger:target}});},
++    openGroupMenu:(name:string,sessions:Session[],event:MouseEvent<HTMLButtonElement>|KeyboardEvent<HTMLButtonElement>)=>{event.preventDefault();event.stopPropagation();const target=event.currentTarget,rect=target.getBoundingClientRect();setGroupMenu({name,sessionIds:sessions.map(s=>s.id),anchor:{point:'clientX'in event&&(event.clientX||event.clientY)?{x:event.clientX+4,y:event.clientY+4}:{x:rect.right+4,y:rect.bottom+4},trigger:target}});},
+     dialogs:<>
+       <ContextMenu state={menuState} onClose={()=>setMenu(undefined)}/><ContextMenu state={movingState} onClose={()=>setMoving(undefined)}/>
++      <ContextMenu state={groupMenuState} onClose={()=>setGroupMenu(undefined)}/>
++      {groupConfirm&&<Modal title={groupActionLabels[groupConfirm.action]} onClose={()=>{if(!busy)setGroupConfirm(undefined);}}>
++        <p>{groupConfirm.action==='detach'?`仅删除“${groupConfirm.name}”分区？其中 ${groupConfirm.sessionIds.length} 个会话会保留，并直接显示在上一级。`:groupConfirm.action==='delete'?`删除“${groupConfirm.name}”及其中 ${groupConfirm.sessionIds.length} 个会话？删除后无法在本应用中恢复。`:`归档“${groupConfirm.name}”中的全部 ${groupConfirm.sessionIds.length} 个会话？可从“设置 → 已归档会话”恢复。`}</p>
++        {error&&<p role="alert">{error}</p>}<div className="actions"><button disabled={busy} onClick={()=>setGroupConfirm(undefined)}>取消</button><button aria-label={`确认${groupActionLabels[groupConfirm.action]}`} className={groupConfirm.action==='delete'?'danger':'primary'} disabled={busy||state.organizationBusy} onClick={()=>void action(()=>store.manageGroup(groupConfirm.sessionIds,groupConfirm.action),()=>setGroupConfirm(undefined))}>{busy?'处理中…':'确认'}</button></div>
++      </Modal>}
+       {editing&&<Modal title={editing.section?'编辑分区':'新建分区'} onClose={()=>{if(!busy)setEditing(undefined);}}>
+         <label className="field"><span>分区名称</span><input aria-label="分区名称" autoFocus maxLength={100} value={name} onChange={e=>setName(e.target.value)}/></label>
+         <div className="section-appearance-fields"><label className="field"><span>分区图标</span><input aria-label="分区图标" placeholder="例如 🎵" value={icon} maxLength={16} onChange={e=>setIcon(e.target.value)}/></label><label className="field"><span>分区颜色</span><select aria-label="分区颜色" value={color} onChange={e=>setColor(e.target.value)}><option value="">默认</option>{[['#26715f','绿色'],['#3869b6','蓝色'],['#9257af','紫色'],['#b65d31','橙色']].map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label></div>
+--- before/ai/frontend/src/pi/sidebar/Sidebar.tsx
++++ ai/frontend/src/pi/sidebar/Sidebar.tsx
+@@ -5,7 +5,7 @@
+ import {useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent} from 'react';
+ import {AudioLines, ChevronDown, ChevronLeft, ChevronRight,FolderPlus, LoaderCircle, Plus, Search, Settings, Trash2, X} from 'lucide-react';
+ import {ChatStore, useChatState} from '../../store';
+-import {activeTask, readOnly, type Session} from '../../types';
++import {activeTask, type Session} from '../../types';
+ import {IconButton} from '../../ui';
+ import {SessionRow} from '../../SessionRow';
+ import {SidebarResizer} from '../../Panes';
+@@ -79,8 +79,12 @@
+   const pinnedIds=new Set(pinnedSessions.map(s=>s.id));
+   const history=rows.filter(s=>!pinnedIds.has(s.id)&&(!s.sectionId||!customIds.has(s.sectionId)));
+   const origins=groupSidebarOrigins(history,grouping);
+-  const groups=sort==='name'||query.trim()?[{group:'all' as const,sessions:history}]:groupSidebarSessionsByTime(history);
+-  const visibleHistory=grouping==='list'?groups.flatMap(g=>collapsed[g.group]?[]:g.sessions):origins.flatMap(g=>collapsed[g.id]?[]:(sort==='name'||query.trim()?[{group:'all',sessions:g.sessions}]:groupSidebarSessionsByTime(g.sessions)).flatMap(time=>collapsed[`${g.id}:${time.group}`]?[]:time.sessions));
++  const timeGroups=(sessions:SessionSummary[])=>sort==='name'||query.trim()?[{group:'all' as const,sessions}]:[
++    ...(sessions.some(s=>s.timeGroupDetached)?[{group:'ungrouped' as const,sessions:sessions.filter(s=>s.timeGroupDetached)}]:[]),
++    ...groupSidebarSessionsByTime(sessions.filter(s=>!s.timeGroupDetached)),
++  ];
++  const groups=timeGroups(history);
++  const visibleHistory=grouping==='list'?groups.flatMap(g=>collapsed[g.group]?[]:g.sessions):origins.flatMap(g=>collapsed[g.id]?[]:timeGroups(g.sessions).flatMap(time=>collapsed[`${g.id}:${time.group}`]?[]:time.sessions));
+   const flatSessionOrder=[...(collapsed[`section:${pinnedSection.id}`]?[]:pinnedSessions.map(s=>s.id)),...sectionRows.flatMap(({section,sessions})=>collapsed[`section:${section.id}`]?[]:sessions.map(s=>s.id)),...(collapsed.ordinary?[]:visibleHistory.map(s=>s.id))];
+ 
+   // Original Sidebar::handleMultiSelectClick: modifier toggle and anchored range.
+@@ -104,7 +108,7 @@
+   };
+   const chosen=state.sessions.filter(s=>selectedIds.has(s.id));
+   const deleteKey=`batch:${JSON.stringify([...selectedIds].sort())}`;
+-  const cannotDelete=chosen.some(s=>readOnly(s)||store.running(s.id)||state.submitting[s.id]);
++  const cannotDelete=chosen.some(s=>store.running(s.id)||state.submitting[s.id]);
+   const batchDelete=async()=>{
+     if(cannotDelete||deleting||!chosen.length)return;
+     if(armed!==deleteKey){setArmed(deleteKey);return;}
+@@ -115,10 +119,10 @@
+   const move=(id:string,sectionId:string|null,before?:string)=>{hover.hide();if(state.sessions.some(s=>s.id===id))void store.moveToSection(id,sectionId,sectionId?before:undefined).catch(store.report);};
+   const renderSessionRows=(sessions:SessionSummary[],sectionId:string|null=null)=>sessions.map(session=><SessionRow key={session.id} store={store} session={session} selected={state.selected===session.id} multiSelected={selectedIds.has(session.id)} onSelect={handleMultiSelectClick} onRename={onRename} onDelete={onDelete} onMove={organization.move} onDropBefore={(id,before)=>move(id,sectionId,before)} onHover={target=>{if(!optionsOpen)hover.show({session,target,temporary:true,space:'本地工作空间'});}} onHidePreview={hover.scheduleHide} onContextSelection={id=>{if(selectedIds.size&&!selectedIds.has(id))setSelectedIds(prev=>new Set([...prev,id]));}}/>);
+   const header=(section:typeof ordinarySection,count:number,key:string)=><HistorySectionHeader section={section} count={count} collapsed={Boolean(collapsed[key])} onToggle={()=>{hover.hide();setCollapsed(old=>({...old,[key]:!old[key]}));}} onMenu={event=>{hover.hide();organization.openMenu(section,event);}} onDrop={id=>move(id,section.id||null)}/>;
+-  const renderTimeGroups=(sessions:SessionSummary[],prefix='')=>(sort==='name'||query.trim()?[{group:'all' as const,sessions}]:groupSidebarSessionsByTime(sessions)).map(group=>{
++  const renderTimeGroups=(sessions:SessionSummary[],prefix='',origin='')=>timeGroups(sessions).map(group=>{
+     const key=`${prefix}${group.group}`;
+-    return <section className="sidebar-session-group" key={key}>
+-      {group.group!=='all'&&<button className="sidebar-time-group-header sidebar-group-toggle" aria-label={`${collapsed[key]?'展开':'折叠'} ${groupLabels[group.group]}`} aria-expanded={!collapsed[key]} onClick={()=>{hover.hide();setCollapsed(old=>({...old,[key]:!old[key]}));}}><ChevronDown className={collapsed[key]?'collapsed':''} size={12}/>{groupLabels[group.group]}<span>{group.sessions.length}</span></button>}
++    return <section className="sidebar-session-group" key={key} data-time-group={key}>
++      {group.group!=='all'&&group.group!=='ungrouped'&&<button onContextMenu={event=>{hover.hide();organization.openGroupMenu([origin,groupLabels[group.group]].filter(Boolean).join(' · '),group.sessions,event);}} onKeyDown={event=>{if(event.key==='ContextMenu'||event.shiftKey&&event.key==='F10'){hover.hide();organization.openGroupMenu([origin,groupLabels[group.group]].filter(Boolean).join(' · '),group.sessions,event);}}} className="sidebar-time-group-header sidebar-group-toggle" aria-label={`${collapsed[key]?'展开':'折叠'} ${groupLabels[group.group]}`} aria-expanded={!collapsed[key]} onClick={()=>{hover.hide();setCollapsed(old=>({...old,[key]:!old[key]}));}}><ChevronDown className={collapsed[key]?'collapsed':''} size={12}/>{groupLabels[group.group]}<span>{group.sessions.length}</span></button>}
+       {!collapsed[key]&&<div className="sidebar-session-group-body">{renderSessionRows(group.sessions)}</div>}
+     </section>;
+   });
+@@ -127,14 +131,14 @@
+     <button className="new-session" title="新建会话" aria-label="新建会话" onClick={()=>create(null)}><Plus size={19}/>{expanded&&'新建会话'}</button>
+     {expanded&&<label className="session-search"><Search size={15}/><input type="text" aria-label="搜索会话与消息" placeholder="搜索会话与消息" spellCheck={false} autoCorrect="off" autoCapitalize="off" value={query} onChange={event=>{setQuery(event.target.value);hover.hide();setSelectedIds(new Set());setArmed(null);}}/>{query&&<IconButton label="清除搜索" onClick={()=>setQuery('')}><X size={13}/></IconButton>}</label>}
+     {expanded&&<div className="sidebar-list-toolbar"><span className="sidebar-list-label">会话</span><div className="sidebar-toolbar-actions"><button className="sidebar-toolbar-button" aria-label="新建分区" onClick={organization.newSection}><FolderPlus size={15}/></button><SidebarOptions store={store} sort={sort} grouping={grouping} open={optionsOpen} onOpenChange={open=>{if(open)hover.hide();setOptionsOpen(open);}}/></div></div>}
+-    {expanded&&selectedIds.size>0&&<div className="sidebar-selection-bar"><span>已选 {selectedIds.size} 个会话</span><button aria-label={armed===deleteKey?`确认删除 ${chosen.length} 个会话`:'删除所选会话'} disabled={cannotDelete||deleting} title={cannotDelete?'所选记录包含只读或运行中的会话':undefined} onClick={()=>void batchDelete()}><Trash2 size={14}/>{armed===deleteKey?'确认删除':'删除'}</button><IconButton label="取消多选" onClick={()=>{setSelectedIds(new Set());setArmed(null);}}><X size={14}/></IconButton></div>}
++    {expanded&&selectedIds.size>0&&<div className="sidebar-selection-bar"><span>已选 {selectedIds.size} 个会话</span><button aria-label={armed===deleteKey?`确认删除 ${chosen.length} 个会话`:'删除所选会话'} disabled={cannotDelete||deleting} title={cannotDelete?'所选记录包含运行中的会话':undefined} onClick={()=>void batchDelete()}><Trash2 size={14}/>{armed===deleteKey?'确认删除':'删除'}</button><IconButton label="取消多选" onClick={()=>{setSelectedIds(new Set());setArmed(null);}}><X size={14}/></IconButton></div>}
+     <div className="session-list sidebar-session-groups" onKeyDown={moveFocus} onScroll={()=>{hover.hide();setOptionsOpen(false);}}>{expanded&&<>
+       {search?.loading&&<small className="search-status">正在搜索宿主历史…</small>}
+       {pinnedSessions.length>0&&<section className="sidebar-pinned-sessions" data-history-section={pinnedSection.id}>{header(pinnedSection,pinnedSessions.length,`section:${pinnedSection.id}`)}{!collapsed[`section:${pinnedSection.id}`]&&<div className="sidebar-session-group-body">{renderSessionRows(pinnedSessions,pinnedSection.id)}</div>}</section>}
+       {sectionRows.filter(({sessions})=>!query.trim()||sessions.length).map(({section,sessions})=><section key={section.id} data-history-section={section.id}>{header(section,sessions.length,`section:${section.id}`)}{!collapsed[`section:${section.id}`]&&(sessions.length?<div className="sidebar-session-group-body">{renderSessionRows(sessions,section.id)}</div>:<p className="history-section-empty">暂无会话</p>)}</section>)}
+       <section data-history-section="ordinary">{header(ordinarySection,history.length,'ordinary')}{!collapsed.ordinary&&(grouping==='list'?renderTimeGroups(history):origins.map(group=><section className="sidebar-origin-group" key={group.id} data-sidebar-origin={group.id}>
+         <button className="sidebar-origin-header sidebar-group-toggle" title={group.detail} aria-label={`${collapsed[group.id]?'展开':'折叠'}${grouping==='project'?'项目':'连接'} ${group.label}`} aria-expanded={!collapsed[group.id]} onClick={()=>{hover.hide();setCollapsed(old=>({...old,[group.id]:!old[group.id]}));}}><ChevronDown className={collapsed[group.id]?'collapsed':''} size={12}/><span className="sidebar-origin-name">{group.label}</span><span>{group.sessions.length}</span></button>
+-        {!collapsed[group.id]&&renderTimeGroups(group.sessions,`${group.id}:`)}
++        {!collapsed[group.id]&&renderTimeGroups(group.sessions,`${group.id}:`,group.label)}
+       </section>))}</section>
+       {!rows.length&&<p className="sidebar-session-empty">{query?'没有匹配记录':'暂无会话，创建一个开始探索'}</p>}
+     </>}</div>
+--- before/ai/frontend/src/codex/ArchivedSessions.tsx
++++ ai/frontend/src/codex/ArchivedSessions.tsx
+@@ -6,7 +6,7 @@
+ import * as Menu from '@radix-ui/react-dropdown-menu';
+ import {Check,ChevronDown,Folder,FolderOpen,ListFilter,MoreHorizontal,Search,Trash2,X} from 'lucide-react';
+ import type {ChatStore} from '../store';
+-import {readOnly,type HistorySection,type Session} from '../types';
++import {type HistorySection,type Session} from '../types';
+ import {IconButton,Modal} from '../ui';
+ import {ContextMenu,type ContextMenuState} from '../pi/ContextMenu';
+ import type {ThreadUnarchiveParams} from './protocol/ThreadUnarchiveParams';
+@@ -40,7 +40,7 @@
+   const [menu,setMenu]=useState<ContextMenuState|null>(null);const [deletion,setDeletion]=useState<Deletion>();
+   const list=useRef<HTMLDivElement>(null);const focusAfterRestore=useRef<number|null>(null);
+   const locked=busy||Boolean(pending);
+-  const canDelete=(session:Session)=>!(readOnly(session)&&!session.id.startsWith('legacy:'))&&!store.running(session.id)&&!store.getSnapshot().submitting[session.id];
++  const canDelete=(session:Session)=>!store.running(session.id)&&!store.getSnapshot().submitting[session.id];
+   useEffect(()=>{
+     if(locked||focusAfterRestore.current===null)return;
+     const buttons=[...list.current!.querySelectorAll<HTMLButtonElement>('.archived-session-restore')];
+--- before/ai/praat_ai/modern_store.py
++++ ai/praat_ai/modern_store.py
+@@ -187,12 +187,10 @@
+ 
+     def delete(self, sid):
+         if isinstance(sid,str) and sid.startswith('legacy:'):
+-            # Only remove an archived legacy entry from this app. Its source
+-            # database remains read-only; the sidecar persists across reload.
+-            if not self.get(sid)['session']['archived']:
+-                raise ValueError('旧记录只读；只能移除已归档的旧会话')
++            # Remove the entry through local metadata; keep the legacy source read-only.
++            self.get(sid)
+             with self.connect() as db:
+-                db.execute('UPDATE history_metadata SET deleted=1 WHERE session=?',(sid,))
++                db.execute('INSERT INTO history_metadata(session,deleted) VALUES (?,1) ON CONFLICT(session) DO UPDATE SET deleted=1',(sid,))
+             return
+         self.writable(sid)
+         with self.connect() as db:
+--- before/ai/praat_ai/modern_organization.py
++++ ai/praat_ai/modern_organization.py
+@@ -29,6 +29,8 @@
+             ''')
+             if 'deleted' not in {column[1] for column in db.execute('PRAGMA table_info(history_metadata)')}:
+                 db.execute('ALTER TABLE history_metadata ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1))')
++            if 'time_group_detached' not in {column[1] for column in db.execute('PRAGMA table_info(history_metadata)')}:
++                db.execute('ALTER TABLE history_metadata ADD COLUMN time_group_detached INTEGER NOT NULL DEFAULT 0 CHECK(time_group_detached IN (0,1))')
+             db.execute('INSERT OR IGNORE INTO history_sections(id,name,position) VALUES (?,?,0)',(PINNED_SECTION,'置顶'))
+             # Additive upgrade: existing pin membership remains discoverable.
+             for index,row in enumerate(db.execute('SELECT session FROM session_pins ORDER BY session').fetchall()):
+@@ -64,10 +66,31 @@
+             row=metadata.get(session['id'])
+             if row and row['deleted']:continue
+             result.append({**session,'sectionId':row['section'] if row else None,'sectionPosition':row['section_position'] if row else None,'archived':bool(row['archived']) if row else False,
+-                           'forkedFrom':row['forked_from'] if row else None,'forkedFromTitle':row['forked_from_title'] if row else None})
++                           'forkedFrom':row['forked_from'] if row else None,'forkedFromTitle':row['forked_from_title'] if row else None,
++                           'timeGroupDetached':bool(row['time_group_detached']) if row else False})
+         return result
+ 
+     def snapshot(self):return dict(sessions=self.store.sessions(),sections=self.sections())
++
++    def group_action(self, ids, action):
++        if action not in ('delete','detach','archive'):
++            raise ValueError('分组操作无效')
++        if not isinstance(ids,list) or not ids or any(not isinstance(sid,str) or not sid.strip() for sid in ids):
++            raise ValueError('分组会话标识无效')
++        ids=list(dict.fromkeys(ids))
++        for sid in ids:self.store.get(sid)
++        if action=='archive':return self.archive(ids,True)
++        with self.store.connect() as db:
++            db.execute('BEGIN IMMEDIATE')
++            for sid in ids:
++                if action=='detach':
++                    db.execute('INSERT INTO history_metadata(session,time_group_detached) VALUES (?,1) ON CONFLICT(session) DO UPDATE SET time_group_detached=1',(sid,))
++                elif sid.startswith('legacy:'):
++                    db.execute('INSERT INTO history_metadata(session,deleted) VALUES (?,1) ON CONFLICT(session) DO UPDATE SET deleted=1',(sid,))
++                else:
++                    db.execute('DELETE FROM history_metadata WHERE session=?',(sid,))
++                    db.execute('DELETE FROM sessions WHERE id=?',(sid,))
++        return self.snapshot()
+ 
+     @staticmethod
+     def require_section(db, section):
+--- before/ai/praat_ai/modern_app.py
++++ ai/praat_ai/modern_app.py
+@@ -435,9 +435,14 @@
+             # Metadata only, including errors: no task gate or config/provider access.
+             with self.guard:
+                 return self.store.pin(params.get('sessionId'), params.get('pinned'))
+-        if method in {'sections.create','sections.update','sections.delete','sections.archive','sessions.section','sessions.archive','sessions.fork'}:
++        if method in {'sections.create','sections.update','sections.delete','sections.archive','sessions.section','sessions.archive','sessions.fork','sessions.group'}:
+             with self.guard:
+                 organization=self.store.organization
++                if method=='sessions.group':
++                    ids=params.get('sessionIds');action=params.get('action')
++                    if isinstance(ids,list) and action in ('delete','archive') and any(t['sessionId'] in ids and t['status'] in ACTIVE for t in self.tasks.values()):
++                        raise ValueError('分组中有运行会话，不能删除或归档')
++                    return organization.group_action(ids,action)
+                 if method=='sections.create':return organization.create(params.get('name'),params.get('appearance'))
+                 if method=='sections.update':return organization.update(params.get('sectionId'),params.get('name'),params.get('appearance',...))
+                 if method=='sections.delete':return organization.delete(params.get('sectionId'))

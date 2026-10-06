@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 from praat_ai import measures, tools
 
 #: ``verify_chat_templates`` 是同事目录里的手工回归脚本（不是包的一部分）。
@@ -108,8 +110,28 @@ class MeasureRenderingTests(unittest.TestCase):
     def test_schema_offers_every_parameter(self) -> None:
         schema = tools.TOOL_PARAMETERS["measure"]
         parameter = schema["properties"]["parameter"]
-        offered = set(parameter.get("enum") or [])
-        self.assertEqual(offered, set(measures.load_table().parameters()))
+        # 参数名不再写成 enum：enum 只认单个名字，会把说明书里明确允许的 "f1,f2"
+        # 判成非法参数（2026-10-06 实测的对话损坏根因之一）。现在由参数表生成
+        # pattern，本用例仍然要求「表里每个参数都收、拼错的仍然不收」。
+        validator = Draft202012Validator({"type": "object", "properties": {"parameter": parameter}})
+        for name in measures.load_table().parameters():
+            with self.subTest(parameter=name):
+                self.assertFalse(list(validator.iter_errors({"parameter": name})))
+        self.assertTrue(list(validator.iter_errors({"parameter": "not_a_parameter"})))
+
+    def test_schema_accepts_the_documented_multi_parameter_form(self) -> None:
+        schema = tools.TOOL_PARAMETERS["measure"]
+        validator = Draft202012Validator(
+            {"type": "object", "properties": {"parameter": schema["properties"]["parameter"]}}
+        )
+        for written in ("f1,f2", "f1，f2", "f1、f2", "f1; f2", "mean_pitch,hnr,cpps"):
+            with self.subTest(parameter=written):
+                self.assertFalse(list(validator.iter_errors({"parameter": written})))
+        # 说明书（summary / signature）和工具入口都必须认同一种写法。
+        self.assertIn("f1,f2", tools.TOOL_MAP["measure"].signature)
+        script = self.render(parameter="f1,f2")
+        self.assertIn("第 1 共振峰", script)
+        self.assertIn("第 2 共振峰", script)
 
     def test_pitch_parameters_share_one_derivation(self) -> None:
         script = self.render(parameter=["mean_pitch", "minimum_pitch", "sd_pitch"])
@@ -232,6 +254,20 @@ class MeasureRenderingTests(unittest.TestCase):
                 self.assertIn("median = Get quantile: tmin, tmax, 0.5", script)
                 self.assertIn(guard, script)
                 self.assertIn(f"value = {variable}", script)
+
+    def test_mean_pitch_uses_the_same_guarded_frames_as_the_extremes(self) -> None:
+        """``mean_pitch`` 也不许用裸 ``Get mean``（2026-10-04）。
+
+        裸 ``Get mean`` 会把最高/最低已经剔除的倍频误判帧算进平均，于是同一次测量
+        给出「平均 139.8 Hz、最高 119.2 Hz」。平均必须和极值统计同一批限幅帧。
+        """
+
+        script = self.render(parameter="mean_pitch")
+        self.assertNotIn('value = Get mean: tmin', script)
+        self.assertIn("ceilingValue = median * 1.5", script)
+        self.assertIn("floorValue = median * 0.5", script)
+        self.assertIn("totalValue = totalValue + f", script)
+        self.assertIn("value = totalValue / countValue", script)
 
     def test_every_parameter_renders(self) -> None:
         for parameter in measures.load_table().parameters():

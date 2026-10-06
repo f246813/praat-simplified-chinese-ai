@@ -1,0 +1,87 @@
+{
+  "engine": "installed Edge / Chromium",
+  "checks": [
+    "few histories: edge alignment, no overflow, stable 14px native lane",
+    "adding sessions increases native scroll range and shortens the proportional thumb",
+    "dragging the actual native thumb scrolls history without resizing the sidebar",
+    "filtering removes overflow while row width stays stable; clearing search restores all histories",
+    "edge alignment and unobstructed native lane at 820px and 390px window widths"
+  ],
+  "samples": [
+    {
+      "count": 3,
+      "rightGap": 1,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 14,
+      "viewport": 469,
+      "content": 469,
+      "ratio": 1,
+      "horizontalOverflow": false,
+      "rowWidth": 241
+    },
+    {
+      "count": 35,
+      "rightGap": 1,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 14,
+      "viewport": 469,
+      "content": 1112,
+      "ratio": 0.42176258992805754,
+      "horizontalOverflow": false,
+      "rowWidth": 241
+    },
+    {
+      "count": 70,
+      "rightGap": 1,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 14,
+      "viewport": 469,
+      "content": 2197,
+      "ratio": 0.21347291761492945,
+      "horizontalOverflow": false,
+      "rowWidth": 241
+    },
+    {
+      "count": 1,
+      "rightGap": 1,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 14,
+      "viewport": 469,
+      "content": 469,
+      "ratio": 1,
+      "horizontalOverflow": false,
+      "rowWidth": 241
+    },
+    {
+      "windowWidth": 820,
+      "count": 70,
+      "rightGap": 1,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 14,
+      "viewport": 319,
+      "content": 2197,
+      "ratio": 0.14519799726900318,
+      "horizontalOverflow": false,
+      "rowWidth": 241
+    },
+    {
+      "windowWidth": 390,
+      "count": 70,
+      "rightGap": 1,
+      "resizeOverlap": 0,
+      "scrollbar": "14px",
+      "gutter": 14,
+      "viewport": 346,
+      "content": 2197,
+      "ratio": 0.1574874829312699,
+      "horizontalOverflow": false,
+      "rowWidth": 241
+    }
+  ],
+  "passed": true
+}

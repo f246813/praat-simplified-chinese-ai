@@ -489,6 +489,31 @@ class ToolGuardTests(unittest.TestCase):
         self.assertIn("Get number of channels", script)
         self.assertIn("Get sampling frequency", script)
 
+    def test_object_info_writes_the_selection_share_of_the_duration(self) -> None:
+        """2026-10-04：圈选段要带上占时长的百分比。
+
+        报告阶段没有工具、只有证据数字；「选段在词里哪个位置」必须能靠算术定，
+        否则模型会凭印象把含爆破点的选段说成「词首辅音之前」。
+        """
+
+        context = tools.ToolContext(
+            tools.parse_object_context(
+                "id\tclass\tname\tselected\tsel_start\tsel_end\n"
+                "1\tSound\tSound あなた\t1\t0.446194\t0.671104\n"
+            ),
+            Path(self.directory.name) / "chat_result.tsv",
+            Path(self.directory.name) / "chat_state.txt",
+        )
+        script = tools.render("object_info", {}, context)
+        self.assertIn("selStart = 0.446194", script)
+        self.assertIn("selEnd = 0.671104", script)
+        self.assertIn("；圈选 ", script)
+        self.assertIn("fixed$ (selStart / duration * 100, 0)", script)
+        self.assertIn("fixed$ (selEnd / duration * 100, 0)", script)
+        # 没有圈选的对象不许凭空写一段占比。
+        plain = tools.render("object_info", {}, self.context)
+        self.assertNotIn("圈选 ", plain)
+
 
 class QueryRobustnessTests(unittest.TestCase):
     """越界时间和 --undefined-- 结果都要变成中文说明。"""
@@ -871,7 +896,11 @@ class VotToolTests(unittest.TestCase):
         self.assertIn("Insert boundary: 1, t1", script)
         self.assertIn("Insert boundary: 1, t2", script)
         self.assertIn("fixed$ (vot * 1000, 1)", script)
-        self.assertIn("秒（爆破）", script)
+        # 2026-10-04：两个时刻都带上「占目标时长百分比」，报告阶段没有工具，
+        # 只有靠这些数字才能判断选段落在词里的哪个位置。
+        self.assertIn("秒（爆破，占时长 ", script)
+        self.assertIn("秒（浊音起始，占时长 ", script)
+        self.assertIn("fixed$ (t1 / duration * 100, 0)", script)
         self.assertIn("并在该层补上了边界", script)
 
     def test_sound_path_only_subtracts(self) -> None:

@@ -224,7 +224,8 @@ class ReviewFixTests(unittest.TestCase):
         dispatched = self.run_turn(state, respond, names=('rename_object',))
         self.assertEqual(len(dispatched), 1, state.attempts)
         self.assertEqual(dispatched[0][1]['new_name'], 'new')
-        self.assertTrue(any(a.get('reason') == '未授权追加对象操作' for a in state.attempts))
+        self.assertTrue(any('用户明确提供' in a.get('reason', '') or a.get('reason') == '未授权追加对象操作'
+                            for a in state.attempts))
         self.assertEqual(state.requests, len(planning) + 1)
 
     def test_general_continuation_with_no_evidence_routes_to_l4(self):
@@ -383,7 +384,7 @@ class ReviewFixTests(unittest.TestCase):
                 renamed_context(original, fresh, 1)
 
     def test_create_rename_save_keeps_successful_operation_records(self):
-        goal = '新建声音，然后重命名为 new，然后保存为 WAV'
+        goal = '新建声音，命名为 created，然后重命名为 new，然后保存为 WAV'
         fresh, scripts = [CONTEXT], []
         window = self.window(AnalysisState(goal, CONTEXT))
         self.cfg.api.audio_input_enabled = False

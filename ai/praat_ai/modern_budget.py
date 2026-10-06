@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
 from urllib.parse import urlsplit
 
 from . import qwen
@@ -73,7 +74,7 @@ def model_settings(section, *, sdk=False, input_cost=0):
     return result
 
 
-def text_request(config, messages, *, cancel=None):
+def text_request(config, messages, *, cancel=None, runtime=None, metrics=None, phase='summary'):
     """Shared validation/summary adapter without hidden probe sampling defaults."""
     if cancel is not None and cancel.is_set():
         raise RuntimeError('已取消请求')
@@ -83,8 +84,8 @@ def text_request(config, messages, *, cancel=None):
     from pydantic_ai import Agent
     from .cloud_agent import create_model
     from .config import QwenConfig
-    async def run():
-        model = create_model(config)
+    async def run(shared_model=None):
+        model = shared_model or create_model(config)
         settings = model_settings(config.api, sdk=True, input_cost=qwen.estimate_tokens(json.dumps(messages, ensure_ascii=False)))
         thinking = qwen.thinking_request_fields(QwenConfig(provider='api', base_url=config.api.base_url,
                                                            model=config.api.model, thinking_level=config.api.thinking_level))
@@ -94,7 +95,25 @@ def text_request(config, messages, *, cancel=None):
             else:
                 settings.setdefault('extra_body', {})[key] = value
         async def invoke():
-            return (await Agent(model, output_type=str, retries=0).run(json.dumps(messages, ensure_ascii=False), model_settings=settings)).output
+            from .session_context import native_history
+            from . import cloud_metrics
+            timing = dict(request=len((metrics or {}).get('request_timings', []))+1, phase=phase,
+                          attempt=1, retry=False, reason='context_compaction')
+            timing.update({key:(metrics or {}).get(key, '') for key in ('session_id','task_id','context_epoch')})
+            started = time.monotonic()
+            token = cloud_metrics.current_request.set(timing)
+            try:
+                result = await Agent(model, output_type=str, retries=0).run(
+                    message_history=native_history(messages), model_settings=settings)
+                timing['status'] = 'complete'
+                return result.output
+            finally:
+                timing.setdefault('status', 'failed')
+                timing['elapsed_seconds'] = time.monotonic()-started
+                timing.update(cloud_metrics.normalize_usage(timing.pop('raw_usage', {}), provider_url=config.api.base_url))
+                cloud_metrics.current_request.reset(token)
+                if metrics is not None:
+                    metrics.setdefault('request_timings', []).append(timing)
         task = asyncio.create_task(invoke())
         try:
             while not task.done():
@@ -107,28 +126,62 @@ def text_request(config, messages, *, cancel=None):
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            if hasattr(model, 'client'):
+            if shared_model is None and hasattr(model, 'client'):
                 await model.client.close()
-    return asyncio.run(run())
+    return runtime.run(config, run) if runtime is not None else asyncio.run(run())
 
 
-def context_estimate(config, history, evidence, text, target=''):
+def context_estimate(config, history, evidence, text, target='', *, phase=None):
     """Same heuristic as compaction; not tokenizer/billing usage. No requests."""
     from .tools import tool_schemas
-    overhead = qwen.estimate_tokens(qwen.planner_instructions(config.qwen) + json.dumps(tool_schemas(), ensure_ascii=False))
+    if config.api.enabled:
+        from .dialogue_policy import dialogue_kind
+        from .cloud_agent import planner_system, report_instructions, dialogue_instructions, AnalysisReport
+        from .escape_policy import AnalysisState
+        from .skill_registry import load
+        from .session_context import PhaseContext
+        phase = phase or ('dialogue' if dialogue_kind(text) else 'planner')
+        if phase == 'dialogue':
+            evidence = []
+        else:
+            from .session_context import evidence_projection
+            evidence = evidence_projection(evidence)
+        if phase == 'dialogue':
+            instruction = dialogue_instructions(config)
+            schemas = ''
+        else:
+            instruction = planner_system(config) if phase == 'planner' else report_instructions(config, AnalysisState(text, target))
+            schemas = json.dumps(tool_schemas() if phase == 'planner' else AnalysisReport.model_json_schema(), ensure_ascii=False)
+            skills = PhaseContext()
+            load(skills, phase, AnalysisState(text, target))
+            instruction += '\n'.join(p.content for m in skills.messages for p in m.parts)
+        overhead = qwen.estimate_tokens(instruction + schemas)
+    else:
+        overhead = qwen.estimate_tokens(qwen.planner_instructions(config.qwen) + json.dumps(tool_schemas(), ensure_ascii=False))
     content = json.dumps(history, ensure_ascii=False) + json.dumps(evidence, ensure_ascii=False) + text + target
     return dict(inputTokens=qwen.estimate_tokens(content) + overhead, overheadTokens=overhead)
 
 
-def compact(store, sid, config, history, evidence, text, target, *, cancel, emit, requester=text_request):
+def compact(store, sid, config, history, evidence, text, target, *, cancel, emit, requester=text_request,
+            phase=None, metrics=None, runtime=None):
     """One real summary pass near the actual window, in ALL token modes.
 
     Keep recent complete turns, original immutable records and structured evidence.
     Refuse overfull requests when one pass cannot safely fit, rather than silently trim.
     """
     section = config.api if config.api.enabled else config.qwen
-    structured = json.dumps(evidence, ensure_ascii=False)
-    estimate = context_estimate(config, history, evidence, text, target)
+    if config.api.enabled:
+        from .dialogue_policy import dialogue_kind
+        phase = phase or ('dialogue' if dialogue_kind(text) else 'planner')
+    if phase == 'dialogue':
+        projected_evidence = []
+    elif config.api.enabled:
+        from .session_context import evidence_projection
+        projected_evidence = evidence_projection(evidence)
+    else:
+        projected_evidence = evidence
+    structured = json.dumps(projected_evidence, ensure_ascii=False)
+    estimate = context_estimate(config, history, evidence if phase != 'dialogue' else [], text, target, phase=phase)
     overhead, cost = estimate['overheadTokens'], estimate['inputTokens']
     reserve = (section.plan_max_tokens if section.token_mode != 'provider' else max(512, section.max_context_tokens // 10))
     if cost + reserve < section.max_context_tokens * .85:
@@ -138,10 +191,12 @@ def compact(store, sid, config, history, evidence, text, target, *, cancel, emit
     if not older:
         raise ValueError('近期消息/专业证据已接近真实窗口，不能安全压缩；请缩小输入或增加窗口')
     prompt = [dict(role='system', content='压缩对话为忠实摘要。保留原任务目标、指代、用户约束、范围、证据来源和执行事实。不得添加测量数字或将推断升级为测量。工具证据另行保留，不以摘要替代。'),
-              dict(role='user', content=json.dumps([{k: x[k] for k in ('role', 'content')} for x in older], ensure_ascii=False))]
+              *[{k: x[k] for k in ('role', 'content')} for x in older],
+              dict(role='user', content='请总结以上较早对话；近期完整对话和专业证据由应用保留。')]
     if qwen.estimate_tokens(json.dumps(prompt, ensure_ascii=False)) + reserve >= section.max_context_tokens:
         raise ValueError('较早历史已超过安全摘要窗口；未裁剪或删除原历史')
-    summary = requester(config, prompt, cancel=cancel)
+    options = dict(runtime=runtime, metrics=metrics) if requester is text_request else {}
+    summary = requester(config, prompt, cancel=cancel, **options)
     if cancel.is_set() or not str(summary).strip():
         raise RuntimeError('上下文摘要未完成；原历史保留')
     through = max((x.get('_seq', 0) for x in older), default=0)

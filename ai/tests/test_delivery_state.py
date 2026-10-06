@@ -74,6 +74,15 @@ class SendScriptContractTests(unittest.TestCase):
 
 
 class ReportContextTests(unittest.TestCase):
+    @staticmethod
+    def guidance(config, state, phase='report'):
+        from praat_ai.cloud_agent import report_instructions, planner_system
+        from praat_ai.session_context import PhaseContext
+        from praat_ai.skill_registry import load
+        context = PhaseContext()
+        load(context, phase, state)
+        system = report_instructions(config, state) if phase == 'report' else planner_system(config)
+        return system + '\n'.join(p.content for m in context.messages for p in m.parts)
     """报告上下文必须带上真实失败原因（没成的调用）。"""
 
     def test_blocked_attempts_keep_the_real_reason(self):
@@ -90,20 +99,67 @@ class ReportContextTests(unittest.TestCase):
 
     def test_failure_instructions_appear_only_when_something_failed(self):
         """失败说明必须真的能到模型，而且只在本轮有失败记录时才付这笔提示词开销。"""
-        from praat_ai.cloud_agent import FAILURE_INSTRUCTIONS, report_instructions
+        from praat_ai.cloud_agent import report_instructions
         config = AppConfig()
         config.api.model = 'review-fixture'
         clean = AnalysisState('测量选中这段的vot', CONTEXT)
-        self.assertNotIn(FAILURE_INSTRUCTIONS, report_instructions(config, clean))
+        self.assertNotIn('不能把投递或环境故障写成模型能力不足', self.guidance(config, clean))
         failed = AnalysisState('测量选中这段的vot', CONTEXT)
         failed.attempts = [{'tool':'export_original_audio', 'status':'failed', 'reason':MESSAGE_FILE_ERROR}]
-        text = report_instructions(config, failed)
-        self.assertIn(FAILURE_INSTRUCTIONS, text)
+        text = self.guidance(config, failed)
         self.assertIn('不能把投递或环境故障写成模型能力不足', text)
         self.assertIn('不能据此说无法测量', text)
         paused = AnalysisState('测量选中这段的vot', CONTEXT)
         paused.failures = {'vot':2}
-        self.assertIn(FAILURE_INSTRUCTIONS, report_instructions(config, paused))
+        self.assertIn('不能把投递或环境故障写成模型能力不足', self.guidance(config, paused))
+        self.assertEqual(report_instructions(config, clean), report_instructions(config, failed))
+
+    def test_report_requires_arithmetic_before_claiming_a_segment_position(self):
+        """2026-10-04：报告阶段没有工具，只有数字。
+
+        三次实测：把含「た」爆破点的选段说成「词首清辅音之前」、直接断言「目标音素是
+        /a/」、以及跳过定位直接谈音素（「第一个元音 a 前的辅音是 /n/」）。所以选段定位
+        必须是报告的第一节；对话类目标不付这笔提示词开销（4096 上下文的续写预检只剩
+        十几 token 余量）。
+        """
+
+        for goal in ('与标准音对比，指出发音不足之处与待改进点', '分析选中这段的vot'):
+            with self.subTest(goal=goal):
+                text = self.guidance(AppConfig(), AnalysisState(goal, CONTEXT))
+                self.assertIn('报告开头先写一节「选段定位」', text)
+                self.assertIn('不要凭对象名猜一个假名或音素', text)
+        plain = self.guidance(AppConfig(), AnalysisState('直接听原始音频', CONTEXT))
+        self.assertNotIn('报告开头先写一节「选段定位」', plain)
+
+    def test_report_refuses_an_accent_claim_without_a_pitch_contour(self):
+        """2026-10-04：只拿全段平均基频 81.6 Hz 就断言「あなた」是平板型，并据此给出
+        「あ低な高」的练习；同一段的更早一次量过前半 84.98 / 后半 79.06，结论正好相反。"""
+
+        config = AppConfig()
+        prosody = self.guidance(config, AnalysisState('指出语调不足之处', CONTEXT))
+        self.assertIn('不要下音调结论', prosody)
+        comparison = self.guidance(config, AnalysisState('与东京标准音对比，指出发音的不足之处', CONTEXT))
+        self.assertIn('不要下音调结论', comparison)
+        plain = self.guidance(config, AnalysisState('直接听原始音频', CONTEXT))
+        self.assertNotIn('不要下音调结论', plain)
+        # 规划阶段也要先量走向，否则报告阶段只剩「缺测量」可说。
+        self.assertIn('先用工具量出音高走向', self.guidance(config, AnalysisState('指出语调不足之处', CONTEXT), 'planner'))
+        self.assertNotIn('先用工具量出音高走向', self.guidance(config, AnalysisState('直接听原始音频', CONTEXT), 'planner'))
+
+    def test_report_context_carries_the_users_own_words_about_themselves(self):
+        """用户自述（说话人/录音条件）要随报告上下文一起给；没有自述时不加这个键。"""
+
+        from praat_ai.cloud_agent import report_context
+        state = AnalysisState('指出语调不足之处', CONTEXT)
+        state.dialogue_context = [
+            {'role': 'user', 'content': '与东京标准音对比，指出发音的不足之处'},
+            {'role': 'assistant', 'content': '若为男性…若为女性…'},
+            {'role': 'user', 'content': '我是成年男性，针对这个结论可以做什么练习'},
+            {'role': 'user', 'content': '历史专业证据与投递事实（保留来源/原范围；不能当作本轮新测量）：[{"tool":"vot"}]'},
+        ]
+        self.assertEqual(report_context(state)['user_facts'],
+                         ['我是成年男性，针对这个结论可以做什么练习'])
+        self.assertNotIn('user_facts', report_context(AnalysisState('指出语调不足之处', CONTEXT)))
 
 
 class StaircaseDeliveryTests(unittest.TestCase):

@@ -1,0 +1,149 @@
+{
+  "passed": true,
+  "phase": "after",
+  "results": [
+    {
+      "width": 1280,
+      "section": {
+        "overflow": false,
+        "overlap": false,
+        "fields": [
+          {
+            "label": {
+              "left": 338,
+              "right": 632,
+              "top": 416.203125,
+              "bottom": 435.390625
+            },
+            "control": {
+              "left": 338,
+              "right": 632,
+              "top": 441.390625,
+              "bottom": 478.578125
+            }
+          },
+          {
+            "label": {
+              "left": 648,
+              "right": 942,
+              "top": 416.5,
+              "bottom": 435.6875
+            },
+            "control": {
+              "left": 648,
+              "right": 942,
+              "top": 442.28125,
+              "bottom": 478.28125
+            }
+          }
+        ],
+        "left": 315,
+        "right": 965
+      },
+      "buttons": {
+        "gap": 12,
+        "overflow": false,
+        "sameRow": true
+      },
+      "colorSaved": true,
+      "continuePreservesChanges": true,
+      "discardRevertsChanges": true
+    },
+    {
+      "width": 815,
+      "section": {
+        "overflow": false,
+        "overlap": false,
+        "fields": [
+          {
+            "label": {
+              "left": 105.5,
+              "right": 399.5,
+              "top": 416.203125,
+              "bottom": 435.390625
+            },
+            "control": {
+              "left": 105.5,
+              "right": 399.5,
+              "top": 441.390625,
+              "bottom": 478.578125
+            }
+          },
+          {
+            "label": {
+              "left": 415.5,
+              "right": 709.5,
+              "top": 416.5,
+              "bottom": 435.6875
+            },
+            "control": {
+              "left": 415.5,
+              "right": 709.5,
+              "top": 442.28125,
+              "bottom": 478.28125
+            }
+          }
+        ],
+        "left": 82.5,
+        "right": 732.5
+      },
+      "buttons": {
+        "gap": 12,
+        "overflow": false,
+        "sameRow": true
+      },
+      "colorSaved": true,
+      "continuePreservesChanges": true,
+      "discardRevertsChanges": true
+    },
+    {
+      "width": 480,
+      "section": {
+        "overflow": false,
+        "overlap": false,
+        "fields": [
+          {
+            "label": {
+              "left": 45,
+              "right": 435,
+              "top": 381.203125,
+              "bottom": 400.390625
+            },
+            "control": {
+              "left": 45,
+              "right": 435,
+              "top": 406.390625,
+              "bottom": 443.578125
+            }
+          },
+          {
+            "label": {
+              "left": 45,
+              "right": 435,
+              "top": 475.578125,
+              "bottom": 494.765625
+            },
+            "control": {
+              "left": 45,
+              "right": 435,
+              "top": 500.765625,
+              "bottom": 536.765625
+            }
+          }
+        ],
+        "left": 22,
+        "right": 458
+      },
+      "buttons": {
+        "gap": 12,
+        "overflow": false,
+        "sameRow": true
+      },
+      "colorSaved": true,
+      "continuePreservesChanges": true,
+      "discardRevertsChanges": true
+    }
+  ],
+  "productionBuildPassed": true,
+  "sourceDistributionVerified": true
+}

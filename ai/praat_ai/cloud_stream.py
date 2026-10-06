@@ -13,6 +13,12 @@ class DrainingAsyncStream(AsyncStream[T]):
         events = super()._iter_events()
         completed = False
         async for event in events:
+            if not event.data.startswith('[DONE]'):
+                try:
+                    from .cloud_metrics import observe_usage
+                    observe_usage(json.loads(event.data).get('usage'))
+                except (ValueError, AttributeError):
+                    pass
             if event.data.startswith('[DONE]'):
                 completed = True
                 # The SDK closes at DONE before httpx observes the body EOF.

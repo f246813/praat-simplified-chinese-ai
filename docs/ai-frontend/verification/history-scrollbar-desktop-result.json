@@ -1,0 +1,51 @@
+{
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedData": true,
+  "checks": [
+    "70 real host sessions: native 6px lane at border, no resize overlap",
+    "search dynamically grows native thumb and removes overflow for one result",
+    "isolated database/config; no tasks, model calls or Praat operations"
+  ],
+  "samples": [
+    {
+      "count": 70,
+      "rightGap": 0.7999954223632812,
+      "border": 0.8,
+      "resizeOverlap": 0,
+      "scrollbar": "6px",
+      "gutter": 5,
+      "viewport": 218,
+      "content": 9156,
+      "ratio": 0.023809523809523808,
+      "horizontalOverflow": false
+    },
+    {
+      "count": 35,
+      "rightGap": 0.7999954223632812,
+      "border": 0.8,
+      "resizeOverlap": 0,
+      "scrollbar": "6px",
+      "gutter": 5,
+      "viewport": 218,
+      "content": 4578,
+      "ratio": 0.047619047619047616,
+      "horizontalOverflow": false
+    },
+    {
+      "count": 1,
+      "rightGap": 0.7999954223632812,
+      "border": 0.8,
+      "resizeOverlap": 0,
+      "scrollbar": "6px",
+      "gutter": 5,
+      "viewport": 218,
+      "content": 218,
+      "ratio": 1,
+      "horizontalOverflow": false
+    }
+  ],
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+  "devicePixelRatio": 1.25,
+  "passed": true
+}

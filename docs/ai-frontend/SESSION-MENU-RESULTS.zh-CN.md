@@ -1,5 +1,9 @@
 # 历史菜单、持久置顶与 Pi 细滚动条：结果
 
+2026-10-04 的历史栏贴边与原生滑块拖动调整见 [左侧历史栏滚动条验收](HISTORY-SCROLLBAR-RESULTS.zh-CN.md)。下方保留前次移植验收记录。
+
+最新会话侧栏分组、预览、多选、排序、快捷键和 14px 滚动通道见 [会话侧栏移植验收](PI-SESSION-SIDEBAR-RESULTS.zh-CN.md)。
+
 ## 来源与完成内容
 
 上一版是项目内重命名／删除按钮及浏览器 `thin` 滚动条，没有搬入 Pi 的历史菜单或置顶。此次直接提取／适配 **PI-Desktop 固定提交 `0d47d26769ecbeca1c3ab56fa83b58a91de8190e`** 的 `ContextMenu.tsx`、菜单定位、滚动显示逻辑和菜单／滚动条 CSS；不是整体 Sidebar、Agent 或 IPC 移植，也不宣称等同用户安装版或像素级一致。

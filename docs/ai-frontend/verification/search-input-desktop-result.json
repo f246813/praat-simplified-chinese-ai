@@ -1,0 +1,58 @@
+{
+  "realWebView2": true,
+  "productionAssets": true,
+  "checks": [
+    "focused search inputs have no green outline",
+    "WebView2 native composition/start/update/end commits Japanese text in both inputs",
+    "focused input identity survives composition and filtering",
+    "composing Enter/Escape are not prevented or used to close search",
+    "WebView2 IME mode is not Disable; no language-switch or executor calls"
+  ],
+  "sidebar": {
+    "value": "日本",
+    "events": [
+      {
+        "type": "compositionstart",
+        "data": ""
+      },
+      {
+        "type": "compositionupdate",
+        "data": "nihon"
+      },
+      {
+        "type": "compositionupdate",
+        "data": "日本"
+      },
+      {
+        "type": "compositionend",
+        "data": "日本"
+      }
+    ],
+    "outline": "none"
+  },
+  "find": {
+    "value": "日本",
+    "events": [
+      {
+        "type": "compositionstart",
+        "data": ""
+      },
+      {
+        "type": "compositionupdate",
+        "data": "nihon"
+      },
+      {
+        "type": "compositionupdate",
+        "data": "日本"
+      },
+      {
+        "type": "compositionend",
+        "data": "日本"
+      }
+    ],
+    "outline": "none"
+  },
+  "imeMode": "NoControl",
+  "passed": true,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0"
+}

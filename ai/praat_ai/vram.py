@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+import shutil
 import subprocess
 from dataclasses import asdict, dataclass
 
@@ -33,7 +35,7 @@ class RuntimeProfile:
 
 def detect_gpu() -> GpuMemory | None:
     command = [
-        "nvidia-smi",
+        shutil.which("nvidia-smi") or "nvidia-smi",
         "--query-gpu=name,memory.total,memory.free,driver_version",
         "--format=csv,noheader",
     ]
@@ -44,6 +46,7 @@ def detect_gpu() -> GpuMemory | None:
             capture_output=True,
             text=True,
             timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
         )
     except (OSError, subprocess.SubprocessError):
         return None

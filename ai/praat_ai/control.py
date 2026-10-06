@@ -653,14 +653,9 @@ def run_analysis(config_path: str | Path | None = None) -> dict[str, Any]:
 
 
 def run_api_settings_dialog(config_path: str | Path | None = None) -> int:
-    """打开「API 配置」小窗口（Praat 菜单那一路）。
-
-    单独抽一层是为了能在测试里替换掉它——真开窗口会阻塞到用户点关闭。
-    """
-
-    from . import api_settings
-
-    return api_settings.run_standalone(config_path)
+    """Open the assistant Model page and return after its detached launch."""
+    from start_api_settings import main
+    return main(config_path)
 
 
 def execute_command(

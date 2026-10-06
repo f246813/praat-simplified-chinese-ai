@@ -1,0 +1,10 @@
+/* Radix owns popup positioning/keyboard/pointer behavior; reuse Pi menu skin. */
+.context-menu.sidebar-options-menu{position:relative;top:auto;left:auto;outline:none;max-height:var(--radix-dropdown-menu-content-available-height);min-width:182px}
+.sidebar-options-menu .context-menu-item{cursor:default;outline:none;user-select:none}
+.sidebar-options-menu .context-menu-item[data-highlighted],.sidebar-options-menu .context-menu-item[data-state=open]{background:var(--soft)}
+.sidebar-options-chevron{margin-left:auto;color:var(--muted)}
+.sidebar-options-menu .sidebar-options-choice{position:relative;padding-left:29px}
+.sidebar-options-check{position:absolute;left:8px;display:inline-flex;color:var(--text)}
+.pi-session-sidebar .sidebar-origin-header{font-size:12px;font-weight:500;padding-top:7px}
+.pi-session-sidebar .sidebar-origin-header .sidebar-origin-name{margin-left:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;text-align:left}
+.sidebar-origin-group .sidebar-session-group{padding-left:8px}

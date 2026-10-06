@@ -111,6 +111,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(corrections),1)
         self.assertEqual(state.mode,'L2')
         self.assertFalse(state.audio_received)
+        self.assertFalse(any(isinstance(m.get('content'), list) and any(p.get('type') == 'input_audio'
+                         for p in m['content']) for m in requests[1]['messages']))
+        self.assertTrue(state.metrics.get('report_verified'), state.reason)
         self.assertTrue(state.report)
 
     def test_reasoning_rejected_field_retry(self):

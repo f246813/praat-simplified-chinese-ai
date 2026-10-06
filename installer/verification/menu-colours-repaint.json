@@ -1,0 +1,32 @@
+{
+  "executable": "C:\\Users\\f2468\\Desktop\\Praat\\稳定早期版\\.build-tools\\frontend-model-settings-20261005\\Praat.exe",
+  "checks": [
+    "api_open_0",
+    "api_48_mouse_moves_stable_model_row",
+    "api_dot_after_motion",
+    "api_hover_0",
+    "api_open_1",
+    "api_hover_1",
+    "api_open_2",
+    "api_hover_2",
+    "local_dot_restored",
+    "local_48_mouse_moves_stable_model_row",
+    "local_dot_after_motion",
+    "local_hover_keeps_dot",
+    "local_reopen_keeps_dot",
+    "local_to_api_removes_dot_in_open_popup",
+    "switched_api_hover",
+    "switched_api_reopen"
+  ],
+  "failures": [],
+  "snapshot": {
+    "success": true,
+    "frontend_model": "云端API模式",
+    "frontend_status": "已停止",
+    "frontend_running": false,
+    "configured": true,
+    "frontend_local": false,
+    "vram_warning": "unknown",
+    "vram_free_gb": null
+  }
+}

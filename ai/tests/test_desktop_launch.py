@@ -32,7 +32,7 @@ class DesktopLaunchTests(unittest.TestCase):
                 patch('praat_ai.control.main') as old, patch('socket.socket.connect', side_effect=AssertionError('network')):
             self.assertEqual(launch.menu_control_main([]), 0)
         old.assert_not_called()
-        status = json.loads((self.root/'status.json').read_text())
+        status = json.loads((self.root/'status.json').read_text(encoding='utf8'))
         self.assertEqual(status['frontend_start_phase'], 'ready-to-launch')
         self.assertFalse(status['model_service_started'])
         self.assertEqual(status['frontend_model_source'], 'desktop')

@@ -1,0 +1,14 @@
+{
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedData": true,
+  "checks": [
+    "collapsed search shortcut removed; collapsed/expanded gear opens storage category; model settings still opens model category",
+    "production pointer/keyboard handlers open sort flyout and restore focus; four choices once each",
+    "connection groups use local and explicitly seeded remote origins; custom section membership stays intact",
+    "project/connection/list change real groups and persist across production reload; original thumb/lane unchanged"
+  ],
+  "stage": "complete",
+  "passed": true,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0"
+}

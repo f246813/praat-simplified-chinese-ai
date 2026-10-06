@@ -34,10 +34,10 @@ Get-ChildItem -LiteralPath $aiRoot -File | Where-Object {
     $_.Extension -eq '.py' -or $_.Name -match '^requirements.*\.txt$' -or
     $_.Name -match '^(Download.*|Install.*)\.ps1$' -or $_.Name -eq 'README.zh-CN.md' -or $_.Name -eq 'request.example.json'
 } | ForEach-Object { $files['ai/' + $_.Name] = $_.FullName }
-foreach ($relative in @('praat_ai','plugin','tools')) {
+foreach ($relative in @('praat_ai','plugin','tools','skills','third_party/pi-context','third_party/prompt-cache-skills')) {
     $base = Join-Path $aiRoot $relative
     Get-ChildItem -LiteralPath $base -Recurse -File | Where-Object {
-        $_.Extension -in @('.py','.tsv','.praat','.in','.ps1','.md') -and $_.FullName -notmatch '\\__pycache__\\'
+        ($_.Extension -in @('.py','.tsv','.praat','.in','.ps1','.md') -or $_.Name -eq 'LICENSE') -and $_.FullName -notmatch '\\__pycache__\\'
     } | ForEach-Object {
         $name = $_.FullName.Substring($projectRoot.Length+1).Replace('\','/')
         $files[$name] = $_.FullName
@@ -55,7 +55,7 @@ $templateFile = Join-Path $buildRoot 'ai_config.example.json'
 $files['ai/ai_config.example.json'] = $templateFile
 foreach ($name in $files.Keys) {
     $testPath = $name -match '(^|/)tests(/|$)' -and $name -notmatch '^ai/frontend/dist/pi-desktop-source/rebuild/tests(/|$)'
-    if ($name -match '(^|/)(ai_config\.json|runtime|logs|__pycache__)(/|$)' -or $name -match '\.pyc$' -or $testPath) {
+    if ($name -match '(^|/)(ai_config\.json|logs|__pycache__)(/|$)|^ai/runtime(/|$)' -or $name -match '\.pyc$' -or $testPath) {
         throw "Forbidden development file in payload: $name"
     }
 }

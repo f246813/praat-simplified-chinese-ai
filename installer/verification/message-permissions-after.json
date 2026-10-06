@@ -1,0 +1,23 @@
+[
+  {
+    "executable": "Praat.exe",
+    "pid": 20228,
+    "parent_pid": 16564,
+    "integrity": 8192,
+    "message_write_access": true
+  },
+  {
+    "executable": "Praat-model-settings.exe",
+    "pid": 9620,
+    "parent_pid": 10336,
+    "integrity": 8192,
+    "message_write_access": true
+  },
+  {
+    "executable": "Praat-menu-fixed.exe",
+    "pid": 19352,
+    "parent_pid": 12164,
+    "integrity": 8192,
+    "message_write_access": true
+  }
+]

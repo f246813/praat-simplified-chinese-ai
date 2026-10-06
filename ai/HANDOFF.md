@@ -1,3 +1,28 @@
+> **2026-10-06 守卫限权已完成（承上一轮对话守卫修复）。** 判据：客观 + 便宜 + 提示词里用同样措辞写过，且`漏过去的危害 ≫ 每次请求成本`。`report_guards` 的阻断点从 **20 条收到 7 条**（对象身份、编造数值、整段引用局部、音调结论无走向证据、推导冒充对象/量名、编号兜底），另外 **7 条改成自动修**：漏写引证由守卫自己补 `[E1]`、编造的 `[E99]` 清掉、算不出来的 `{{calc:…}}` 标成 `[推导未核对]`（算得出来的照旧由程序写结果）、coverage 按 deliveries 补齐、正文过短只附一句说明。**每次守卫动作按规则 id 计数**进 `state.metrics`（`guard_blocks` / `guard_repairs`，出口在 `escape_policy.note_guard`），随 metrics 落 `sessions.sqlite3` 的 `evidence.payload` 与旧库 `events(kind='turn')`；汇总用 `python _diag/guard_stats.py`（只读、不联网）。完整套件 1014 项 0 failures（只剩 4 条既有 `test_cloud_protocol` 环境错）。`prosody_untraced` 仍是闸门——它是判断类、本该退提示词，等真实触发率数据再定。详见 [2026-10-06-守卫限权与按规则计数.md](../docs/2026-10-06-守卫限权与按规则计数.md)。
+>
+
+> **2026-10-06 对话守卫（prompt→guard）把对话搞坏的修复已完成。** 最近一次会话（`ai/runtime/modern/sessions.sqlite3` 里的 `d428eea0…`）两轮都只回「本轮仅交付阶段记录」，根因是两处守卫与说明书/模型表达不一致：①`measure` 的 schema 只认单个 `enum`，却把「一次写多个"f1,f2"」写在工具说明里，模型照说明书写就被判非法、两振出局终止工具阶段；②报告守卫按字符串比「量名」，证据行的 `爆破 0.551 秒` 换来换去都被当成编造，两次拒绝后整份回答被 `fallback_report()` 换掉。已修：schema 改由参数表生成 pattern（与 `_measure_names` 同源）、参数名逐个按表校验、**执行前挡下的提案错误不再记 `state.failures`**、报告守卫对没点名量名的自由标签退回「同对象+同范围+同量纲+同数值」核对、守卫拒绝时保留草稿并把没核上的数值标成 `[未通过核对的数值]`（不放弃「不许把没测过的数字当结论」）。`tools.py`/`tool_guards.py`/`report_guards.py`/`cloud_agent.py` 四个文件，回退点 `backups/guard-fix-20261006-0045/`；完整套件 1011 项 0 failures，只剩 4 条既有的 `test_cloud_protocol` 环境错（`NO_PROXY` 里的 `[::1]`）。未调用云端、未用真实录音复跑原话；**改完 `praat_ai/*.py` 要关掉对话窗口重开**。详见 [2026-10-06-对话守卫修复验收.md](../docs/2026-10-06-对话守卫修复验收.md)。
+>
+
+> **历史菜单／置顶／细滚动条最新修改已完成：** 左键“…”和右键同菜单，重命名／持久置顶／删除确认，标题仍切换。Pi局部菜单和6px滚动条为直接源码提取／适配，LGPL通知、源码与重建输入随dist交付；不引入Pi内核。Python26项、前端39项、浏览器8项和真实WebView2隔离4组通过；见 [SESSION-MENU-RESULTS.zh-CN.md](../docs/ai-frontend/SESSION-MENU-RESULTS.zh-CN.md)。真实用户库／配置未用于验收。
+
+> **输入框最新修改已完成：** 移除富文本／发送换行提示，底栏为上下文圆环百分比、数值浮窗、模型·推理强度和发送。真实宿主估算、未知窗口不伪造，切换保留Key／端点并仅影响后续任务。生产dist已更新；Python23项、前端合并34项、浏览器合并6项及真实WebView2隔离4组通过。详情：[COMPOSER-STATUS-RESULTS.zh-CN.md](../docs/ai-frontend/COMPOSER-STATUS-RESULTS.zh-CN.md)。本轮未修改真实用户配置／历史或请求模型。
+
+> **本项目正常菜单启动现代前端已修复，真实验收5项 met。** 双击 Praat → 导入文件 → 查看并编辑 → 前端／启动前端；无需 PowerShell、不自动弹出。实际 React＋WebView2 连接生产 ModernExecutor，重复菜单复用置前，原故障有可见脱敏提示。43项针对性测试通过。当前事实、备份／Python路径／回退、仍未验证能力见 [MENU-LAUNCH-RESULTS.zh-CN.md](../docs/ai-frontend/MENU-LAUNCH-RESULTS.zh-CN.md)。没有修改 Praat.exe／权限或请求真实模型。
+
+
+> **现代 AI 前端实施交接：源码、离线构建和隔离验收已完成。**
+>
+> - 当前结果、启动／回退与验证边界：[BUILD-RESULTS.zh-CN.md](../docs/ai-frontend/BUILD-RESULTS.zh-CN.md)
+> - 权威架构：[CHAT-UI-ARCHITECTURE.zh-CN.md](../docs/ai-frontend/CHAT-UI-ARCHITECTURE.zh-CN.md)；维护交接：[BUILD-HANDOFF.zh-CN.md](../docs/ai-frontend/BUILD-HANDOFF.zh-CN.md)
+> - 实际依赖与许可来源：[FRONTEND-SOURCES.md](../docs/ai-frontend/FRONTEND-SOURCES.md)
+>
+> 默认入口已切换 assistant-ui／React＋pywebview／WebView2：`python ai/run_ai_chat.py`；`--legacy` 显式回退 Tk。生产构建、前端合并 29 项、浏览器 4 项、Python 分模块合并 860 项、真实 WebView2 mock 验收 9 组通过。恢复检查为同进程服务重建＋页面刷新，不是整 OS 进程重启。
+>
+> 本轮未调用真实云端、进行真 Praat 端到端测量、重制安装包、发布或推送；未修改原生源码／Praat 权限。新库独立，旧记录只读，用户配置／数据受到保护。下方历史交接完整保留，其中旧版真机／真云端／发布记录不是本轮现代入口的验收证明。
+
+---
+
 # AI 前端交接要点
 
 ## 最新交接：2026-10-02 夜：测量 VOT「没完成」= 目录 Low 标签 + 投递事实被搞错（**已真机+真云端验过**）
@@ -212,75 +237,6 @@ icacls "C:\Users\f2468\Desktop\Praat\稳定早期版\Praat.exe" /setintegritylev
 已按确认设计完成云端 Pydantic AI / Graph 编排、独立报告、直接音频能力设置与明确错误纠正、窗口内原目标继续、SQLite 查看记录及材料清理。本地 Qwen 规划路径保留。核心新增模块是 `cloud_agent.py`、`cloud_workflow.py`、`escape_policy.py`、`model_capabilities.py`、`materials.py`、`audio_probe.py`、`conversation_store.py`；框架依赖见 `requirements.txt`。
 
 安装器和路径窗口已补齐依赖安装与检测；本次 `AIPraat-install.exe` / `AIPraat-paths.exe` 已重新构建，载荷包含当前源码（包括既有折叠区修正）。此前下方“部署缺口”属于历史记录，不能作为当前包的状态。主环境完整回归 706 项通过；验收与后续验证边界见 `docs/2026-10-02-阶梯逃逸实现验收.md`。模型功能探针只用随机合成音频，未使用真实 API 或用户录音验收细微发音准确度。
-
-## 最新交接：2026-10-02 思考链折叠区「右键点不开」
-
-用户报的现象：AI 前端的思考链折叠区（「已完成，用时X分Y秒 ▾」那一行）**右键点不开**。
-
-### 结论先说
-
-1. 折叠区的右键机制**本身是好的**。本轮在**用户真实运行环境**（Python 3.14.8 +
-   Tk 9.0.4，`%APPDATA%\Praat\Preferences.txt` 里的 `Python.executablePath`）里，用
-   **真实 Win32 右键**（`SetCursorPos` + `mouse_event`，不是 `event_generate`）点中
-   标题行，`process_body` 的 `elide` 确实从 1 翻到 0、正文显示出来。
-2. 但**命中范围太窄**，用户很容易点到「看着像标题、其实没有字符」的地方，表现就是
-   「右键没反应」。这一轮修的就是命中范围。
-3. **安装版（`AIPraat-install.exe`）里打包的 `chat.py` 是旧版，连折叠功能都没有**
-   （见下面「部署缺口」）。
-
-### 根因：Tk 的 `@x,y` 只落在**有字符**的位置上
-
-`_on_process_right_click` 原来只做一件事：把点击坐标转成字符索引，再看这个字符上有没有
-`process_header_N` tag。而标题行有两个地方「没有字符」：
-
-- `hint` 的 `spacing1 = pad(4)` / `spacing3 = pad(6)` 是**行间空隙**，测试实测标题文字
-  高 20px、而它所在的整行高 33px —— 上下各有 4~7px 的带子，点在那里 `@x,y` 会解析到
-  相邻行，**差一行就完全没反应**；
-- 标题文字右侧那一大片空白（实测 `bbox` 宽 906px，文字只有 154px 宽）：那里没有字符，
-  `@x,y` 只能落在行尾的换行上，也拿不到 header tag。
-
-用户说「右键点不开」，最可能就是点在这两种位置上。
-
-### 改了什么
-
-`ai/praat_ai/chat.py`，两处（没有动控件、没有动 `spacing`、没有动交互方式）：
-
-- 新增 `_process_block_at(index)`：除了命中的那个字符，还看**该行行首/行尾**和
-  **下一行的行首/行尾**。折叠时正文被 elide，正文那一行的字符索引正好紧接着标题行行尾
-  （实测 `header tag range = ('7.0','8.0')`、`body tag range = ('8.0','10.0')`），
-  所以「点在折叠区/标题下面那段行距」也能展开；展开状态下正文各行不会误命中。
-- `_on_process_right_click` 改成调它，并补了 `tk.TclError` 保护。
-
-回归：`ai/tests/test_chat_process_fold.py` 从 8 条加到 **12 条**，新增的四条分别钉住
-「行尾空白」「标题下面那一行的行距」「标题上面的行距带」「离标题很远的地方右键不动任何
-东西」。
-
-### 复现/验收方式（下次别再用 `event_generate` 猜）
-
-`event_generate("<Button-3>")` **测不出真机问题**：它不经过 Windows 的消息队列。本轮用的
-办法是：主进程建真窗口、跑 Tk 事件循环，**另起一个进程**用 `SetCursorPos` +
-`mouse_event(0x0008/0x0010)` 真点，再用 `transcript.bbox()` 量坐标。两个坑：
-
-- 探针进程被 Windows 当成 **DPI 不感知**时会虚拟化坐标：`SetCursorPos(107,569)` 实际把
-  指针放到 (134,711)，**要先把坐标除以 1.25 再传进去**（本机 125% 缩放）。
-- 别在自己的线程里读 Tk（`RuntimeError: main thread is not in main loop`），
-  要在 `root.update()` 所在的主线程里读状态。
-
-### 部署缺口（重要，没动）
-
-`installer/build/payload.zip` 里的 `ai/praat_ai/chat.py` 是 **20:17 构建时的旧版**，
-`grep` 它**找不到** `elide` / `_begin_process` / `Button-3` —— 也就是**没有折叠功能**。
-桌面 `稳定早期版` 里没有第二个安装副本，本机 C 盘也没有（`AIPraat.exe` 只在
-`installer/build/` 下），所以「用户到底跑的哪一份」没定论。两种可能：
-
-- 跑的是源码目录（`AI.projectDirectory: ai`，相对于 `Praat.exe`）：那么本轮修的是对的，
-  **关掉对话窗口再打开**就会加载新代码（Python 不改已开着的窗口）；
-- 跑的是安装版：那要先重新打包，命令是
-  `pwsh -File installer\build.ps1`（会重新生成 `payload.zip` 与
-  `AIPraat-install.exe`；`csc.exe` 在本机存在，不需要新装东西）。
-
-**没有擅自重建 `AIPraat-install.exe`**：那是已验收过的交付物，包里的 `Praat.exe`
-（98,627,072 字节）和仓库根目录的那份（98,643,968 字节）也不一样，重建前该先问清楚。
 
 ### 2026-10-02：已重新打包并**覆盖式更新**到 GitHub release
 
@@ -593,7 +549,7 @@ schema 也确实只有 `from`/`to`。但 `extract_part` 和 `textgrid_set_interv
 
 ## 2026-09-29 对象工作流与 API Prompt（历史，仍有效）
 
-**用户要求阶段收尾：额度将尽，当前步骤做完并更新交接，不再扩展任务。**
+**用户要求阶段收尾：额度将尽，只把当前步骤做完并更新交接**
 本节覆盖下方 9/23 历史现场状态；不要将旧分支、进程、端口和配置说明当作当前状态。
 
 ### 当前目录与授权

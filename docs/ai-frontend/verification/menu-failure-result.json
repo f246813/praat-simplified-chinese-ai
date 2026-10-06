@@ -1,0 +1,15 @@
+{
+  "visible": true,
+  "dialogTitle": "Message",
+  "missing": ["webview", "clr"],
+  "diagnostic": {
+    "success": false,
+    "frontend_running": false,
+    "frontend_status": "desktop launch failed",
+    "error": "当前 Python 缺少依赖：webview, clr"
+  },
+  "credentialFree": true,
+  "noChatSpawn": true,
+  "praatResponsiveSeconds": 0.0,
+  "healthyPythonRestored": true
+}

@@ -1,0 +1,30 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "revision": "ab45264919aaeb8a421cc156f1a5459ef9d60b72",
+  "files": [
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadUnarchiveParams.ts",
+      "gitBlob": "4e464989e30dbc9b5de544c4554d49bf4af316a8",
+      "sha256": "50df685c2ddcc5cb002d57c70662d4d5ebc23b14bef71c448e36a3ad65b18ffd"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadDeleteParams.ts",
+      "gitBlob": "909ccda7152f0bd35eaf6cd02b8f9f34001e52f8",
+      "sha256": "d967e40d7e905587d54206d468d43748bb1291589551109af647d73f7723811d"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSourceKind.ts",
+      "gitBlob": "0a464e3d8d6e6d9abe078ee79d5fed4970ad07ce",
+      "sha256": "0ca0f7faf4ebc35bc89967d666a904329b958167c6ca9d9099ce1aa500de4ac9"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadListParams.ts",
+      "gitBlob": "854b6ef92cb69a91abaf2dce09165745ec1ab4eb",
+      "sha256": "177792aa539bc95d3eb0dfd4979b4e46fc243baeb7c1dd30ccc2e8bb957fa5b7"
+    }
+  ],
+  "uiReference": "https://github.com/openai/codex/issues/13018",
+  "documentation": "https://developers.openai.com/codex/app/settings/",
+  "boundary": "Public archive/delete and sourceKinds/cwd/sectionId filters copied unchanged. Desktop settings renderer is not published; source labels map to actual host desktop/legacy records. Existing search/menus/storage are reused.",
+  "followupReference": "User-provided screenshot: 批注 2026-10-04 204054.png"
+}

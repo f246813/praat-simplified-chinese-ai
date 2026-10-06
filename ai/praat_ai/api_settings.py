@@ -1,21 +1,8 @@
-"""「前端 → API 配置」：填 API key 接云端大模型（OpenAI 兼容接口）。
+"""API provider presets and configuration helpers.
 
-前端默认连本机的 llama-server；这个窗口让用户改接一个**更大的云端模型**：
-填服务商、地址（Base URL）、模型名和 API key，点「测试连接」确认能用，保存后
-前端立刻改用它（见 :func:`praat_ai.config.apply_api_to_qwen`），本地 llama-server
-那份配置原样留着，取消勾选「启用」就能回去。
-
-两个入口共用同一份实现：
-
-- Praat 菜单「前端 → API 配置…」→ `ai/start_api_settings.py` 起一个**独立进程**
-  → `ai/run_api_settings.py` → 本模块的 :func:`run_standalone`（自己起一个 Tk
-  根窗口）。**别改回** `run_ai_control.py api-config`：那条路是阻塞式的
-  （Praat 会读子进程输出直到它退出），窗口开着的时候 Praat 整个不响应，
-  缩窗口就变幽灵窗口，见 guide.md §8.15.2；
-- 对话窗口里的「API 配置…」按钮 → :class:`ApiSettingsDialog`（挂在对话窗口上）。
-
-API key 只写进 ``ai_config.json``（该文件在 .gitignore 里，不会进仓库）；也可以用
-环境变量 ``PRAAT_AI_API_KEY`` 覆盖，界面里留空即可。窗口里 key 默认打码显示。
+Modern menus and standalone entry points open the assistant Model page.
+The Tk dialog class remains only for the explicitly selected legacy chat UI.
+Credentials and settings continue to use the shared ai_config.json configuration.
 """
 
 from __future__ import annotations
@@ -926,38 +913,6 @@ class ApiSettingsDialog:
 
 
 def run_standalone(config_path: str | Path | None = None) -> int:
-    """独立打开「API 配置」窗口（Praat 菜单那一路用）。返回进程退出码。"""
-
-    import tkinter as tk
-
-    from . import parent_watch
-
-    saved = False
-
-    def mark_saved(_values: dict[str, Any]) -> None:
-        nonlocal saved
-        saved = True
-
-    dialog = ApiSettingsDialog(None, config_path=config_path, on_saved=mark_saved)
-    # Praat 关了就跟着退，别把这个小窗留在桌面上（同对话窗口）。
-    if parent_watch.should_watch():
-        parent_watch.ParentWatcher(dialog.window, grace_sec=2.0).start()
-    dialog.window.mainloop()
-    try:
-        dialog.window.destroy()
-    except Exception:   # noqa: BLE001
-        pass
-    if saved:
-        # The menu launches this dialog in a detached process. Apply the same
-        # service transition as the chat dialog before that process exits.
-        from . import control
-
-        try:
-            control.reconcile_api_transition(config_path)
-        except (OSError, ValueError, control.QwenServerError) as error:
-            from tkinter import messagebox
-
-            messagebox.showerror("API 配置", f"配置已保存，但切换本机服务失败：{error}")
-            return 1
-    del tk
-    return 0
+    """Compatibility entry; the standalone API window has been removed."""
+    from start_api_settings import main
+    return main(config_path)

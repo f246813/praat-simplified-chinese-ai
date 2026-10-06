@@ -1,0 +1,132 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { SpeechDictionaries, type DictionaryResult } from '../src/SpeechDictionaries';
+
+const data: DictionaryResult = {dictionaries: [{name: '中文.dict', path: 'C:/词典/中文.dict', exists: true, active: true}], theme: 'system'};
+beforeEach(() => {
+  vi.stubGlobal('matchMedia', () => ({matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn()}));
+  HTMLDialogElement.prototype.showModal = function() { this.setAttribute('open', ''); };
+  HTMLDialogElement.prototype.close = function() { this.removeAttribute('open'); };
+});
+afterEach(() => {cleanup(); vi.unstubAllGlobals();});
+
+it('loads configured paths and opens the native picker from the bottom action', async () => {
+  const rpc = vi.fn().mockResolvedValue(data);
+  render(<SpeechDictionaries rpc={rpc}/>);
+  await screen.findByText('C:/词典/中文.dict');
+  fireEvent.click(screen.getByRole('button', {name: '添加语音词典'}));
+  await waitFor(() => expect(rpc).toHaveBeenCalledWith('dictionaries.choose', {}));
+  expect(screen.getByText('中文.dict')).toBeTruthy();
+});
+
+it('right-click deletion requires choosing delete; cancel leaves configuration intact', async () => {
+  const rpc = vi.fn().mockResolvedValue(data);
+  render(<SpeechDictionaries rpc={rpc}/>);
+  const row = await screen.findByRole('button', {name: /中文.dict/});
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  fireEvent.click(screen.getByRole('menuitem', {name: '删除'}));
+  fireEvent.click(screen.getByRole('button', {name: '取消'}));
+  expect(rpc).toHaveBeenCalledTimes(1);
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  fireEvent.click(screen.getByRole('menuitem', {name: '删除'}));
+  rpc.mockResolvedValue({dictionaries: [], theme: 'system'});
+  fireEvent.click(screen.getByRole('button', {name: '删除'}));
+  await screen.findByText('尚未配置语音词典');
+  expect(rpc).toHaveBeenLastCalledWith('dictionaries.remove', {path: data.dictionaries[0].path});
+});
+
+it('shows picker errors and keeps the existing list', async () => {
+  const rpc = vi.fn().mockResolvedValueOnce(data).mockRejectedValueOnce(new Error('文件不可读'));
+  render(<SpeechDictionaries rpc={rpc}/>);
+  await screen.findByText('中文.dict');
+  fireEvent.click(screen.getByRole('button', {name: '添加语音词典'}));
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(screen.getByText('中文.dict')).toBeTruthy();
+});
+
+it('left-clicking the select menu updates the current check and border after host save', async () => {
+  const second = {name: '英语.dict', path: 'C:/词典/英语.dict', exists: true, active: false};
+  const initial = {...data, dictionaries: [...data.dictionaries, second]};
+  const selected = {...data, dictionaries: [{...data.dictionaries[0], active: false}, {...second, active: true}]};
+  const rpc = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(selected);
+  render(<SpeechDictionaries rpc={rpc}/>);
+  const row = await screen.findByRole('button', {name: /英语.dict/});
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  fireEvent.click(screen.getByRole('menuitem', {name: '选用该词典'}));
+  await waitFor(() => expect(row.classList.contains('is-active')).toBe(true));
+  expect(rpc).toHaveBeenLastCalledWith('dictionaries.select', {path: second.path});
+  expect(row.getAttribute('aria-current')).toBe('true');
+  expect(row.querySelector('.dictionary-current svg')).toBeTruthy();
+  expect(document.querySelectorAll('.dictionary-row.is-active')).toHaveLength(1);
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  expect((screen.getByRole('menuitem', {name: '选用该词典'}) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('keeps the old active dictionary when selecting fails', async () => {
+  const second = {name: '英语.dict', path: 'C:/词典/英语.dict', exists: true, active: false};
+  const rpc = vi.fn().mockResolvedValueOnce({...data, dictionaries: [...data.dictionaries, second]}).mockRejectedValueOnce(new Error('无法保存配置'));
+  render(<SpeechDictionaries rpc={rpc}/>);
+  const row = await screen.findByRole('button', {name: /英语.dict/});
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  fireEvent.click(screen.getByRole('menuitem', {name: '选用该词典'}));
+  await screen.findByRole('alert');
+  expect(document.querySelector('.dictionary-row.is-active')?.textContent).toContain('中文.dict');
+  expect(row.classList.contains('is-active')).toBe(false);
+});
+
+it('does not offer selection of a missing dictionary file', async () => {
+  const rpc = vi.fn().mockResolvedValue({...data, dictionaries: [{...data.dictionaries[0], active: false, exists: false}]});
+  render(<SpeechDictionaries rpc={rpc}/>);
+  const row = await screen.findByRole('button', {name: /中文.dict/});
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  expect((screen.getByRole('menuitem', {name: '选用该词典'}) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('menuitem', {name: '删除'}) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('switches the sidebar to acoustic models and uses their picker and current selection', async () => {
+  const first = {name: '中文声学.zip', path: 'C:/模型/中文声学.zip', exists: true, active: true};
+  const second = {name: '英语声学.zip', path: 'C:/模型/英语声学.zip', exists: true, active: false};
+  const rpc = vi.fn().mockResolvedValueOnce(data)
+    .mockResolvedValueOnce({models: [first, second], theme: 'system'})
+    .mockResolvedValueOnce({models: [first, second], theme: 'system'})
+    .mockResolvedValueOnce({models: [{...first, active: false}, {...second, active: true}], theme: 'system'});
+  render(<SpeechDictionaries rpc={rpc}/>);
+  await screen.findByText('中文.dict');
+  expect(screen.getByRole('heading', {name: '管理语音词典与模型'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', {name: '声学模型'}));
+  const row = await screen.findByRole('button', {name: /英语声学.zip/});
+  expect(screen.queryByText('中文.dict')).toBeNull();
+  expect(rpc).toHaveBeenLastCalledWith('acoustic_models.list', {});
+  fireEvent.click(screen.getByRole('button', {name: '添加声学模型'}));
+  await waitFor(() => expect(rpc).toHaveBeenLastCalledWith('acoustic_models.choose', {}));
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  fireEvent.click(screen.getByRole('menuitem', {name: '选用该模型'}));
+  await waitFor(() => expect(row.classList.contains('is-active')).toBe(true));
+  expect(rpc).toHaveBeenLastCalledWith('acoustic_models.select', {path: second.path});
+  expect(document.querySelectorAll('.dictionary-row.is-active')).toHaveLength(1);
+});
+
+it('models share deletion confirmation and return to dictionaries through the sidebar', async () => {
+  const model = {name: '中文声学.zip', path: 'C:/模型/中文声学.zip', exists: true, active: true};
+  const rpc = vi.fn().mockResolvedValueOnce(data).mockResolvedValue({models: [model], theme: 'dark'});
+  render(<SpeechDictionaries rpc={rpc}/>);
+  await screen.findByText('中文.dict');
+  fireEvent.click(screen.getByRole('button', {name: '声学模型'}));
+  const row = await screen.findByRole('button', {name: /中文声学.zip/});
+  expect(document.documentElement.dataset.theme).toBe('dark');
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  fireEvent.click(screen.getByRole('menuitem', {name: '删除'}));
+  expect(screen.getByRole('dialog', {name: '删除声学模型'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', {name: '取消'}));
+  expect(rpc).toHaveBeenCalledTimes(2);
+  fireEvent.contextMenu(row, {clientX: 80, clientY: 100});
+  fireEvent.click(screen.getByRole('menuitem', {name: '删除'}));
+  rpc.mockResolvedValue({models: [], theme: 'dark'});
+  fireEvent.click(screen.getByRole('button', {name: '删除'}));
+  await screen.findByText('尚未配置声学模型');
+  expect(rpc).toHaveBeenLastCalledWith('acoustic_models.remove', {path: model.path});
+  rpc.mockResolvedValue(data);
+  fireEvent.click(screen.getByRole('button', {name: '语音词典'}));
+  await screen.findByText('中文.dict');
+  expect(rpc).toHaveBeenLastCalledWith('dictionaries.list', {});
+});

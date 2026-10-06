@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "isolatedData": true,
+  "sessions": 500,
+  "messages": 6000,
+  "oldFullHistoryRequests": 500,
+  "newSearchRequests": 1,
+  "newFullHistoryRequests": 0,
+  "oldMilliseconds": 999.3,
+  "newMedianMilliseconds": 194.4,
+  "speedup": 5.14,
+  "oldResponseBytes": 12681140,
+  "newResponseBytes": 24,
+  "removedInputWaitMilliseconds": 200,
+  "notes": "Host benchmark excludes bridge/React time; old baseline omits the old fixed 300ms wait."
+}

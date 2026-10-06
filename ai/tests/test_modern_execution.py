@@ -394,6 +394,49 @@ class ModernExecutionTests(unittest.TestCase):
         self.assertIn('1 MiB', result['content'])
         self.assertEqual(list((self.root / 'tasks').glob('task-*')), [])
 
+    def test_original_filename_hint_and_user_correction_stay_bound_to_recording(self):
+        paths = [self.root/'uuid-a.wav', self.root/'uuid-b.wav']
+        for path in paths:
+            with wave.open(str(path), 'wb') as writer:
+                writer.setparams((1,2,8000,0,'NONE','not compressed'))
+                writer.writeframes(b'\0\0'*800)
+        def analyse(config, state, **kwargs):
+            self.assertFalse(state.evidence)
+            self.assertFalse(config.api.audio_input_enabled)
+            state.report, state.status = '未上传音频，仅保留来源线索', 'complete'
+        self.cloud.side_effect = analyse
+        def run(path, name, text, prior=(), cfg=None):
+            return self.executor.run(config=cfg or cloud_config(), text=text, history=[], target='',
+                cancel=threading.Event(), emit=lambda *_:None, historical_evidence=prior,
+                attachments=[dict(path=str(path),name=name,mime='audio/wav')])
+        first = run(paths[0], 'こんにちは_take2.wav', '分析附件')
+        self.assertEqual(first['material_metadata']['pronunciation_hint']['candidate'], 'こんにちは')
+        corrected = run(paths[0], 'こんにちは_take2.wav', '我读的是「こんばんは」', [first])
+        self.assertIsNone(corrected['material_metadata']['pronunciation_hint'])
+        same = run(paths[0], 'こんにちは_take2.wav', '分析附件', [corrected])
+        self.assertIn('こんばんは', same['material_metadata']['user_pronunciation'])
+        self.assertIsNone(same['material_metadata']['pronunciation_hint'])
+        other = run(paths[1], 'ありがとう.wav', '分析附件', [corrected])
+        self.assertEqual(other['material_metadata']['pronunciation_hint']['candidate'], 'ありがとう')
+        cfg = cloud_config()
+        dictionary = self.root/'pronunciation.dict'
+        dictionary.write_text('hello h e l o', encoding='utf-8')
+        cfg.alignment.mfa.dictionary_path = str(dictionary)
+        with_dictionary = run(paths[0], 'こんにちは_take2.wav', '分析附件', cfg=cfg)
+        self.assertIsNone(with_dictionary['material_metadata']['pronunciation_hint'])
+
+    def test_session_runtime_is_reused_and_released_on_delete(self):
+        def reply(config, state, **kwargs):
+            state.report, state.status = '正式答复', 'complete'
+        self.dialogue.side_effect = reply
+        for _ in range(2):
+            self.executor.run(config=cloud_config(), text='你好', history=[], target='',
+                cancel=threading.Event(), emit=lambda *_:None, session_id='session-a')
+        self.assertEqual(len(self.runtimes), 1)
+        self.assertFalse(self.runtimes[0]._closed)
+        self.executor.release_session('session-a')
+        self.assertTrue(self.runtimes[0]._closed)
+
     def test_audio_correction_uses_supplied_path_and_identity_comparison(self):
         config = cloud_config()
         config.api.audio_input_enabled = True

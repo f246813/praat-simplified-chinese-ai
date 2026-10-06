@@ -5,6 +5,15 @@ import {createDemoAdapter} from '../src/demo';
 import {installScrollbarReveal} from '../src/pi/scrollbar-reveal';
 import {placeContextMenu} from '../src/pi/context-menu';
 afterEach(() => vi.useRealTimers());
+it.each([false,true])('deletes readonly legacy sessions (archived=%s) and keeps them absent after refresh', async archived => {
+  const bridge=new HostBridge(createDemoAdapter());const store=new ChatStore(bridge.rpc);
+  await store.initialize();if(archived)await store.archive('legacy:fixture',true);
+  await store.select('legacy:fixture');await store.delete('legacy:fixture');
+  expect(store.getSnapshot().sessions.some(s=>s.id==='legacy:fixture')).toBe(false);
+  expect(store.getSnapshot().selected).not.toBe('legacy:fixture');
+  await store.initialize();expect(store.getSnapshot().sessions.some(s=>s.id==='legacy:fixture')).toBe(false);
+  store.stop();
+});
 it('pins authoritatively, preserves local views/attachments/messages and restores on bootstrap', async () => {
   const bridge = new HostBridge(createDemoAdapter()); const store = new ChatStore(bridge.rpc);
   await store.initialize(); store.view('demo-history',{draft:'local',scroll:142});

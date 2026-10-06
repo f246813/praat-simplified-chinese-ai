@@ -1,0 +1,15 @@
+{
+  "checks": [
+    "real_WebView2_legacy_dictionary_and_restricted_RPC",
+    "native_Windows_file_picker_cancel_preserves_config",
+    "chooser_RPC_adds_Unicode_path_and_refreshes_list",
+    "select_dictionary_RPC_updates_MFA_path_and_green_check_border",
+    "right_click_delete_cancel_preserves_dictionary",
+    "confirmed_delete_keeps_disk_file_and_selects_remaining_dictionary",
+    "bottom_add_action_remains_below_scrollable_list",
+    "sidebar_switches_to_acoustic_models_and_retains_legacy_model",
+    "model_picker_select_persists_MFA_model_without_changing_dictionary",
+    "model_delete_keeps_files_and_dictionary_sidebar_restores_current_selection"
+  ],
+  "errors": []
+}

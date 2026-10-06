@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "onlyProductChange": "sidebar scrollbar thumb min-height:68px",
+  "widthUnchanged": 14,
+  "multiplier": 4,
+  "samples": [
+    {
+      "phase": "before",
+      "visibleLength": 13,
+      "nativeThumbLength": 17
+    },
+    {
+      "phase": "after",
+      "visibleLength": 64,
+      "nativeThumbLength": 68
+    }
+  ]
+}

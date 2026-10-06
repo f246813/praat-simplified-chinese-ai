@@ -309,7 +309,7 @@ Compress-Archive -Path Praat.exe, README.txt -DestinationPath Praat-ZH-Windows-x
 
 ## 6. GitHub Actions 发布工作流
 
-发布工作流位于 `.github/workflows/release-windows.yml`，实际包含：
+发布工作流位于 `.github/workflows/release.yml`，实际包含：
 
 - `build-windows-x64`：在 `windows-latest` 上用 MSYS2 `CLANG64` 构建 `make PRAAT_ARCH=x64v3 -j2`，产出 Windows x64 zip。
 - `build-macos`：在 `macos-26` 上准备 Xcode project，必要时从上游 release 下载 `praatXXXX_xcodeproj.zip`，并把 `sys/praat_translate.cpp` 注入 `praat_mac` target，产出 macOS universal dmg。

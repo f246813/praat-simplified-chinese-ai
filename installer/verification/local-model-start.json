@@ -1,0 +1,9 @@
+{
+  "cold_start": "verified",
+  "reuse": "verified",
+  "api_to_local": "verified",
+  "fixture_thinking": "off",
+  "auto_start_on_disk": false,
+  "user_config_unchanged": true,
+  "owned_service_stopped_after_test": true
+}

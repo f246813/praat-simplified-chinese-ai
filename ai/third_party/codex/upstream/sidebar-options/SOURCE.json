@@ -1,0 +1,21 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "revision": "ab45264919aaeb8a421cc156f1a5459ef9d60b72",
+  "files": [
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadSortKey.ts",
+      "gitBlob": "21eae4e755f646954d2de10553d29f4d7810c218",
+      "sha256": "0b85156c3956d4c86c13c60e72fa7bc160936082a057903d9906e651a050670c"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/SortDirection.ts",
+      "gitBlob": "d8597a46ea7c96467ce05542886a266f71ba27e2",
+      "sha256": "9ad2278213c1d99366e0ac2ecf6cbc069f9cf1090aafd4e71462a3945c14638a"
+    },
+    {
+      "path": "codex-rs/app-server-protocol/schema/typescript/v2/ThreadListParams.ts",
+      "gitBlob": "854b6ef92cb69a91abaf2dce09165745ec1ab4eb",
+      "sha256": "177792aa539bc95d3eb0dfd4979b4e46fc243baeb7c1dd30ccc2e8bb957fa5b7"
+    }
+  ]
+}

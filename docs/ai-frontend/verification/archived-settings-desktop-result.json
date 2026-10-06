@@ -1,0 +1,13 @@
+{
+  "realWebView2": true,
+  "productionAssets": true,
+  "isolatedData": true,
+  "checks": [
+    "entry is settings-only; archived rows show date, preserved project/connection context and Unarchive",
+    "one host restore; settings stay open; original section/messages/draft/reading position remain unchanged",
+    "body-only search uses one compact RPC; row/group/global deletion persists; active chats/section/legacy source remain intact",
+    "restore persists across production reload; opening archives is read-only until restored; empty state works"
+  ],
+  "passed": true,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0"
+}

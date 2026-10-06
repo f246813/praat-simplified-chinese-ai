@@ -7,6 +7,7 @@ import os
 import shutil
 import uuid
 import wave
+import re
 from pathlib import Path
 from .process import process_alive, process_identity, identities_match
 
@@ -27,9 +28,11 @@ class TaskMaterials:
         self.closed = False
         self.snapshot_attempted = False
         self.snapshot_error = ''
+        self.original_filename = ''
 
     def provenance(self) -> dict:
         return {'sha256':self.fingerprint, 'source':self.source, 'source_kind':self.source_kind, 'range':self.range, 'snapshot':'window-only',
+                'original_filename':self.original_filename,
                 'audio_available':bool(self.audio_path and self.audio_path.is_file() and not self.closed)}
 
     def snapshot_wav(self, source: Path, selection: tuple[float, float] | None = None) -> Path:
@@ -42,6 +45,8 @@ class TaskMaterials:
         if self.closed:
             raise OSError('窗口已关闭，临时材料不能再创建')
         source = Path(source).resolve()
+        if not self.original_filename:
+            self.original_filename = source.name
         self.source, self.source_kind, self.snapshot_attempted = str(source), 'file', True
         target = self.directory / 'segment.wav'
         with wave.open(str(source), 'rb') as reader:
@@ -123,3 +128,28 @@ def cleanup_abandoned(root: Path) -> int:
         except (OSError, ValueError, KeyError, TypeError):
             continue
     return removed
+
+
+def pronunciation_statement(user_words):
+    return next((text for text in reversed(user_words) if re.search(
+        r'(?:读|说|念|发音|内容|音节|音素|词句).{0,8}(?:是|为|叫|[:：]|[「“\"/])|(?:pronounc|transcript|utterance)',
+        text, re.I)), '')
+
+
+def filename_pronunciation(name, user_words, *, dictionary_available=False):
+    """Conservative source-name hint, never a transcript/phone/measurement."""
+    if dictionary_available or pronunciation_statement(user_words):
+        return None
+    name = str(name).replace('\\', '/').rsplit('/', 1)[-1]
+    stem = Path(name).stem.strip()
+    stem = re.sub(r'(?:[_\s-]+(?:take|录制|第)?\d+(?:次)?)+$', '', stem, flags=re.I).strip()
+    if (not stem or len(stem) > 100 or re.search(r'(?:\bor\b|_or_|_vs_|或|或者|[|?？_\d])', stem, re.I)
+            or re.search(r'录音|音频|片段|测试|未命名|练习|导出|样本|サンプル|練習', stem)
+            or re.fullmatch(r'(?:recording|record|audio|sound|segment|sample|test|take|录音|音频|测试|未命名|aaa)[_\s-]*\d*', stem, re.I)
+            or re.fullmatch(r'[0-9a-f]{16,}', stem, re.I)):
+        return None
+    # Require legible words/kana/hanzi or explicit phonetic spelling; do not
+    # infer pronunciation from arbitrary romanized filenames or initials.
+    if not re.search(r'[\u3040-\u30ff\u3400-\u9fffɐ-ʯ]', stem):
+        return None
+    return dict(original_filename=name, candidate=stem, source='filename', status='根据文件名推测；未验证实际录音内容')
