@@ -23,6 +23,19 @@
 | [Ron-312/PraatPlugin](https://github.com/Ron-312/PraatPlugin) | 调用层的做法参考：Praat 安装位置的定位（对应 `PraatInstallationLocator`）、脚本投递与结果契约的取舍 | `ai/praat_ai/praat_app.py`（找 Praat）、`ai/docs/adr/ADR-001/002`（我们改了结论的地方都写在 ADR 的「备选方案」里） |
 | [mdbootstrap/TW-Elements](https://github.com/mdbootstrap/TW-Elements)（MIT） | **界面设计语言的参考**：色板（primary `#3B71CA`、success `#14A44D`、danger `#DC4C64`、warning `#E4A11B`、info `#54B4D3`）、卡片/按钮/进度条/状态胶囊/提示条的组件形态与层级。它是给网页用的 Tailwind 组件库，我们**没有复制它的代码**——界面仍是 Python + Tkinter，圆角卡片与进度条是 Canvas 自绘 | `ai/praat_ai/ui_theme.py`（令牌）、`ai/praat_ai/ui_widgets.py`（自绘控件）、`ai/praat_ai/chat.py` / `api_settings.py` / `progress_popup.py` / `ui.py`（四个界面），说明见 guide §8.16 |
 
+## 直接复用或移植的源码贡献者
+
+以下补充现代 AI 前端及上下文管理中实际提取、复制或移植的上游代码贡献者；名字按固定源码版本中相关文件的提交记录核对。它不是这些大型项目的完整贡献者名册。逐文件来源、哈希、修改范围与许可证见 [前端源码清单](docs/ai-frontend/FRONTEND-SOURCES.md)、[PI-Desktop NOTICE](ai/third_party/pi-desktop/NOTICE.md) 和 [Codex NOTICE](ai/third_party/codex/NOTICE.md)。
+
+| 上游源码 | 本项目复用范围 | 相关贡献者 |
+| --- | --- | --- |
+| [PI-Desktop](https://github.com/vastsa/PI-Desktop/tree/0d47d26769ecbeca1c3ab56fa83b58a91de8190e)（LGPL-3.0，固定提交 `0d47d26769ecbeca1c3ab56fa83b58a91de8190e`） | 菜单、滚动条、侧栏分组/预览与搜索输入的局部源码和交互 | [Lan（@vastsa）](https://github.com/vastsa)、[@zszz3](https://github.com/zszz3)、[@KtzeAbyss](https://github.com/KtzeAbyss)、[@yuxino](https://github.com/yuxino)、[@ZeroY](https://github.com/zeroy1024)；完整名单见[上游贡献者记录](https://github.com/vastsa/PI-Desktop/graphs/contributors) |
+| [OpenAI Codex](https://github.com/openai/codex/tree/ab45264919aaeb8a421cc156f1a5459ef9d60b72)（Apache-2.0，固定提交 `ab45264919aaeb8a421cc156f1a5459ef9d60b72`） | 会话分区协议源码；搜索、历史分页和 fork 行为移植 | [Joey Trasatti（@joeytrasatti-openai）](https://github.com/joeytrasatti-openai)、[Owen Lin（@owenlin0）](https://github.com/owenlin0)、[Eric Traut（@etraut-openai）](https://github.com/etraut-openai)、[Can Sar（@cansar-oai）](https://github.com/cansar-oai)、[@andrewgu-oai](https://github.com/andrewgu-oai)、[David de Regt（@ddr-oai）](https://github.com/ddr-oai)、[Michael Bolin（@bolinfest）](https://github.com/bolinfest)；完整名单见[上游贡献者记录](https://github.com/openai/codex/graphs/contributors) |
+| [Pi](https://github.com/earendil-works/pi/tree/28dcce2ba45ce4a9efeb0f5b686f0be830fd89b9)（MIT，固定提交 `28dcce2ba45ce4a9efeb0f5b686f0be830fd89b9`） | token 估算、压缩边界、对话循环与按需技能目录的实现模式移植到 Python | [Mario Zechner（@badlogic）](https://github.com/badlogic)、[Armin Ronacher（@mitsuhiko）](https://github.com/mitsuhiko)、[Vegard Stikbakke（@vegarsti）](https://github.com/vegarsti)、[David Brailovsky（@davidbrai）](https://github.com/davidbrai)、[Cristina Poncela Cubeiro（@cristinaponcela）](https://github.com/cristinaponcela)、[Alexey Zaytsev（@xl0）](https://github.com/xl0)、[Aliou Diallo（@aliou）](https://github.com/aliou)；完整名单见[上游贡献者记录](https://github.com/earendil-works/pi/graphs/contributors) |
+| [OnlyTerp/prompt-cache-skills](https://github.com/OnlyTerp/prompt-cache-skills/tree/5b58ae26bd446bfb2eee97e8dad076ffb46a6715)（MIT，固定提交 `5b58ae26bd446bfb2eee97e8dad076ffb46a6715`） | `check_cache.py` 原样复用；缓存验证流程改编为项目开发 skill | [OnlyTerp](https://github.com/OnlyTerp) |
+
+React、assistant-ui、Tiptap、Markdown 等作为锁定版本的包依赖使用，不等同于复制其整个源码仓库；版本和许可证清单见 [前端源码清单](docs/ai-frontend/FRONTEND-SOURCES.md) 与 [第三方依赖通知](ai/frontend/public/THIRD-PARTY-NOTICES.txt)。仅作界面参考、未复制源码的项目仍按上表原有说明标注。
+
 ## 运行依赖（不是代码借用，但用到了）
 
 | 依赖 | 用途 |
