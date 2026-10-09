@@ -12,18 +12,7 @@ class BranchExit(RuntimeError):
 
 
 def note_guard(state: Any, kind: str, rule: str) -> None:
-    """记一次守卫动作，供之后按规则 id 统计（写进 ``state.metrics``）。
-
-    守卫的强制力必须有据可查：哪条规则真的在触发、触发多少，是决定它该继续当闸门
-    还是退回提示词的唯一依据（2026-10-06 那次事故就是"没有计数、只能靠猜"）。
-    两个桶：
-
-    - ``guard_blocks``：挡下了什么（参数/提案被拒、测量执行失败、报告被拒）；
-    - ``guard_repairs``：守卫自己修好了什么（补引证、去掉编造编号、推导标为未核对）。
-
-    kind 传 ``'block'`` / ``'repair'``；``rule`` 用稳定的短 id（如
-    ``report.number_unmatched``、``tool.schema.measure``），不要塞整句中文理由。
-    """
+    """按稳定规则 ID 记录守卫动作到 state.metrics。guard_blocks 记录阻断，guard_repairs 记录自动修正；kind 使用 block 或 repair，rule 不包含完整错误理由。"""
 
     metrics = getattr(state, 'metrics', None)
     if not isinstance(metrics, dict):

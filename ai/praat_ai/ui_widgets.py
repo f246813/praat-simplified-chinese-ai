@@ -866,7 +866,7 @@ class Chip(_Themed, tk.Frame):
 
 
 class Snackbar(_Themed, tk.Frame):
-    """提示条：浅底 + 左侧强调色 + 折行小字（用来替原来的灰色提示行）。"""
+    """提示条：浅色底、左侧强调色与折行文本。"""
 
     KINDS = {
         "neutral": ("surfaceAlt", "textMuted", "border"),

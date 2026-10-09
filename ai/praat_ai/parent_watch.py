@@ -1,14 +1,4 @@
-"""前端窗口跟着 Praat 走：Praat 一关，对话窗口 / API 配置小窗自己退出。
-
-Praat 菜单启动前端时会带两个环境变量（见 sys/PraatAiControl.cpp）：
-
-``PRAAT_AI_PRAAT_PID``
-    当时那个 Praat 的进程号，最可靠的一条线索；
-``PRAAT_AI_PRAAT_EXECUTABLE``
-    Praat.exe 的路径，没有进程号时用它在进程表里找（例如手工启动的窗口）。
-
-用户报的 2026-09-21：关掉 Praat 之后，对话窗口还留在桌面上。
-"""
+"""前端窗口跟随启动它的 Praat 退出。原生菜单通过 PRAAT_AI_PRAAT_PID 指定进程，通过 PRAAT_AI_PRAAT_EXECUTABLE 指定可执行文件；无 PID 时相关查找可使用路径。"""
 
 from __future__ import annotations
 

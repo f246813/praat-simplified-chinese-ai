@@ -89,8 +89,7 @@ static bool waitWhileProgress (double progress, conststring32 message, GuiDialog
 	#endif
 	if (progress >= 1.0) {
 		/*
-			满格时先把「满格 + 说明」那一帧画出来再隐藏：以前直接
-			`GuiThing_hide`，一个几秒就跑完的操作在用户眼里只剩「闪一下」。
+			进度完成时先绘制满格与说明，再隐藏窗口，让短操作也能显示完成状态。
 		*/
 		GuiProgressBar_setValue (scale, 1.0);
 		if (message)
@@ -118,10 +117,8 @@ static bool waitWhileProgress (double progress, conststring32 message, GuiDialog
 			GuiLabel_setText (label2, U"");
 		}
 		/*
-			先把进度条设好再显示窗口：原来是「先 show 再 set」，第一帧就是空白
-			窗口（2026-09-21 用户报的「窗口打开时没有进度条」）。显示之后立刻
-			重画一遍，这一帧才算真的画出来——`GdiFlush ()` 只把 GDI 调用刷出去，
-			不抽消息队列。
+			先设置进度条再显示窗口，随后强制重绘。GdiFlush() 只刷新 GDI 调用，
+			不处理消息队列。
 		*/
 		GuiProgressBar_setValue (scale, progress);
 		GuiThing_show (dia);   // TODO: prevent raising to the front
@@ -139,14 +136,8 @@ static bool waitWhileProgress (double progress, conststring32 message, GuiDialog
 		#elif motif
 			GdiFlush ();
 			/*
-				窗口刚弹出来时进度条看着是空的：Win32 的 progress bar 在**被映射
-				的那一帧**里画的还是旧位置（0），下一次进度更新才出现填充
-				（2026-09-21 用户报的「窗口打开时没有进度条」；连拍两张同刻截图实测：
-				第一张 0 像素、0.2 秒后那张才有）。
-
-				所以这里：先把窗口真的显示出来（抽一次消息队列，处理掉刚才那次
-				show），再重设一次位置并强制重画控件本身——这一次它已经可见，
-				填充就会出现在第一帧里。
+				先处理窗口显示消息，再重设进度位置并重绘可见控件，
+				使首次显示包含当前进度。
 			*/
 			{
 				MSG message;

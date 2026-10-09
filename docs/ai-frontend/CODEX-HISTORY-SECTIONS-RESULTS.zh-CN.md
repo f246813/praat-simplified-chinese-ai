@@ -1,38 +1,9 @@
-# Codex 历史分区与会话分叉验收
+# 历史分区、归档与分叉
 
-2026-10-04：在既有 assistant-ui／React、ChatStore 与 pywebview／WebView2 上接入历史分区与独立会话分叉。
+`modern_organization.py` 管理稳定分区 ID、名称／外观、成员位置和内建置顶分区。删除自定义分区只移除成员关系；对话内容保留。移动通过显式 nullable 目标进行；恢复归档保留原成员关系。
 
-## 已接入的交互
+`sessions.fork` 在任务锁下复制当前历史、摘要与证据，生成独立消息／活动 ID；清空草稿与阅读位置，重置置顶和归档，记录来源。活动片段标记中断，不启动任务或重放执行。旧记录作为只读来源可创建现代可写分叉。
 
-- 每个会话的省略号和右键菜单均含「分区」「分叉会话」，并可归档／恢复。分区选择器支持普通历史、置顶、自定义分区和新建分区；左右方向键进入／返回，原有上下键、Escape、外部点击及焦点恢复继续有效。
-- 自定义分区使用稳定 ID，显示名称、图标、颜色和会话数量，可展开／折叠。右侧省略号含「编辑分区」「归档分区」「新建会话」「新建分区」「移除分区」。新建会话直接归入所选分区；空分区保留。
-- 会话可拖到分区标题，或拖到目标分区内某会话之前；顺序写入宿主数据库。单个会话只属于一个分区，置顶与自定义分区互斥。内置置顶不能编辑或移除。
-- 用户确认的归档行为：归档其中全部会话，分区和归属保留；从侧栏「已归档」可逐个或整区恢复。运行中的会话阻止整区归档，宿主预检后原子更新。归档期间可阅读、移动、分叉，恢复后可继续聊天。
-- 移除分区仅解除归属，会话返回普通历史，聊天内容、证据、归档状态均保留。
-- 分叉复制点击时的完整历史、压缩上下文与历史证据，生成独立会话／消息／活动 ID，显示来源，重置草稿和阅读位置。运行中的正文按当前快照保留并标记中断，不继承任务，不重放工具。旧记录可分叉为可继续聊天的现代会话；旧库仍以只读方式打开。
-- 原有预览、搜索、多选、排序、会话快捷键和调整宽度保留。贴边滚动通道 14px、滑块最短 68px 的上一轮设置未改变。
+会话／分区归档拒绝活动任务；已归档会话仍可查看、移动与分叉，恢复后才能提交。旧库组织元数据保存在现代库。当前批量组动作包括删除、脱离时间组与归档，接口见 [宿主契约](HOST-CONTRACT.md)。
 
-## 上游来源与边界
-
-固定 [openai/codex `ab45264919aaeb8a421cc156f1a5459ef9d60b72`](https://github.com/openai/codex/tree/ab45264919aaeb8a421cc156f1a5459ef9d60b72)。公开树包含分区类型、创建／编辑／移除／移动处理器、SQLite 分区与排序规则和 `thread/fork` 协议，未提供 Codex 桌面侧栏的 React 菜单组件。
-
-两份 TypeScript 分区类型按字节原样复制；公开分区语义适配到本项目 Python／SQLite，菜单由现有 React／Pi 渲染器承载。「归档分区」是本项目聚合会话归档的接口，完整历史分叉由本宿主实现；不宣称复制了未公开的桌面组件。UUID 使用现有宿主 UUID4，名称额外限制为 100 字符；可选分叉截止轮次／Codex 进程与工作树选项不属于本次会话菜单范围。
-
-14 份原文件逐一核对固定 Git 树的 blob ID 与 SHA-256，Apache-2.0 许可、原 NOTICE、修改说明和校验清单见 [来源目录](../../ai/third_party/codex/NOTICE.md)。生产资源包含 `codex-source/` 的原文件、修改后的渲染器／宿主源码及许可。既有 LGPL Pi 原件／修改／完整前端重建输入仍随 `pi-desktop-source/` 分发。不引入 Codex 或 Pi Agent 内核。
-
-生产源文件／许可／重建输入／入口资产及滑条文件未改变的核对结果见 [来源验收 JSON](verification/codex-history-source-result.json)；菜单外观记录见 [Edge 演示夹具截图](verification/codex-history-section-menu.png)。
-
-## 实现与验证
-
-宿主：[modern_organization.py](../../ai/praat_ai/modern_organization.py) 使用新增分区／侧栏元数据表，保留原会话／消息／证据表；[HOST-CONTRACT.md](HOST-CONTRACT.md) 列出显式 RPC。渲染器入口为 [HistoryOrganization.tsx](../../ai/frontend/src/HistoryOrganization.tsx)、会话菜单和已有 Pi 侧栏。
-
-独立复核发现两处并发问题并已修复：将置顶、新建、改名、删除与分区操作统一排队，防止延迟快照覆盖较新的操作；初始化保护新分区元数据时仍接收任务状态，防止事件游标重置后丢失结束状态。另对改名增加版本保护，避免较早预览回退标题。对应检查先失败后通过；独立复核未发现额外阻塞项。
-
-验证记录：
-
-- 前端 TypeScript 编译和生产 Vite 构建通过；全部 **88** 项 Vitest 检查通过。
-- **38** 项宿主检查通过，覆盖稳定 ID／重启恢复、排序、置顶互斥、无效参数回滚、运行保护、分叉证据／压缩上下文、旧数据库字节不变。
-- 安装的 Edge 下 **35** 项浏览器检查通过，含省略号／右键、分区 CRUD、新建归属、键盘返回、跨区拖放及插入排序、整区归档恢复和原有输入／任务／滚动交互。
-- 真实生产 pywebview／WebView2 隔离验收通过：从 DOM 操作创建／编辑／移动、右键分叉、区内新建、整区归档、页面重载后恢复、移除保留历史，检查滑条参数以及没有执行器／模型调用。结果见 [原生验收 JSON](verification/codex-history-desktop-result.json)；可重跑脚本为 [verify_history_organization_desktop.py](../../ai/tests/verify_history_organization_desktop.py)。隐藏原生窗口不用于宣称悬浮预览验收；该交互由可见 Edge 检查覆盖。
-
-本轮仅更新项目源码与 `ai/frontend/dist`，没有发布或重制安装包。重开本项目 AI 前端可加载更新后的资源。
+Codex 协议与存储语义固定来源为 `ab45264919aaeb8a421cc156f1a5459ef9d60b72`，公开协议与本项目渲染／宿主适配见 [来源说明](FRONTEND-SOURCES.md)。检查入口为 `ai/tests/verify_history_organization_desktop.py`、`verify_history_group_actions_desktop.py` 与 `verify_history_source.py`。

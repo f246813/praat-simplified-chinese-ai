@@ -53,11 +53,8 @@ def effective_thinking_level(api, kind: str | None) -> str:
     return level
 
 
-#: 云端把 reasoning token 计入 ``max_tokens``（2026-10-03 实测：概念解释那一轮 2048 里
-#: 1435 是推理，正文没写完就撞上限，报成 ``模型输出未完整结束：length``）。按思考档位
-#: 给输出预留额度：``off`` 不预留；``low``/``medium`` 与供应商的 ``thinking_budget``
-#: 对齐；``high`` 供应商不给上限，按保守值预留；``auto`` 是服务端默认（可能开思考），
-#: 按中档预留。额度只影响「留多少给输出」，不改变发给供应商的思考参数。
+#: 输出总额包含推理额度，按思考档位预留；off 不预留，low/medium 使用对应预算，
+#: high 使用保守预留，auto 使用中档预留。此处不改变供应商思考参数。
 REASONING_RESERVE_TOKENS: dict[str, int] = {
     'off': 0, 'auto': 4096, 'low': 1024, 'medium': 4096, 'high': 8192,
 }

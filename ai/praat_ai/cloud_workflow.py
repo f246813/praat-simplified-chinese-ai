@@ -294,11 +294,7 @@ def process_cloud(window, text: str):
             progress('配置已改变，旧请求的音频能力纠正仅用于本轮，未覆盖新配置')
 
     try:
-        # Capture task material before later editor/object changes. This is a
-        # local export only; it is not an implicit provider capability probe.
-        # 能力没开时 audio 分支永远不会用这份材料（report/should_escalate_audio 都先看
-        # audio_input_enabled），却要花掉一次投递：2026-10-02 那次 VOT 请求就是这条
-        # 快照先把投递闸门撞坏的，所以只在对音频输入有需要时才导出。
+        # 在对象或选区变化前保存任务材料；仅音频输入启用且任务需要时导出。
         if (materials is not None and materials.audio_path is None and not state.continuation
                 and config.api.audio_input_enabled
                 and entry_mode(state.goal, state.context_text) == 'L0'

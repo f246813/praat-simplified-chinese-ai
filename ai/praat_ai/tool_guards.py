@@ -113,12 +113,7 @@ class ToolGuards:
         return StrictContext(tools.parse_object_context(text), Path('guard-result.tsv'), Path('guard-state.tsv'))
 
     def parameter(self, raw):
-        """``measure`` 的参数名：单个、逗号串或列表都收，逐个核对后统一成逗号串。
-
-        说明书一直允许 ``"f1,f2"``（见 :func:`tools.measure_signature`），所以这里先
-        按参数表逐个校验并规范化，再交给 schema；直接把整串丢给 ``enum`` 会把合法
-        写法判成非法（2026-10-06 实测的对话损坏根因之一）。
-        """
+        """接受单个 measure 参数名、分隔字符串或列表，按参数表逐个校验并规范化为逗号串。"""
 
         if isinstance(raw, (list, tuple, set)):
             raw = ','.join(str(item) for item in raw)
@@ -317,12 +312,8 @@ class ToolGuards:
                 raise
             note_guard(state, 'block',
                        ('tool.schema.' if isinstance(error, SchemaViolation) else 'tool.policy.') + name)
-            # 执行前被挡下的都算「提案没写对」：Praat 一个脚本都没跑，不能按测量失败记
-            # 两振出局。否则一次参数笔误就会 BranchExit 掉整个工具阶段，报告阶段只剩
-            # 缺口说明（2026-10-06：measure 按说明书写了 "f1,f2"，或把专用工具的参数混
-            # 进 measure）。真正执行过的失败仍由 cloud_agent 记进 state.failures，那条
-            # 「此前失败分支仍暂停」的闸门不受影响。重复次数由 pydantic-ai 的工具重试
-            # 上限、相同提案跳过和本轮工具预算一起兜住。
+            # 执行前拒绝记录为提案错误，不计实际测量失败；有限重试、相同提案跳过
+            # 与工具预算限制重复尝试。真正执行失败由 cloud_agent 更新失败分支。
             raise ModelRetry(reason + '；请按提示改正后重试。') from error
         for evidence in state.evidence:
             if evidence.tool != name:

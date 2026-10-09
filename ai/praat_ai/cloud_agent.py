@@ -54,20 +54,12 @@ REPORT_INSTRUCTIONS = (
     'audio_observations 是此前模型定性观察，注明原模型和材料来源，不是专业测量。'
     'audio_input=false 未听本轮录音；无原音频或此前观察不判断具体录音缺陷。')
 
-#: 选段定位必须是报告的第一节（2026-10-04 实测：报告把含「た」爆破点的选段说成
-#: 「词首清辅音 /a/ 之前」，另一次直接断言「目标音素是 /a/」——而它对选段位置的唯一
-#: 输入是对象名里那个词）。报告阶段没有工具，所以位置和音素身份要么算出来
-#: （占比 + 该词的音素序列），要么说清缺对齐/标注。写成必写一节，是因为只写「要说明
-#: 位置时必须先算」时，报告仍会跳过这一步直接谈音素（2026-10-04 23:51 那次就是这么错的）。
-#: 只在真会谈到选段的请求上追加：提示词预算很紧，4096 上下文的续写预检只有十几
-#: token 余量（test_general_continue_preflight_matches_actual_dialogue_context）。
+#: 报告定位选段时使用覆盖比例与音素序列，缺少对齐或标注时说明缺口。
+#: 相关任务才追加定位指导，避免占用一般对话预算。
 _PLACEMENT_TOPICS = re.compile(
     r'标准音|对比|比较|纠音|发音|练习|音素|音节|位置|语调|口音|改进|选段|第几|选中|这段|录音|vot')
 
-#: 谈音调类型/升降/「语调平淡」之前必须先量音高走向（2026-10-04 实测：报告只拿全段
-#: 平均基频 81.6 Hz 就断言「あなた」是平板型，并据此给出「あ低な高」的练习；同一段的
-#: 更早一次（改前端前）量过前半段 84.98 / 后半段 79.06，结论正好相反）。规划阶段先要求
-#: 把走向测出来，报告阶段才引用得到；两段都按目标条件追加，不占对话预算。
+#: 音调结论需要音高走向证据；规划与报告按相关目标追加指导。
 _PROSODY_TOPICS = re.compile(r'语调|音调|重音|アクセント|accent|标准音|对比|比较|发音|练习', re.I)
 
 #: 关掉思考的寒暄/能力介绍走单次快速回复：只给正文这么多（推理另算）。
@@ -125,12 +117,7 @@ def output_limit_from_error(detail: str):
 
 
 def blocked_attempts(state, limit: int = _MAX_BLOCKED_ATTEMPTS):
-    """实际没成的调用（失败、状态不明、未执行），去重后的简短记录。
-
-    报告不能只看 ``missing_reason``：那里只放得下最后一条失败原因，而真正的原因
-    （例如 ``Message.txt`` 写不进去）常常只留在更早的一条尝试里。2026-10-02 的 VOT
-    请求就是这样：报告看不到投递失败，于是把「测不出来」解释成了「模型不支持音频」。
-    """
+    """返回实际未完成调用的去重简短记录，包括失败、状态不明与未执行。missing_reason 只保存最近原因；报告需要保留更早尝试中的真实投递或环境原因。"""
 
     rows: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -169,9 +156,7 @@ def report_instructions(config, state) -> str:
     return text
 
 
-#: 用户自己说过、会影响判断的说话人/录音条件。只做「原话搬运」，不改写、不推断——
-#: 2026-10-04 实测：用户在第三轮才说「我是成年男性」，报告在前一轮只能列「若为男性…若为女性…」；
-#: 而历史在压缩/老窗口那条路上不一定进得了报告，所以单独挑出来随报告上下文一起给。
+#: 将用户明确提供的说话人和录音条件原样带入报告上下文，不推断未提供属性。
 _SELF_DESCRIPTION = re.compile(
     r'我是|本人|成年|男性|女性|男生|女生|母语|方言|普通话|口音|岁|录音|麦克风|手机|耳机')
 #: modern_app 会把历史专业证据当一条 user 消息塞进对话上下文，那不是用户自述。
@@ -295,15 +280,7 @@ _CALC_PLACEHOLDER = re.compile(r'\{\{calc:[^{}]*\}\}')
 
 
 def rescued_report(draft: str, detail: str, values=(), *, state=None) -> str:
-    """守卫拒了报告时，保住模型已经写好的正文，遮掉没核上的数值，再挂一句原因。
-
-    2026-10-06 实测：报告守卫（``report_guards``）连拒两次后，当时只有一次机会的
-    重试预算（``retries={'output':1}``）直接耗尽，整份回答被 ``fallback_report()``
-    换成「本轮仅交付阶段记录」——工具明明测到了数据，用户却什么都看不到。守卫的职责是
-    「不许拿没测过的数字当结论」，不是「没有合格报告就不给回答」，所以有草稿就留草稿：
-    被拒的那几个数值换成 :data:`UNVERIFIED_NUMBER`，其余正文和结论照旧，并在末尾说明
-    为什么。没有草稿时返回空串，由调用方回退到阶段记录。
-    """
+    """保留被守卫拒绝的草稿，遮蔽未通过核对的数值和内部推导占位式，并附核对原因。没有草稿时返回空串，由调用方生成阶段记录。"""
 
     text = str(draft or '').strip()
     if not text:
@@ -321,12 +298,7 @@ COVERAGE_FILL_EXPLANATION = '模型没有逐项交代这一项；已保留现有
 
 
 def repair_coverage(deliveries, coverage):
-    """把 coverage 修成与交付项一一对应。
-
-    交付项状态是界面要展示给用户的东西，而"必须逐项原样对应 deliveries"原来是一条
-    会拒整份报告的硬规则：模型漏一项、多一项、改一个字就丢掉整份回答（2026-10-06）。
-    缺项补成 partial，多出来的条目丢掉，正文不动。
-    """
+    """按 deliveries 整理 coverage：缺项补为 partial，多余项移除，正文保留。"""
 
     remaining = {}
     for item in coverage:
@@ -483,12 +455,7 @@ class CloudSession:
             raise asyncio.CancelledError()
 
     def reject_output_limit(self, detail):
-        """服务端拒绝了这次的输出上限：先让掉推理额度，再考虑正文。
-
-        旧版本只发正文（正文 ≤ 旧上限时服务端是接受的），所以降额必须让「正文 + 推理」
-        一起落到服务端能接受的范围：只砍正文时推理额度还在，总数可能永远超上限，重试必然
-        再失败（典型：high=8192 预留 + 正文 2048 = 10240 > 百炼/DeepSeek 的 8192）。
-        """
+        """服务端拒绝输出上限时，先减少推理预留，再考虑减少正文额度，使总输出上限可被接受。"""
 
         limit = output_limit_from_error(detail)
         if limit:
@@ -497,11 +464,11 @@ class CloudSession:
                                                             limit - self.body_target))
             self.set_body_tokens(min(self.body_target, limit))
         elif self.state.budget.reasoning_tokens:
-            # 没说上限：先让掉这次新增的推理额度，正文维持原样（= 旧版本的请求形状）。
+            # 未提供服务端上限时，先减少推理预留，保留正文额度。
             self.state.budget.reasoning_tokens = 0
             self.set_body_tokens(self.body_target)
         else:
-            # 推理本来就是 0（旧版本也会被拒）：只能砍正文，地板 OUTPUT_REQUEST_FLOOR。
+            # 无推理预留时只能减少正文，保留 OUTPUT_REQUEST_FLOOR。
             self.set_body_tokens(max(OUTPUT_REQUEST_FLOOR, self.body_target // 2))
         self.rejected_output_cap = self.settings.get('max_tokens')
 

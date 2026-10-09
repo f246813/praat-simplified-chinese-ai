@@ -1563,14 +1563,8 @@ void praat_dontUsePictureWindow () { praatP.dontUsePictureWindow = true; }
 			praat_executeScript_noGUI (& messageFile, true);   // trust all messages, because they are sent by other apps that have control
 		} catch (MelderError) {
 			/*
-				app 发来的脚本报错时**不要** Melder_flushError（2026-09-21，用户报的
-				「Praat 弹错误框会卡住后续消息」）：Windows 上它开的是
-				MessageBox (MB_OK | MB_TOPMOST) + 自己的消息循环，用户不点掉它，
-				对话窗口就只能一条条等到超时，而且错误原文前端读不到。
-
-				改成把错误拿走（clearError 之后不会再弹），交给 PraatAiControl
-				写进对话窗口读的结果文件 + 完成标记：前端立刻拿到「这一条失败了，
-				原因是……」，用户也能在对话里看到那句英文原文。
+				前端脚本错误写入结果文件与完成标记，避免模态错误窗口阻塞后续消息。
+				取走并清除 Melder 错误后，由 PraatAiControl 将错误原文交给前端。
 			*/
 			if (fromChatFrontend) {
 				failureText = Melder_dup (Melder_getError ());
@@ -1586,12 +1580,8 @@ void praat_dontUsePictureWindow () { praatP.dontUsePictureWindow = true; }
 			对话窗口的脚本跑完了：把当前对象列表重新写给它（PraatAiControl 的
 			refreshChatContext）。
 
-			为什么必须在这里补一刀（2026-09-20 实测）：对象列表文件以前只在
-			「对象被创建/删除」或者用户在列表里改选中时才会重写，而 app 发过来的
-			脚本常常两条都不占（例如只写文件的空脚本）。于是对话窗口会拿着**上一个
-			Praat 实例**留下的旧列表去规划（例如挑一个早就不存在的 9 号对象），
-			Praat 弹一句英文错误框还挡住后面的消息。这里在每条 app 消息之后都重新
-			导出一次，前端的对象列表就跟正在跑的 Praat 对得上了。
+			每条 app 消息处理后重新导出对象列表，即使脚本未创建、删除或改变选择，
+			前端也能读取当前 Praat 实例的对象上下文。
 		*/
 		PraatAiControl_refreshChatContext (true);   // 强制写一次：前端的规划完全依赖这份列表
 		return 0;

@@ -8,7 +8,7 @@
 > - **借用的代码库、运行依赖与参考文献**：见 [CREDITS.zh-CN.md](CREDITS.zh-CN.md)
 > - **许可**：代码部分 GPL-3.0-or-later（[LICENSE](LICENSE)）；文档/图片部分见 [docs/LICENSE.txt](docs/LICENSE.txt)
 > - 本副本由 `f246813` 发布，与上游和基座仓库**没有隶属关系**；基座原有的署名与链接一律保留。
-> - AI 前端怎么用：[`ai/README.zh-CN.md`](ai/README.zh-CN.md)；设计取舍：[`ai/docs/adr/`](ai/docs/adr/README.md)；踩过的坑：[`guide.md`](guide.md) §8。
+> - AI 前端怎么用：[`ai/README.zh-CN.md`](ai/README.zh-CN.md)；设计取舍：[`ai/docs/adr/`](ai/docs/adr/README.md)；维护说明：[`guide.md`](guide.md) §8。
 
 <div align="center">
   <img src="docs/pictures/icon.png" width="150" alt="Praat 汉化版 Logo" />
@@ -76,16 +76,15 @@
 >   * **文档与示例库**：编辑器【帮助】菜单内置了简明使用教程、API 参数手册以及常用场景的代码示例库。
 > 
 
-## 本地 AI 纠音实验
+## AI 对话前端
 
-仓库新增 `ai/` 目录，提供基于 Qwen3.5-0.8B 的本地纠音前端。它复用 Praat
-Python 桥接的 `praat.get_selected()`、`praat.call()` 和输出目录自动导入机制，
-通过确定性声学算法比较标准音范本与学习者录音，并生成错误 TextGrid、叠加图和
-JSON 报告。
+默认入口 `ai/start_ai_chat.py` 启动 React 前端和 Python 宿主，桌面窗口使用
+pywebview / WebView2。显式 `--legacy` 可启动 Tk 界面。
+前端支持本地 llama.cpp 模型和云端 API；模型负责请求解析、工具选择和结果解释，
+声学测量由 Praat 工具执行。会话、草稿和活动证据由本地宿主保存。
 
-Qwen 只负责自然语言请求解析、工具选择和图表解释，不直接参与发音评分。
-详细说明和启动方式见 [`ai/README.zh-CN.md`](ai/README.zh-CN.md)。
-
+使用方式见 [`ai/README.zh-CN.md`](ai/README.zh-CN.md)，当前模块和限制见
+[`ai/HANDOFF.md`](ai/HANDOFF.md)。
 
 # Praat：用计算机做语音学分析
 

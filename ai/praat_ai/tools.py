@@ -265,11 +265,7 @@ class ToolContext:
 
 
 def parse_object_context(text: str) -> tuple[ObjectRow, ...]:
-    """Parse the ``id / class / name / selected`` TSV written by Praat.
-
-    旧版本只写四列；打开着编辑器时 Praat 会多写 ``sel_start``/``sel_end`` 两列，
-    缺列就当作没有圈选。
-    """
+    """解析对象快照中的对象行，支持额外的 sel_start / sel_end 编辑器选区列，忽略非对象元数据行。"""
 
     rows: list[ObjectRow] = []
     for line in (text or "").splitlines():
@@ -459,11 +455,7 @@ def _finish(context: ToolContext) -> list[str]:
 
 
 def _id_fragment(variable: str = "newId") -> str:
-    """结果行里的「（id N）」：多步请求要靠它认出刚建出来的那个对象。
-
-    2026-09-20 实测：不写 id 时模型在第二步只能拿旧对象的 id 顶上
-    （「截取前 0.3 秒再改名」变成了给**原对象**改名）。
-    """
+    """将新建对象的 ID 写入结果，供后续动作引用真实创建的对象。"""
 
     return f"{quote('（id ')}, fixed$ ({variable}, 0), {quote('）')}"
 
@@ -638,26 +630,7 @@ def _build_pitch(arguments: Mapping[str, Any], context: ToolContext) -> str:
 
 
 def _pitch_extreme_lines() -> list[str]:
-    """算出**不会被倍频误判劫持**的最高/最低基频与最高点时刻。
-
-    为什么要自己遍历帧，而不是 ``Get maximum: tmin, tmax, "Hertz"``
-    （2026-09-30 用户报的「峰值 598.5 Hz」）：
-
-    ``Get maximum`` 取的是区间内**最高的那一帧**，一帧就定了结论。而自相关在
-    **浊音起始**（第一帧有声的地方）很容易把 121 Hz 听成 496 Hz——约 4 倍的倍频
-    误判。实测：``test/fon/examples/sounds/a.wav`` 裸最大值 496.65 Hz @ 0.222 s，
-    真实基频只有 ~121.6 Hz（95 分位 121.61），而那正是第一个有声帧。用户录音里
-    「159.9 Hz 的段落冒出 598.5 Hz @ 0.061 s」是同一个形状（≈3.7 倍，且 0.061 s
-    在文件起头）。
-
-    纯噪声**不会**造成这个：Praat 在噪声段直接给 ``--undefined--``。所以这不是
-    「没做降噪」，而是「倍频误判 + 用最大值当结论」。
-
-    修法：把候选限制在 **中位数的 1.5 倍**以内再取最大。倍频误判必然是 2 倍以上，
-    1.5 倍的上限够宽，不会误伤真实的高基频（实测另外三段音频的取值一字未变）。
-    如果原始最大值超过了这个上限，说明确实发生了误判，脚本会写出一句说明，
-    让用户和模型都知道这个数被修正过、以及原始值是哪个——不静默改数。
-    """
+    """遍历基频帧取得最高、最低值与峰值时刻。实现按中位数的 1.5 倍限制候选最大值，并报告原始超限值；该启发式可能排除真实高基频，不能保证所有倍频误判均被识别。"""
 
     return [
         'median = Get quantile: tmin, tmax, 0.5, "Hertz"',
@@ -690,9 +663,7 @@ def _pitch_extreme_lines() -> list[str]:
         "    floorValue = median * 0.5",
         "    highest = 0",
         "    lowest = 0",
-        # 平均值必须和最高/最低统计同一批帧：裸 ``Get mean`` 会把被剔除的倍频误判帧
-        # 也算进去，于是「平均 139.8 Hz、最高 119.2 Hz」这种自相矛盾的数字会进报告
-        # （2026-10-04 实测：模型只好写「含误判帧」把它绕过去）。
+        # 平均值与最高/最低统计使用同一批过滤后的基频帧。
         "    pitchTotal = 0",
         "    pitchCount = 0",
         "    for pitchFrame from firstFrame to lastFrame",
@@ -931,9 +902,7 @@ def _build_object_info(arguments: Mapping[str, Any], context: ToolContext) -> st
         )
     if not has_duration:
         fragments.append(quote("：这类对象没有时长信息"))
-    # 编辑器圈选写清楚占目标时长的百分比：报告阶段没有工具，只有这些数字；
-    # 「选段在词里哪个位置」必须能靠算术定，不能让模型凭印象说词首/词中
-    # （2026-10-04 实测：它把含「た」爆破点的选段说成「词首辅音之前」）。
+    # 输出选区覆盖比例，供报告定位；时间比例不能单独确定音素身份。
     selection = row.selection
     if has_duration and selection and selection[0] is not None and selection[1] is not None:
         lines.extend([f"selStart = {float(selection[0]):.6f}", f"selEnd = {float(selection[1]):.6f}"])
@@ -1383,9 +1352,7 @@ def _build_textgrid_set_interval(
 ) -> str:
     row = _textgrid_row(arguments, context)
     tier = _tier_number(arguments)
-    # from/to 是 start/end 的别名，必须和 extract_part 一致：云端 Prompt 教模型对
-    # 整段请求写 from=0、终点写实际 duration，两个工具用不同的名字会把用户明确
-    # 给出的时间丢掉（2026-09-29 回归）。
+    # from/to 与 start/end 作为时间参数别名，按相同优先级读取。
     start = _number(
         {"start": arguments.get("start", arguments.get("from"))},
         "start", 0.0, 0.0, 36000.0,
@@ -2209,16 +2176,7 @@ def _build_extract_part(arguments: Mapping[str, Any], context: ToolContext) -> s
 
 
 def _build_read_file(arguments: Mapping[str, Any], context: ToolContext) -> str:
-    """把磁盘上的文件读进 Praat 变成一个对象（``save_sound`` 的反方向）。
-
-    为什么要单独一个工具（2026-09-20）：换到原生 function calling 之后，模型手里
-    有 ``save_sound``（「另存为 WAV」）却没有「读入文件」，于是「读取 D:/x.wav」
-    被它理解成保存 WAV（方向反了，还跑得"成功"）。按 guide.md §8.4 的约定——
-    加工具比加提示词管用——这里把「读文件」也做成一个工具。
-
-    文件在不在由**脚本里**的 ``fileReadable()`` 判断，不在 Python 侧拦：同一条指令
-    里的前一个动作完全可能刚刚写出这个文件（渲染时它还不存在），那种情况不该拦。
-    """
+    """将磁盘文件读入为 Praat 对象。脚本执行时通过 fileReadable() 核对文件，以支持同一请求中先创建文件再读入。"""
 
     raw = str(arguments.get("path", "") or arguments.get("file", "") or "").strip()
     raw = raw.strip('"')
@@ -2508,8 +2466,7 @@ def _build_pitch_peak_latency(
             ]
         )
     lines.extend(['nFrames = Get number of frames'])
-    # 峰值时刻同样要防倍频误判：裸 Get time of maximum 会被浊音起始那一帧引偏，
-    # 于是「峰值延迟」也跟着偏（2026-09-30 与 pitch_statistics 同一处修正）。
+    # 峰值时刻复用基频候选过滤，过滤规则的限制同 _pitch_extreme_lines。
     lines.extend(_pitch_extreme_lines())
     lines.extend(
         [
@@ -2779,14 +2736,7 @@ MEASURE_SEPARATORS = ",，、;；"
 
 
 def _measure_pattern() -> str:
-    """``parameter`` 的合法写法：一个参数名，或用分隔符连起来的一串参数名。
-
-    工具说明（``summary`` / ``signature``）和 :func:`_measure_names` 一直允许
-    ``"f1,f2"``，但 schema 原来只写了 ``enum``（单个名字），于是按说明书传多个
-    名字会被 :mod:`praat_ai.tool_guards` 的 JSON Schema 校验判成非法参数
-    （2026-10-06 实测：连续两次被拒后 ``state.failed`` 触发 ``BranchExit``，
-    整个工具阶段终止）。这里让 schema 与说明书同源，仍然拦得住拼错的参数名。
-    """
+    """从参数表生成 parameter 的 pattern，支持单个参数名及由 MEASURE_SEPARATORS 分隔的列表，与逐项校验保持同源。"""
 
     names = "|".join(re.escape(name) for name in measures.load_table().parameters())
     return rf"^\s*(?:{names})(?:\s*[{MEASURE_SEPARATORS}]\s*(?:{names}))*\s*$"
@@ -3538,8 +3488,7 @@ def _object_arg(description: str = "对象 id 或名称；不填就用当前选�
 
 
 def _seconds_arg(description: str) -> dict[str, Any]:
-    """一个时刻或一段时长（秒）。只允许数字：以前允许字符串时模型会把说明文字
-    当成值填进来（例如把「默认按 Praat 自动」写进 time_step）。"""
+    """时刻或时长的秒数 schema，仅接受数字。"""
 
     return {"type": "number", "description": description}
 
@@ -4144,14 +4093,7 @@ def praat_literal(text: str) -> str:
 
 
 def neutralize_info_commands(script: str, result_path: Path | str) -> str:
-    """把自定义脚本里会弹出 Info 窗口的输出命令改写成写结果文件，内容不丢。
-
-    前端把脚本送到 GUI 版 Praat 里跑，``appendInfoLine`` / ``writeInfoLine`` /
-    ``print`` / ``echo`` 这些都会走 ``gui_information()`` 把「Praat Info」窗口
-    弹出来（用户报的 bug）。所以这里在脚本层面兜底，把每一条都翻译成
-    ``appendFileLine``：模型想给用户看的那句话照样回到对话窗口，而不是被注释掉
-    之后凭空消失（以前 ``print`` / ``echo`` 就是这么丢的）。
-    """
+    """将 Info 输出命令改写为结果文件输出，保留可见字面内容；printtab 与 clearinfo 用说明注释替代。"""
 
     target = quote(str(result_path))
     lines: list[str] = []

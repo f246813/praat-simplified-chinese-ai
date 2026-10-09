@@ -317,10 +317,7 @@ def _launch_server(
     profile = apply_preset_to_profile(profile, preset)
     config.server.auto_start = True
     _progress(0.08, "准备启动本地模型服务…", progress)
-    # manager 的进度要同时「打印给 Praat」和「回调给对话窗口」：加载一个模型实测要
-    # 8 秒左右，这段时间里进度条必须一直在涨。（2026-09-21 用户报的「窗口打开时没有
-    # 进度条、随后闪一下就没了」有一半原因在这里：以前只回传给了对话窗口，
-    # Praat 那条路一个中间进度都没有。）
+    # 启动进度同时输出给 Praat 并回调对话窗口。
     manager = QwenServerManager(
         config,
         profile,
@@ -362,18 +359,7 @@ def ensure_local_service(
     *,
     progress: ProgressSink | None = None,
 ) -> dict[str, Any]:
-    """保证配置里写的那个本地模型真的在服务上（回本地模型时都要走这里）。
-
-    2026-09-22 的 WinError 10061 就是这条路缺了一段：从 API 切回本地（或者换一个
-    本地预设）时，代码只在「端口上有服务、但加载的是别的模型」时重启，端口**空着**
-    时什么都不做——配置已经切回本地、8000 端口却没人听，下一条消息直接「目标计算机
-    积极拒绝」。这里的四种情况：
-
-    - 端口空着 → 启动（``_launch_server``）；
-    - 端口上是**别的**模型（``server_model_state() is False``）→ 重启；
-    - 端口上就是配置里的模型（``True``）→ 什么都不做，只回报状态；
-    - 读不到模型列表（``None``）→ 保持原语义，不擅自重启别人的服务。
-    """
+    """确保配置的本地模型可用：空端口启动，其他模型重启，相同模型返回状态，无法读取模型列表时保留现有服务。"""
 
     if not endpoint_available(config.qwen.base_url):
         # 进度从 `_launch_server` 自己的 0.05 开始报（它一进门就报，用户不会干等）。
@@ -391,10 +377,7 @@ def start_frontend(
 ) -> dict[str, Any]:
     config = load_config(config_path)
     if api_is_active(config):
-        # API 模式不需要本地服务，但**一样要打进度**：Praat 的「正在处理中」小窗
-        # 是子进程的标准输出里出现 `PRAAT_PROGRESS` 才弹的（见
-        # sys/praat_python.cpp → Melder_progress），以前这里直接 return，菜单里点
-        # 「启动前端」就完全没有反馈（2026-09-22 用户报的）。
+        # API 就绪状态使用 PRAAT_PROGRESS 输出给原生进度窗口。
         _progress(0.10, "当前是 API 模式，不需要本机模型服务。", progress)
         _progress(1.00, f"已就绪：{config.api.model}（云端）", progress)
         return collect_status(config_path)

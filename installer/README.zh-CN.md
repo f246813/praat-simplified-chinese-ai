@@ -14,12 +14,12 @@
 | 视觉投影 | 和语言模型配套的 mmproj .gguf | 可留空，只在使用图像能力时需要 |
 | wav2vec2 模型 | 本地模型目录，使用文件夹浏览按钮选择 | 可留空 |
 | MFA 程序 | mfa.exe，也支持已有 .bat / .cmd 启动器 | 可留空 |
-| MFA 声学模型 | 声学模型 .zip | 可留空 |
-| MFA 发音词典 | 发音词典 .dict / .txt / .zip | 可留空 |
 
-wav2vec2 和 MFA 路径行依次追加在已有路径行下方，输入框与浏览按钮沿用相同样式；字段较多时可滚动查看。保存只更新这些路径，保留对齐后端、启用状态、CPU/CUDA、Conda 和其他运行参数。已有 wav2vec2 模型 ID、MFA 声学模型名称以及 `mfa` 命令也会回填并保留。使用 Conda 启动 MFA 时，原有 Conda 配置继续生效。
+wav2vec2 和 MFA 路径行依次追加在已有路径行下方，输入框与浏览按钮沿用相同样式；字段较多时可滚动查看。保存只更新这些路径，保留对齐后端、启用状态、CPU/CUDA、Conda 和其他运行参数。已有 wav2vec2 模型 ID 以及 `mfa` 命令也会回填并保留。使用 Conda 启动 MFA 时，原有 Conda 配置继续生效。
 
 Python 环境需含 Tk、NumPy >= 2、Pillow >= 10，以及云端编排依赖 pydantic-ai-slim[openai] 2.52.0、pydantic-graph 2.52.0、jsonschema 4.26.0。安装器和路径配置窗口检测到依赖缺失时，会同步显示 **“运行Powershell命令一键配置 →”**。点击后打开 PowerShell，为所选 python.exe 配置 pip、Pillow、NumPy 和上述云端编排依赖；已有满足版本的依赖会保留。Tk 属于 Tcl/Tk 组件：Conda 环境通过其管理器安装 tk；唯一匹配的官方 Python 安装通过对应版本、架构和用户范围的安装器补装或修复 Tcl/Tk。若环境未注册、安装目录存在歧义或不支持自动修复，命令窗口会提示具体原因及下一步。完成后按 Enter 返回，界面自动复检，通过后可保存或继续安装。下载依赖需要网络；系统级 Python 修复可能需要管理员权限。
+
+现代桌面前端还使用 pywebview 6.2.1、pythonnet 3.2.0（Windows）和 WebView2 Runtime；以 ai\requirements.txt 和所选 Python 环境为准。安装器依赖探测通过不等于现代桌面所有依赖已经可用。
 
 基础依赖清单在 ai\requirements.txt，其中 praat-parselmouth 可增强纠音声学分析。仅在点击一键配置时才修改所选 Python 的依赖；模型仍需自行准备。torch、transformers、MFA 等仅在启用相应强制对齐后端时需要，不是基础 AI 对话的必需项。
 
@@ -30,7 +30,7 @@ Python 环境需含 Tk、NumPy >= 2、Pillow >= 10，以及云端编排依赖 py
 | 文件 | 保存内容 |
 |---|---|
 | 安装目录\install-settings.json | 选择的 Python 路径与安装信息 |
-| 安装目录\ai\ai_config.json | 前端路径、模型预设，以及 alignment.wav2vec2.model、alignment.mfa.executable / acoustic_model / dictionary_path；用户自己的 API 设置也在此 |
+| 安装目录\ai\ai_config.json | 前端路径、模型预设，以及 alignment.wav2vec2.model、alignment.mfa.executable；MFA 词典与声学模型由资源管理窗口保存；用户自己的 API 设置也在此 |
 | %APPDATA%\Praat\Preferences.txt | Python.executablePath 和 AI.projectDirectory；保留其他首选项 |
 | %APPDATA%\Praat\plugin_praat_ai | 原生测量插件、指向安装目录的 AI 启动命令 |
 | 安装目录\.aipraat-backups\时间和编号 | 更新前的原文件及对应路径清单 |
@@ -51,6 +51,6 @@ Python 环境需含 Tk、NumPy >= 2、Pillow >= 10，以及云端编排依赖 py
 
 构建完成后，批量验证：
 
-    pwsh -NoProfile -File installer\tests\Run-Tests.ps1 -Python D:\Praat-work\venv-ai\Scripts\python.exe
+    pwsh -NoProfile -File installer\tests\Run-Tests.ps1 -Python <Python环境>\python.exe
 
 验证产物和日志位于 installer\verification。UI 验证用相同向导和安装资源，但首选项、快捷方式均写入独立测试目录。

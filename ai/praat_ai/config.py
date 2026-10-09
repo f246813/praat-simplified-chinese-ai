@@ -65,10 +65,7 @@ class ApiConfig:
     limit_tokens: bool = False
     max_context_tokens: int = 32768
     plan_max_tokens: int = 1500
-    #: 对话类回复（寒暄/概念解释）的正文上限：分析报告之外的第二道闸，因为对话不需要
-    #: 报告那么长。默认 2048 = 原来的硬编码值；调大调小都从这里生效
-    #: （分析类回复只看 ``plan_max_tokens``）。推理额度不计在内（见
-    #: :func:`praat_ai.dialogue_policy.reasoning_reserve`）。
+    #: 对话正文默认上限为 2048；分析正文使用 plan_max_tokens，推理预留另计。
     dialogue_max_tokens: int = 2048
     plan_temperature: float = 0.1
     vision_when_requested: bool = False
@@ -199,10 +196,7 @@ class AppConfig:
 
 
 def default_config_path() -> Path:
-    # ``PRAAT_AI_CONFIG_PATH`` 可以整份换掉配置文件（真机回归自己带一份临时配置
-    # 时用，免得动用户的 ai_config.json——比如用户已经切成 API 模式时，
-    # 本地模型那几条回归就没法跑了）。以前只有 control.main 认这个变量，
-    # 对话窗口不认，两边会读到不同的配置。
+    # PRAAT_AI_CONFIG_PATH 可替换整个配置文件，供独立配置启动使用。
     override = os.getenv("PRAAT_AI_CONFIG_PATH", "").strip()
     if override:
         return Path(override)

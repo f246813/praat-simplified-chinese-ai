@@ -205,13 +205,7 @@ def analysis_instructions(config: QwenConfig) -> str:
 
 
 def message_text(message: Mapping[str, Any] | None) -> str:
-    """从一次响应的 ``message`` 里取出要显示的正文。
-
-    ``content`` 为空时只取 ``reasoning_content`` 中明确标出的最终答案，
-    不把未完成的思考过程当回答。以前只有 :meth:`QwenClient.chat` 这么做，原生工具那条
-    路（``_NativePlanner``）直接读 ``content``，于是模型把话说在 reasoning 里时
-    界面就显示成「已完成」（2026-09-21 用户报的）。
-    """
+    """从响应 message 中取得可见正文。content 为空时只使用 reasoning_content 中明确标出的最终答案，不能把未完成思考当回答。"""
 
     if not isinstance(message, Mapping):
         return ""
@@ -285,11 +279,7 @@ def _is_local_endpoint(base_url: str) -> bool:
 
 
 def connection_hint(base_url: str, error: BaseException) -> str:
-    """把「本机模型服务没在跑」翻成一条能照着做的提示；别的错误返回空串。
-
-    2026-09-22 用户看到的是裸的 ``Qwen request failed: [WinError 10061] 由于目标
-    计算机积极拒绝，无法连接。``——知道失败了，但不知道下一步该点哪里。
-    """
+    """把本地服务拒绝连接转换成可操作提示；其他错误返回空串。"""
 
     if not _is_local_endpoint(base_url) or not _is_connection_refused(error):
         return ""
@@ -356,14 +346,7 @@ def history_messages(history: list[dict[str, str]]) -> list[dict[str, Any]]:
     return messages
 
 
-# ---------------------------------------------------------------------------
-# A5：上下文的 token 预算。
-#
-# 以前是死规矩：历史只带最近 8 条、对象列表整份塞进 system prompt。可 ctx 只有
-# 8192，而光工具 schema 就有 18k 字符（≈5k token），所以长对话或长对象列表时会被
-# 服务端**静默**截掉——用户看到的是模型突然「忘了」前面说过什么。现在按预算算，
-# 并且把「省掉了什么」写出来（prompt 里 + 对话窗口的提示行）。
-# ---------------------------------------------------------------------------
+ # 上下文预算扣除 schema、系统提示与输出预留，裁剪说明返回给调用方。
 
 #: 给服务端留的余量（消息包装、工具调用回灌这些零碎开销）。
 SAFETY_TOKENS = 200
@@ -539,23 +522,7 @@ _TEXT_PARAMETER = re.compile(r"<parameter\s*=\s*([\w.\-]+)\s*>", re.IGNORECASE)
 
 
 def parse_text_tool_calls(content: str) -> tuple[list[dict[str, Any]], str]:
-    """解析模型写在**正文里**的 ``<tool_call>`` 文本形式，返回 ``(动作, 剩下的文字)``。
-
-    本机 llama-server 没开 ``--jinja`` 时，小模型偶尔不返回结构化的 ``tool_calls``，
-    而是把 Qwen 的文本格式塞进 ``content``::
-
-        <tool_call>
-        <function=spectrogram>
-        <parameter=name>
-        Spectrum_03
-        </parameter>
-        </function>
-        </tool_call>
-
-    以前这串 XML 会被当成"最终回答"显示给用户。这里把它解析成工具调用（参数值是
-    字符串，工具自己的解析函数都接受），并把 XML 之外的文字留给用户看。模型被截断
-    （只有开头没有 ``</tool_call>``）时也能解析，剩下的半截不会再显示出来。
-    """
+    """解析正文中的 XML 工具调用，参数值按字符串传递，XML 外的文字保留为正文；截断调用按当前解析规则处理。"""
 
     text = content or ""
     actions: list[dict[str, Any]] = []

@@ -33,9 +33,7 @@ namespace {
 	bool statusSuccess = false;
 	bool statusRunning = false;
 	/*
-		API 模式（前端接云端大模型）：状态行必须说清楚，不然「running」看着像在等
-		本机 llama-server，用户点了菜单里的「启动/停止前端」也看不出发生了什么
-		（2026-09-22 用户报的「没反应」有一半是这个）。
+		API 模式与本机 llama-server 状态分别显示。
 	*/
 	bool statusApiEnabled = false;
 	bool statusVramLow = false;
@@ -356,7 +354,7 @@ namespace {
 
 		顺便告诉那个窗口「是谁启动了你」——Praat 的进程号 + Praat.exe 路径。前端
 		按这两条线索盯着：Praat 关掉之后，对话窗口和 API 配置小窗都自己退出
-		（见 ai/praat_ai/parent_watch.py，用户 2026-09-21 报的 bug）。
+		（见 ai/praat_ai/parent_watch.py）。
 	*/
 	void runDetachedLauncher (const std::filesystem::path &launcher) {
 		const std::string launcher8 = launcher. u8string();
@@ -397,13 +395,8 @@ namespace {
 
 	void launchApiSettingsWindow () {
 		/*
-			「前端 → API 配置…」：新起一个**独立**进程显示那个 Tk 窗口。
-
-			不能走 runControlCommand()：那条路 = praat_runPythonScriptFile()，
-			Praat 会一直读子进程的标准输出直到子进程退出；而这个窗口要等用户点
-		关闭才退出，于是 Praat 的主线程整个被堵住（实测窗口 Responding=False）：
-			缩一下语图窗口或对象窗口就成了幽灵窗口，再点关闭就是「未响应 → 结束
-			进程」，用户看到的就是崩溃（2026-09-21 用户报的）。
+			API 配置使用独立窗口进程。同步 Python 调用会读取子进程输出直到退出，
+			不适合需要等待用户关闭的窗口；脱离启动器避免阻塞 Praat 主线程。
 		*/
 		runDetachedLauncher (projectDirectoryPath() / "start_api_settings.py");
 	}

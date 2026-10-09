@@ -7,8 +7,7 @@
 
 做法参考 [chengafni/praat](https://github.com/chengafni/praat)：每个插件是
 `plugin_*/setup.praat` + 若干 `.praat` 脚本，菜单用 `Add menu command` /
-`Add action command` 注册。和他们的差别：脚本是**从参数表生成的**（见下），而不是
-在 Praat 里拼字符串再动态求值。
+`Add action command` 注册。脚本从共享参数表生成，参考来源保留于代码与许可说明。
 
 ## 装 / 卸
 
@@ -52,20 +51,19 @@ python ai\tools\build_plugin.py --check    # 只检查生成物和表是否一�
 表里 `@@ dedicated` 的那些参数（H/L、谱强调、Hammarberg、峰值/有效值、强度斜率、
 基频峰值延迟）是**多步脚本**，只在对话前端里实现，插件里不重复写一遍。
 
-## 已知边界（都是实测的）
+## 实现限制
 
 - 插件脚本在**对象列表**上工作：批处理（`Praat.exe --run`）和菜单点一下都行。
   编辑器那一条（`praatAiMeasureEditor.praat`）要读圈选范围，只能在真的开着编辑器
   时用——批处理里 Praat 会直接说 `Cannot edit a Sound from batch`，所以这一段
-  只能在真机上手点验证（见下）。
-- 插件和对话前端**共用一套命令字面量和默认设置**，所以同一个声音两边结果一致
-  （`ai/tests/verify_plugin.py` 用 220 Hz 纯音核对：平均基频 220 Hz、RMS 0.3536 Pa、
-  F1 191.9 Hz、CPPS 20.62 dB）。
+  需要在 GUI 编辑器中检查。
+- 插件和对话前端**共用一套命令字面量和默认设置**，具体结果还取决于对象、范围与分析设置
+。
 - 插件只对 **Sound** 生效（`LongSound` 没有 `To Pitch` 这些命令，菜单里没给它挂）。
 
 ## 验证
 
 ```powershell
-python ai\tests\verify_plugin.py      # 4/4：菜单注册 + 33 个参数 + 单参数带范围 + 无声段
+python ai\tests\verify_plugin.py      # 菜单注册、表驱动参数、范围与无声段
 python -m unittest discover -s ai\tests   # 里面 test_plugin_build.py 守着生成物和表一致
 ```

@@ -1,11 +1,8 @@
-"""构建本次发布的「前端源码修复包」（除安装包之外的可选附件）。
+"""按显式文件名单构建可选前端附件。
 
-    python installer/build-frontend-asset.py
-
-只按显式名单打包：不放 ``ai_config.json``（含用户 API Key）、不放 ``runtime``、
-``logs``、``__pycache__``，也不放安装器载荷；**不放文档**（更新日志在 release 正文里，
-验收文档与交接留在仓库里），这样改文档不会让附件体积变来变去。打完会逐个文件断言
-API Key 没有泄漏。安装包本身由 ``installer/build.ps1`` 负责。
+运行：python installer/build-frontend-asset.py。
+名单不含用户配置、runtime、logs、缓存、安装器载荷或文档；打包检查敏感凭据。
+安装器由 installer/build.ps1 构建。附件文件名由 OUTPUT 常量决定。
 """
 from __future__ import annotations
 

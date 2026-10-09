@@ -1,17 +1,9 @@
-"""校验重新打包后的安装包：内嵌载荷 / 清单 / 当前源码三者逐项一致。
+"""核对安装包内嵌 ZIP、载荷清单和当前源码/生成物。
 
-    python installer/verification/verify-delivery-package.py
-
-与上一轮的 ``verify-staircase-package.py`` 同样的思路，针对 2026-10-02 夜这次的
-「投递事实」修复：
-
-1. 从 ``AIPraat-install.exe`` 里取出内嵌的 ``AIPraat.Payload.zip``（按 Zip 的
-   中央目录定位，不依赖资源名），与 ``installer/build/payload.zip`` 逐字节比对；
-2. 载荷里的每个条目都要与 ``payload-manifest.json`` 以及**当前源码/生成物**的
-   SHA256 一致；
-3. 不含用户配置、runtime、logs、tests、__pycache__、音频或数据库；
-4. 记录本次三个二进制的体积与哈希；``Praat.exe`` 必须与**重打包前**记录的哈希一致
-   （本轮没有重编原生程序）。
+运行：python installer/verification/verify-delivery-package.py。
+检查内嵌载荷与 installer/build/payload.zip 的字节对应、逐项 SHA256、
+敏感与运行文件排除，并记录程序体积与哈希。原生哈希断言使用脚本指定的
+基准；该基准须与待检查包匹配，不能将旧基准作为任意当前程序的身份。
 """
 from __future__ import annotations
 

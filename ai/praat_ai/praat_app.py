@@ -1,24 +1,4 @@
-"""找到本机上正在跑的那个 Praat。
-
-为什么要单独一个模块（2026-09-20，参考 PraatPlugin 的
-``PraatInstallationLocator``）：以前 :func:`praat_ai.chat.praat_executable` 只认
-环境变量 ``PRAAT_AI_PRAAT_EXECUTABLE``，否则写死仓库根目录的 ``Praat.exe``。
-用户把 Praat 装在别处、或者从别的位置启动同一个 fork，前端就直接报
-「没有检测到正在运行的 Praat」，而他其实正开着 Praat。
-
-这里按「越可能是用户手上那个」的顺序找：
-
-1. 显式指定（环境变量）；
-2. 本仓库根目录的 ``Praat.exe``（这个 fork 自己构建出来的那个，正常就是它）；
-3. ``PATH``（``shutil.which``，不额外起子进程）；
-4. 常见安装位置（Program Files、Program Files (x86)、
-   ``%LOCALAPPDATA%/Programs/Praat``、桌面、家目录）；
-5. macOS / Linux 的常规位置（对话窗口的投递只能在 Windows 上用，但找得到路径
-   至少能让报错信息说清是哪个平台不支持）。
-
-缓存策略和参考库一致：找到就缓存；没找到也缓存，但 ``NOT_FOUND_RETRY_SEC``
-秒后重试一次——用户中途把 Praat 装好，不用重启对话窗口。
-"""
+"""定位 Praat 可执行文件。依次检查显式环境变量、仓库 Praat.exe、PATH、常见安装路径及各平台默认路径。找到的路径缓存；未找到时在 NOT_FOUND_RETRY_SEC 后重试。参考 PraatPlugin 的 PraatInstallationLocator。"""
 
 from __future__ import annotations
 

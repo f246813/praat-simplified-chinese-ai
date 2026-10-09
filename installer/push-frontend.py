@@ -1,26 +1,9 @@
-"""把工作目录同步到 public 镜像的 modern 分支（只动前端/文档/安装器，绝不覆盖原生 C++）。
+"""按显式路径范围同步前端、文档和安装器至 public 镜像的 modern 分支。
 
-    python installer/push-frontend.py            # dry run：统计将上传/将跳过的文件
-    python installer/push-frontend.py --list-files  # dry run：列出待上传路径
-    python installer/push-frontend.py --push     # 真的建 blob/tree/commit 并更新分支
-
-为什么要这样写（2026-10-02 实测定下的规则）：
-
-* 工作目录 `稳定早期版` 是从 `D:\\Praat-work` 导出的快照，和线上 `modern` **双向分叉**：
-  - 前端（`ai/`）、文档、安装器侧：本地是新的；
-  - 原生 C++ 侧：线上是新的（有 `PraatAiControl_addModelMenu`、`fon/SegmentAcoustic*`、
-    `MelderFile_replaceAtomically`、`v_createExtraToolbarButtons` 等），本地快照没有。
-    线上 `sys/praat_objectMenus.cpp` 会调用 `addModelMenu`，所以**照推本地原生文件会让原生树
-    自相矛盾（链接不过），还会删掉上游的分段声学分析**。
-* 因此：原生源文件与构建文件（`sys/`、`fon/`、`foned/`、`melder/`、`Makefile`、`meson.build`…）
-  一律跳过，保持线上版本；只推 `ai/`、`docs/`、`installer/`、根目录文本与**新增文件**。
-* 三道保险：①任何「本地版本会丢掉线上内容」（有删除行、没有新增行）的文件都跳过；
-  ②建树时用 `base_tree = 线上树`，**不删除任何线上路径**；③上传前对每个字节做密钥扫描
-  （GitHub token / API key / 私钥）。
-* 只按路径查线上状态（`GET /contents/<path>`），**不拉递归树**：本机代理会把 1.7 MB 的
-  递归树响应截断，非递归的小响应正常。
-
-回退：把 `refs/heads/modern` 指回推送前记录的 SHA，或在提交页点 Revert。
+默认 dry run；--list-files 列出候选路径；--push 创建提交并更新分支。
+脚本跳过原生源码与构建路径、跳过仅删除内容的覆盖，并以远端树为基底。
+上传前扫描敏感凭据。该选择性同步器不是完整 Git 合并工具；使用时核对
+本地与远端差异，不能由脚本的过滤规则推断项目源码状态。
 """
 
 from __future__ import annotations

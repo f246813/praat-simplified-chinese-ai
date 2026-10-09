@@ -75,11 +75,8 @@ static bool handlePythonOutputLine (
 }
 
 /*
-	Python 调用跑完时的收尾：先把「满格 + 完成」那一帧画出来，停一小会儿再关窗口。
-
-	不然一个几秒就跑完的操作（模型已经在跑、或者本来就快）在用户眼里只剩
-	「窗口闪一下就没了」——2026-09-21 用户报的。这里只在这条 Python 调用链上等
-	一下，不影响 Praat 自己的其它进度窗口。
+	Python 调用结束时先绘制完成状态，短暂停留后关闭进度窗口。
+	该等待仅用于 Python 调用链。
 */
 static void finishProgressWindow () {
 	Melder_progress (0.999, U"完成。");
@@ -722,16 +719,8 @@ static void praat_runPythonScriptFile_impl (conststring32 filePath, conststring3
 			MelderString_append (& objFileName, iobj, U"_", sanitizedBaseName, ext);
 			autostring8 objFileName8 = Melder_32to8 (objFileName.string);
 			/*
-				对象名一律按 UTF-8 走 utf8_to_path()。
-
-				以前这里是 `tempDir / objFileName8.get()`：std::filesystem::path 收窄
-				字符串时按系统 ANSI 代码页解释（中文 Windows 上是 936/GBK），于是
-					- 名字是「思い出す」时变成乱码文件名（1_Sound_鎬濄亜鍑恒仚.wav）；
-					- 名字是「あなた」这类 UTF-8 字节不是合法 GBK 序列的名字时，
-					  libc++ 直接抛 std::filesystem::filesystem_error。
-				两个后果都实测过：后者会让「启动前端」带着未捕获异常逃出窗口过程，
-				libc++abi 调 std::terminate → abort()，Praat 无提示闪退
-				（2026-09-20，Praat.exe.18460.dmp / .2312.dmp / .22172.dmp）。
+				对象名按 UTF-8 通过 utf8_to_path() 转为系统路径，避免 Windows
+				ANSI 代码页误解中文或日文对象名，以及非法窄字符序列异常。
 			*/
 			std::filesystem::path objPath = tempDir / utf8_to_path (objFileName8 ? objFileName8.get() : "obj");
 			std::string objPathStr = path_to_utf8 (objPath);
@@ -1112,8 +1101,6 @@ static void praat_runPythonScriptText_impl (conststring32 scriptText, conststrin
 	Python 脚本窗口的「运行」按钮）。任何 C++ 异常一旦逃出窗口过程，libc++abi 就会调
 	std::terminate → abort()，Praat 会**没有任何提示地闪退**——菜单回调只 catch
 	MelderError，抓不到 std::filesystem::filesystem_error 这类标准库异常。
-	2026-09-20 实测：选中名为「あなた」的对象、点「启动前端」，就是死在这条路上
-	（Praat.exe.18460.dmp，praat_context.json 停在 28 字节）。
 	所以这两个入口统一兜一层：标准库异常转成 Melder 错误，用户能看到对话框。
 */
 template <typename Callback>

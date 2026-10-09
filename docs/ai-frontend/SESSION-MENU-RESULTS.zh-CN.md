@@ -1,33 +1,7 @@
-# 历史菜单、持久置顶与 Pi 细滚动条：结果
+# 会话菜单与持久置顶
 
-2026-10-04 的历史栏贴边与原生滑块拖动调整见 [左侧历史栏滚动条验收](HISTORY-SCROLLBAR-RESULTS.zh-CN.md)。下方保留前次移植验收记录。
+会话省略号及右键打开共用 Pi ContextMenu，提供当前宿主支持的重命名、置顶／取消置顶、分区、归档、分叉和删除等动作。菜单处理键盘导航、边缘定位、外部关闭和焦点恢复。
 
-最新会话侧栏分组、预览、多选、排序、快捷键和 14px 滚动通道见 [会话侧栏移植验收](PI-SESSION-SIDEBAR-RESULTS.zh-CN.md)。
+现代置顶由 `sessions.pin` 返回权威状态并落盘；置顶与自定义分区互斥，取消置顶回到普通历史。活动任务禁止会话删除，删除需要确认。旧记录不能重命名／置顶／续写，可通过现代侧旁元数据组织、归档及移除归档入口。
 
-## 来源与完成内容
-
-上一版是项目内重命名／删除按钮及浏览器 `thin` 滚动条，没有搬入 Pi 的历史菜单或置顶。此次直接提取／适配 **PI-Desktop 固定提交 `0d47d26769ecbeca1c3ab56fa83b58a91de8190e`** 的 `ContextMenu.tsx`、菜单定位、滚动显示逻辑和菜单／滚动条 CSS；不是整体 Sidebar、Agent 或 IPC 移植，也不宣称等同用户安装版或像素级一致。
-
-- 左键点历史条目 **“…”**：重命名、置顶／取消置顶、删除；左键标题仍切换会话，右键条目打开同一菜单。
-- 支持方向键、Home／End、Esc、Tab、外部点击／滚动关闭、视口边缘定位和焦点恢复；“…”再次点击关闭。
-- 旧记录所有写操作禁用；运行／提交中的现代会话禁止删除，删除保留确认。运行中允许置顶。
-- `sessions.pin` 明确白名单，严格 boolean，成功后权威更新／排序；失败不乐观改状态。快照版本保护避免旧后台快照撤销刚成功的置顶。
-- 现代库独立 `session_pins` 表，置顶优先、组内按 updated 降序，删除 cascade。不改消息、证据、摘要、草稿、阅读位置、更新时间、任务配置或旧库。
-- Pi **6px** WebKit 通道、透明轨道／静止透明 thumb；悬停、焦点、滚动时显示，滚动后保持 300ms。标准 scrollbar 属性重置为 auto，避免原 thin/color 覆盖精细样式。
-
-LGPL-3.0 原始来源、修改说明、许可与替换／重建说明见 [NOTICE](../../ai/third_party/pi-desktop/NOTICE.md)。`dist/pi-desktop-source` 随构建交付原始文件、修改后 LGPL 源码和完整前端重建输入，`THIRD-PARTY-NOTICES.txt` 已修正之前“没有 Pi 源码”的声明。输入框底栏仍是项目内适配，不能因此声称也直接提取了 Pi。
-
-## 验证
-
-- Python `test_modern_app.py`：**26 项通过**，覆盖持久重开、独立 schema、排序／取消、运行任务隔离、非法参数、cascade、数据与旧库哈希保护。
-- 前端 Vitest：最终 **39 项通过**，含置顶成功／失败／旧记录、视图与附件保持、后台旧快照竞态、300ms／cleanup、定位；原输入框与流式测试保持。
-- Playwright：**8 项通过**，含新菜单键盘／关闭／禁用／置顶、390px 视口、computed WebKit width=6px，以及原 IME／CRUD／阅读位置／后台流式隔离与输入框。
-- TypeScript `tsc -b`、离线资产／408项依赖通知生成、Vite生产构建成功；`ai/frontend/dist` 已更新。保留原大 chunk 警告。
-- [真实 WebView2 永久结果](verification/session-menu-desktop-result.json)：生产资源＋真实单一 RPC、隔离 SQLite／配置，**4组通过**。检查置顶落盘、库对象重开＋生产页面刷新恢复、取消置顶／重命名／删除确认取消、实际6px与滚动显示、配置哈希不变／无任务。恢复不是整个 OS 进程重启；此验收不属于浏览器 demo。
-- 宿主验收的执行器拒绝 capture/run，模型请求入口拒绝调用；调用次数0。没有测试真实模型或声学执行。
-
-## 使用与边界
-
-关闭当前聊天窗口，再从 Praat 编辑器的 **前端／启动前端** 打开最新生产构建。无需 PowerShell，不改正常菜单入口或 Praat.exe。
-
-本请求无剩余阻塞。未修改真实用户配置／历史／录音／权限，没有调用云端、重制安装包、发布或推送；LGPL 交付措施针对本地未打包源码项目，未来安装包必须继续保留许可／源码与替换重建能力。
+ContextMenu 与滚动显示逻辑来自 Pi 固定提交 `0d47d26769ecbeca1c3ab56fa83b58a91de8190e`；许可及重建材料见 [来源说明](FRONTEND-SOURCES.md)。当前侧栏样式见 [滚动条](HISTORY-SCROLLBAR-RESULTS.zh-CN.md)，持久组织检查入口为 `ai/tests/verify_history_organization_desktop.py`。

@@ -1,38 +1,4 @@
-"""把 Praat 脚本交给已经打开的 Praat，并且不激活它的任何窗口。
-
-背景（2026-09-20 实测复现，见 guide.md §8.5）：前端原来用
-``Praat.exe --FULL-TRUST --send`` 投递脚本，而 ``--send`` 在 Windows 上的实现是
-
-1. ``GuiWin_initialize1()`` 里 ``FindWindow ("PraatChildWindow… Praat", NULL)``，
-   拿到的是 **z 序最上面那个 Praat 子窗口**（实测常常是「Praat Info」或声音编辑器）；
-2. 紧接着 ``if (IsIconic (winWindow)) ShowWindow (winWindow, SW_RESTORE);
-   SetForegroundWindow (winWindow);``（``sys/praat.cpp`` 的
-   ``tryToSwitchToRunningPraat()``）。
-
-于是每发一条指令，Praat Info 窗口会自己从任务栏里弹出来，声音编辑器窗口也会跳到
-前面盖住对话窗口。接收端其实很无辜：``motifEmulator.cpp`` 的 ``WM_APP`` 分支里
-那两行激活代码本来就是注释掉的。
-
-所以这里自己投递：按 Praat 自己的 ``sendpraat`` 协议写好
-``%APPDATA%\\Praat\\Message.txt``，再给目标进程的 Praat 窗口发一条 ``WM_APP``。
-脚本照跑（``cb_userMessage()`` → ``praat_executeScript_noGUI()``），窗口一个都不动，
-还省掉一次 Praat 进程启动。
-
-注意三件事：
-
-- 消息文件是**全局唯一**的（Praat 只认 ``Message.txt`` 这个文件名），所以同一时刻
-  只能有一条指令在飞；前端逐条同步执行正好满足这个前提。超时之后必须调用
-  :func:`cancel_pending()`——否则 Praat 稍后腾出消息循环时，会把下一条指令的
-  消息文件当成这条旧消息再执行一遍。
-- 更糟的是**同一个消息会被执行多次**：``cb_userMessage()`` 每收到一条 ``WM_APP``
-  都重新读一次 ``Message.txt``（``sys/praat.cpp``），而
-  ``praat_executeScript_noGUI()`` 执行完并不删它。所以排队中的两条 ``WM_APP``
-  会让同一个脚本跑两遍（「删除」就删两次）。所以投递的消息开头自己先把
-  ``Message.txt`` 换成空操作（:func:`consume_statement()`），残留消息醒来时只会
-  读到一个什么都不做的脚本。
-- 消息文件里那行 ``# --FULL-TRUST`` 不能省：脚本要写 ``runtime/`` 和用户指定路径
-  之外的文件（``appendFileLine`` / ``Save as WAV file``），全靠它拿到完全信任。
-"""
+"""通过 Praat sendpraat 协议写消息文件并发送 WM_APP，不主动激活窗口。Message.txt 全局共享，必须串行投递；超时或取消后清空待处理消息。consume_statement 先将消息换为空操作，避免排队通知重复执行脚本。完全信任标记用于脚本写文件，这不是文件系统沙箱。命令行 --send 通道可能恢复或激活 Praat 子窗口。"""
 
 from __future__ import annotations
 
@@ -316,11 +282,7 @@ def deliver(
     *,
     process_id: int | None = None,
 ) -> tuple[bool, str]:
-    """把 ``script`` 交给正在运行的 Praat 执行，返回 ``(是否投递成功, 说明)``。
-
-    这个函数只负责「投出去」，不等结果；调用方还是像以前那样轮询
-    ``runtime/chat_state.txt``。
-    """
+    """将 script 交给运行中的 Praat，返回投递是否成功及说明；调用方通过 chat_state.txt 等待执行结果。"""
 
     user32 = _user32()
     if user32 is None:

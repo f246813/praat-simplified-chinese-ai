@@ -25,11 +25,7 @@ UNVERIFIED_CALC = '[推导未核对]'
 
 
 class CalcUnavailable(Exception):
-    """``{{calc:…}}`` 算不出来（语法/量纲/引用问题）。
-
-    这只说明**这一处推导没法核对**，不说明报告在编造测量：所以降级为"标注为未核对"，
-    不再阻断整份报告（2026-10-06：20 个阻断点里有 13 个是这类内部语法问题）。
-    """
+    """推导式的语法、量纲或引用无法核对；调用方标注该推导为未核对，不因此阻断整份报告。"""
 
 
 def _block(state: Any, rule: str, message: str) -> None:
@@ -369,13 +365,7 @@ def _identifier_number(cleaned: str, match: re.Match[str], targets: set[str]) ->
 
 
 def _numeric_claim_sources(state: Any, line: str, records: dict[str, Record]):
-    """核对一行里的数值，并返回它们命中的证据 id。
-
-    返回 ``(sources, failure)``：``sources`` 是命中的证据 id（按出现顺序去重），
-    ``failure`` 是 ``(rule, message)`` 或 ``None``。匹配引擎只此一份——「拦下」还是
-    「把引证补上」由调用方决定，避免两套规则各自漂移（2026-10-06 的教训）。
-    数值未匹配时 failure 的第三项是本行数值/单位的精确跨度，供草稿救援定位。
-    """
+    """核对行中数值并返回命中证据 ID。返回 (sources, failure)，失败含规则、消息及需要遮蔽的数值/单位跨度。调用方决定阻断或补引用，共用同一匹配引擎。"""
 
     cites = [f'E{x}' for x in _CITATION.findall(line)]
     for eid in cites:
@@ -644,12 +634,7 @@ def _strip_unknown_citations(state: Any, text: str, records: dict[str, Record]) 
 
 
 def _fill_citations(state: Any, text: str, records: dict[str, Record]) -> str:
-    """给「有数字但没写引证」的行补上引证。
-
-    引证是守卫自己的记账方式：模型只要数字对得上，守卫就负责把它落在哪条证据上写进
-    正文（2026-10-06：因为漏写 ``[E1]`` 而拒整份报告，就是「逐行引证」这条提示词被
-    硬化成闸门的后果）。数字对不上的行不补，交给验证阶段按原有规则拦。
-    """
+    """为数值已匹配但未写引用的行补证据引用；未匹配数值留给验证阶段处理。"""
 
     out: list[str] = []
     in_general = False

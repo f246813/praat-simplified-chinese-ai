@@ -517,14 +517,7 @@ def _request_context(text: str, user_text: str) -> str:
 
 @dataclass(slots=True)
 class AgentStep:
-    """一次工具执行，以及回灌给模型的那段观察结果。
-
-    ``execution`` 是**投递事实**（见 :mod:`praat_ai.delivery`）：
-    ``''`` 表示执行器没有声明（外部替身、本地工具），调用方只能按说明文字判断；
-    其余取值是 ``DELIVERED`` / ``NOT_DELIVERED`` / ``EXECUTION_UNKNOWN`` /
-    ``EXECUTION_BLOCKED``。只按说明文字猜「执行状态不明」会把「根本没送出去」也算
-    进去，从而白白停掉整轮（2026-10-02 的 VOT 请求）。
-    """
+    """一次工具执行及回灌观察。execution 记录 delivery 模块的投递事实；空值表示执行器没有声明，调用方只能按说明判断。未投递与已投递但结果不明必须区分。"""
 
     round_index: int
     tool: str
@@ -578,8 +571,7 @@ def _summary_of(outcome: TurnOutcome) -> str:
         return "结果：" + "；".join(outcome.results) + "\n（模型这次没有给出说明。）"
     if outcome.failure:
         return "执行未完成：" + outcome.failure
-    # 以前这里回一句「已完成。」——模型既没回答也没给操作时，界面就显示这句空话，
-    # 用户以为事情办完了（2026-09-21 用户报的）。宁可直说没内容。
+    # 空响应需要明确说明没有回答或操作，不能显示完成。
     return (
         "模型这次没有返回任何内容：既没有回答，也没有给出要执行的操作。"
         "把要求再说具体一点（例如指明对象、时间点、要分析的量）会更稳。"
@@ -885,10 +877,7 @@ def _run_agent_turn(
         outcome.notes.append("已取消：后面的步骤没有再执行。")
         outcome.reply = "已取消这次操作（已经执行完的那几步结果还在下面）。"
         return outcome
-    # 收尾这轮是「锦上添花」：模型只是把已经测到的结果写成一段中文回答。它失败
-    # （网络读超时最常见，见 2026-09-30 真机验收）不能让整轮白跑——上面那些脚本
-    # 已经在 Praat 里执行完了，结果必须还给用户。所以这里只重试一次，再失败就退回
-    # 本地拼的摘要 `_summary_of(outcome)`，并把原因写进 notes。
+    # 收尾失败不能丢失已执行结果：重试一次，再失败使用本地摘要并记录原因。
     for attempt in range(2):
         try:
             outcome.reply = planner.wrap_up() or _summary_of(outcome)
@@ -988,8 +977,7 @@ class _NativePlanner:
             temperature=self.client.config.plan_temperature,
         )
         actions = qwen.extract_tool_actions(message)
-        # 正文取 ``content``，空的时候退回 ``reasoning_content``（思考型模型会把
-        # 答案只放在那里，以前这条路直接读 content，界面就成了「已完成」）。
+        # 使用统一正文提取，content 为空时只取明确的最终答案。
         content = qwen.message_text(message).strip()
         if not actions:
             # 没开 --jinja 时小模型偶尔把调用写成正文里的 <tool_call> 文本；
@@ -1433,15 +1421,7 @@ def praat_process_ids(executable: str = "Praat.exe") -> list[int] | None:
 
 
 def praat_process_running_from(process_ids: list[int] | None) -> bool:
-    """按**已经查好的**进程列表判断 Praat 在不在跑。
-
-    每条指令原来会起两次 ``tasklist``（一次判断在不在跑、一次数几个实例），这里
-    让调用方查一次、两件事都用同一份结果——Praat 的进程名和实例数都不该在一次
-    请求里被查两遍（``tasklist`` 是子进程，几十毫秒起步）。
-
-    ``None`` 表示查不到（不是 Windows、tasklist 不可用），这时不拦用户：交给投递
-    那一步自己报错，比前端误判「Praat 没开」强。
-    """
+    """根据调用方已经取得的进程列表判断 Praat 是否运行，避免重复查询。"""
 
     if process_ids is None:
         return True
@@ -1470,11 +1450,7 @@ def praat_instance_warning(executable: str) -> str:
 
 
 def api_choice_label(config) -> str:
-    """API 模式下「模型预设」下拉框第一行的文字：显示当前真正在用的云端模型。
-
-    以前这一行永远是本地 qwen 预设（例如「Qwen3.5-0.8B（快速，省显存）」），
-    接上 API 之后用户看到的还是本地模型名，以为接的 API 没生效。
-    """
+    """API 模式下模型预设下拉框的显示文字，使用有效云端模型名。"""
 
     model = str(getattr(config.api, "model", "") or "").strip()
     name = str(getattr(config.api, "label", "") or "").strip()
@@ -1954,8 +1930,7 @@ class ChatWindow:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self.flush_messages)
         self.root.after(400, self.entry.focus_set)
-        # 关掉 Praat 之后这个窗口该跟着退（2026-09-21 用户报的 bug）。盯着启动它
-        # 的那个 Praat：手工起窗口做开发时（没有 Praat）不盯，免得自己把自己关了。
+        # 跟随启动窗口的 Praat 退出；没有原生父进程时不监视。
         self.closing = False
         self.praat_watcher = None
         if parent_watch.should_watch():
@@ -2353,12 +2328,7 @@ class ChatWindow:
             pass
 
     def on_api_settings_saved(self, values: dict) -> None:
-        """保存之后刷新界面：进 API 顺手停本机服务（可关），回本地则把服务起起来。
-
-        `api.stop_local_service`（API 配置窗口里的复选框，默认开）决定进 API 时要
-        不要停本机 llama-server；取消勾选 API / 切回本地预设时**一律**要把本机服务
-        弄起来——2026-09-22 的 WinError 10061 就是这里只改了配置、没起服务。
-        """
+        """保存 API 设置后同步有效模型和本地服务。api.stop_local_service 控制 API 模式下是否停止本地服务；切回本地时确保配置模型可用。"""
 
         self.reload_config()
         if api_is_active(self.config):
@@ -2777,7 +2747,7 @@ class ChatWindow:
                 self.process_cloud_message(text)
                 return
             executable = praat_executable()
-            # 一次 tasklist 查清「Praat 在不在跑」和「开了几个」——以前每条指令查两次。
+            # 共用一次进程查询判断 Praat 是否运行及实例数。
             process_ids = praat_process_ids(executable) if executable else None
             praat_ready = bool(executable) and praat_process_running_from(process_ids)
             if praat_ready:
