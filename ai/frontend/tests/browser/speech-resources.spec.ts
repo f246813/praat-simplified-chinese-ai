@@ -23,7 +23,7 @@ test('dictionary and model navigation reuse the assistant layout at desktop and 
     const sidebar = await page.locator('.dictionary-nav').boundingBox();
     const content = await page.locator('.dictionary-window').boundingBox();
     expect(sidebar!.x+sidebar!.width).toBeLessThanOrEqual(content!.x);
-    await page.screenshot({path:`../../installer/verification/dictionary-models-${width}.png`});
+    await page.screenshot({path:`../../test-records/installer/dictionary-models-${width}.png`});
     await page.getByRole('button',{name:'语音词典',exact:true}).click();
     await expect(page.getByRole('button',{name:'添加语音词典'})).toBeVisible();
   }

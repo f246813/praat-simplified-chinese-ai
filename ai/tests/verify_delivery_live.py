@@ -19,7 +19,7 @@
 
 给了 ``--audio``（默认取同目录上两级的 ``あなた.wav``，存在才用）时，还会把那段真实录音
 读回对象列表、按 ``--from``/``--to`` 跑同一条 vot，并把数值写进记录；那个 Sound 会保留。
-记录写到 ``稳定早期版/verify-delivery-live.json``。不会动用户已有的对象和录音。
+记录写到 ``稳定早期版/test-records/project/verify-delivery-live.json``。不会动用户已有的对象和录音。
 """
 from __future__ import annotations
 
@@ -201,7 +201,7 @@ def main() -> int:
             chat._send_script(executable, with_completion(f'selectObject: {keep[0].id}\n'))
 
     record['ok'] = all(item['ok'] for item in record['checks'])
-    destination = Path(__file__).resolve().parents[2] / 'verify-delivery-live.json'
+    destination = Path(__file__).resolve().parents[2] / 'test-records' / 'project' / 'verify-delivery-live.json'
     destination.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding='utf-8')
     passed = sum(1 for item in record['checks'] if item['ok'])
     print(f'{passed}/{len(record["checks"])} 项真机检查通过；记录：{destination}')

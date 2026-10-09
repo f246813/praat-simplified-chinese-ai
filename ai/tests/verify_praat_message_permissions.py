@@ -69,7 +69,7 @@ def main():
                 raise RuntimeError(f'{name}: native probe failed: {completed.stderr!r}')
             result = json.loads(output.read_text(encoding='utf8'))
             results.append(dict(executable=name, **result))
-    report = root/'installer'/'verification'/('message-permissions-'+sys.argv[1]+'.json')
+    report = root/'test-records'/'installer'/('message-permissions-'+sys.argv[1]+'.json')
     report.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding='utf8')
     print(report)
     for result in results:

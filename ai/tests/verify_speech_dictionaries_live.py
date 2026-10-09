@@ -18,7 +18,7 @@ from praat_ai.modern_host import AssetServer
 def main():
     import webview
     project = Path(__file__).resolve().parents[2]
-    output = project / 'installer' / 'verification' / 'speech-dictionaries-live.json'
+    output = project / 'test-records' / 'installer' / 'speech-dictionaries-live.json'
     report = {'checks': [], 'errors': []}
     with tempfile.TemporaryDirectory(prefix='praat-dictionaries-live-') as directory:
         root = Path(directory)

@@ -30,7 +30,7 @@ assert asset_paths and all((dist/name).is_file() for name in asset_paths)
 checks.append('production index references existing freshly built assets')
 notices=(dist/'THIRD-PARTY-NOTICES.txt').read_text(encoding='utf8');assert all(s in notices for s in ['Codex public thread-section','Apache','PI-Desktop','LGPL'])
 result=dict(passed=True,revision=manifest['revision'],checks=checks,productionAssets=[dict(path=p,sha256=hashlib.sha256((dist/p).read_bytes()).hexdigest()) for p in asset_paths])
-output=root/'docs/ai-frontend/verification/codex-history-source-result.json'
+output=root/'test-records/frontend/codex-history-source-result.json'
 output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
 screenshot=root/'.aipraat-backups/codex-sections-20261004/codex-section-menu.png'
 if screenshot.exists():shutil.copyfile(screenshot,output.with_name('codex-history-section-menu.png'))

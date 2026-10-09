@@ -21,7 +21,7 @@ class NoExecution:
         raise AssertionError('Unexpected executor call')
 
 
-output = Path(__file__).resolve().parents[2] / 'installer/verification'
+output = Path(__file__).resolve().parents[2] / 'test-records/installer'
 result = dict(realWebView2=True, productionAssets=True, samples=[])
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)

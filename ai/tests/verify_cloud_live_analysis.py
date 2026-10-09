@@ -370,7 +370,7 @@ def main() -> int:
         (work / "trace.json").write_text(
             json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        kept = PROJECT / "verify-cloud-live-analysis.json"
+        kept = PROJECT / "test-records" / "project" / "verify-cloud-live-analysis.json"
         kept.write_text((work / "trace.json").read_text(encoding="utf-8"), encoding="utf-8")
         print(f"\n· 完整轨迹写到 {kept}")
         print(f"· 失败项：{trace['failure'] or '（无）'}")

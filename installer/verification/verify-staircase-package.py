@@ -61,5 +61,5 @@ result = {
     'no_user_config_audio_runtime':True, 'binaries':binaries,
     'wheel_closure':wheel_closure,
 }
-(verification / 'staircase-artifacts.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+(root / 'test-records' / 'installer' / 'staircase-artifacts.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 print(json.dumps(result, ensure_ascii=False, indent=2))

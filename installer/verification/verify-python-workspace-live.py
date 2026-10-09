@@ -205,7 +205,7 @@ def main():
             shutil.rmtree(workspace)
         # Keep private fixture for failed-run diagnostics; successful fixtures contain no user data.
         if report.get('ok'): shutil.rmtree(fixture)
-        (ROOT/'installer/verification/python-workspace-live.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+        (ROOT/'test-records/installer/python-workspace-live.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     return 0
 
 if __name__=='__main__': raise SystemExit(main())

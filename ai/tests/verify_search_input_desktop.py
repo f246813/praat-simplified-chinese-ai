@@ -60,5 +60,5 @@ with tempfile.TemporaryDirectory() as temporary:
         try:
             webview.start(check,gui='edgechromium',private_mode=True,storage_path=str(root/'profile'));assert request.call_count==0
         finally:app.close();assets.close()
-output=Path.cwd()/'docs/ai-frontend/verification/search-input-desktop-result.json';output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
+output=Path.cwd()/'test-records/frontend/search-input-desktop-result.json';output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
 print(json.dumps(result,indent=2));raise SystemExit(0 if result.get('passed') else 1)

@@ -19,6 +19,7 @@ BUILD = ROOT / 'installer' / 'build'
 VERIFICATION = ROOT / 'installer' / 'verification'
 BACKUP = ROOT / 'backups' / 'installer-before-repack-20261002-delivery-fix'
 EMBEDDED = VERIFICATION / 'delivery-embedded-payload.zip'
+RECORDS = ROOT / 'test-records' / 'installer'
 
 #: 载荷里不是「源码原样拷贝」的条目 → 它们对应的真实来源。
 SPECIAL = {
@@ -109,9 +110,9 @@ def main() -> int:
         'changed_or_new_entries': changed,
         'binaries': binaries,
     }
-    (VERIFICATION / 'delivery-artifacts.json').write_text(
+    (RECORDS / 'delivery-artifacts.json').write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    (VERIFICATION / 'delivery-package-check.log').write_text(
+    (RECORDS / 'delivery-package-check.log').write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

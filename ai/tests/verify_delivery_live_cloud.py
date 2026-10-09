@@ -6,7 +6,7 @@
 ``--send``；跑之前确认 Praat 正在运行、对象列表与 ``--goal`` 对得上。它是
 ``verify_delivery_live.py``（不碰云端、只验投递与测量）的补充：这条把云端模型、阶梯、
 投递、报告整条链走一遍，并把过程提示、报告、证据、尝试记录和用量写成
-``verify-delivery-live-cloud.json``。
+``test-records/project/verify-delivery-live-cloud.json``。
 
 注意：本机会话环境里 ``NO_PROXY`` 含 ``[::1]``，``httpx2`` 解析不了（``Invalid port:
 ':1]'``），连 ``AsyncOpenAI(...)`` 都构造不出来。脚本只在**自己这个进程**里把
@@ -103,7 +103,7 @@ def main() -> int:
         'attempts': [{key: value for key, value in attempt.items() if key != 'script'}
                      for attempt in state.attempts],
     }
-    destination = Path(__file__).resolve().parents[2] / 'verify-delivery-live-cloud.json'
+    destination = Path(__file__).resolve().parents[2] / 'test-records' / 'project' / 'verify-delivery-live-cloud.json'
     destination.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding='utf-8')
     print('记录:', destination)
     return 0

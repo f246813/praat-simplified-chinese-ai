@@ -51,7 +51,7 @@ def main():
             raise
         finally:
             if process.poll() is None: process.terminate(); process.wait(timeout=5)
-            (project / 'installer' / 'verification' / 'speech-dictionaries-menu.json').write_text(
+            (project / 'test-records' / 'installer' / 'speech-dictionaries-menu.json').write_text(
                 json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

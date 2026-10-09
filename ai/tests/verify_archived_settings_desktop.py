@@ -117,6 +117,6 @@ with tempfile.TemporaryDirectory() as temporary:
         try:
             webview.start(check,gui='edgechromium',private_mode=True,storage_path=str(root/'profile'));assert provider.call_count==0
         finally:app.close();assets.close()
-output=Path(__file__).resolve().parents[2]/'docs/ai-frontend/verification/archived-settings-desktop-result.json'
+output=Path(__file__).resolve().parents[2]/'test-records/frontend/archived-settings-desktop-result.json'
 output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8');print(json.dumps(result,ensure_ascii=False,indent=2))
 raise SystemExit(0 if result.get('passed') else 1)

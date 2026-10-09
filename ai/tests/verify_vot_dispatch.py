@@ -66,7 +66,7 @@ def main() -> int:
             if index == 1:
                 assert "120.0 毫秒" in outcome.reply, records[-1]
             print(json.dumps(records[-1], ensure_ascii=False))
-    (templates.PROJECT / "verify-vot-dispatch-praat.json").write_text(
+    (templates.PROJECT / "test-records" / "project" / "verify-vot-dispatch-praat.json").write_text(
         json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(f"{len(cases)}/{len(cases)} real Praat dispatch checks passed.")

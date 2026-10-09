@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory() as temporary:
             result['dom'] = js('document.body.innerText.slice(0,5000)')
         finally:
             app.close()
-            output = Path(__file__).resolve().parents[2] / 'docs/ai-frontend/verification/cloud-api-activation-desktop-result.json'
+            output = Path(__file__).resolve().parents[2] / 'test-records/frontend/cloud-api-activation-desktop-result.json'
             output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf8')
             window.destroy()
 

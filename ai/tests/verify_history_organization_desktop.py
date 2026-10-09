@@ -97,6 +97,6 @@ with tempfile.TemporaryDirectory() as temporary:
             webview.start(check,gui='edgechromium',debug=False,private_mode=True,storage_path=str(root/'profile'))
             assert request.call_count==0
         finally:app.close();assets.close()
-output=Path.cwd()/'docs/ai-frontend/verification/codex-history-desktop-result.json'
+output=Path.cwd()/'test-records/frontend/codex-history-desktop-result.json'
 output.parent.mkdir(parents=True,exist_ok=True);output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8')
 print(json.dumps(result,ensure_ascii=False,indent=2));raise SystemExit(0 if result.get('passed') else 1)

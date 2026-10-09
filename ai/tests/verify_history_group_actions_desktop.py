@@ -19,7 +19,7 @@ class NoExecution:
     def capture_target(self,text):raise AssertionError('Unexpected Praat capture')
     def run(self,**kwargs):raise AssertionError('Unexpected execution')
 
-output=Path(__file__).resolve().parents[2]/'installer/verification'
+output=Path(__file__).resolve().parents[2]/'test-records/installer'
 result=dict(realWebView2=True,productionAssets=True,checks=[])
 with tempfile.TemporaryDirectory() as temporary:
     root=Path(temporary);config=root/'config.json';config.write_text('{}',encoding='utf8')

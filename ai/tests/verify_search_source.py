@@ -19,5 +19,5 @@ for file in ['search.ts','SearchBar.tsx','pi/sidebar/Sidebar.tsx','types.ts','br
     assert (root/'ai/frontend/src'/file).read_bytes()==(dist/'pi-desktop-source/rebuild/src'/file).read_bytes(),file
 assert (root/'ai/third_party/codex/NOTICE.md').read_bytes()==(dist/'codex-source/NOTICE.md').read_bytes()
 result=dict(passed=True,revision=manifest['revision'],exactOriginals=manifest['files'],checks=['Pinned originals verified against Git blob/SHA-256 and shipped unchanged','Current renderer and SQLite/RPC adaptations shipped exactly','Original license and modification/source notice retained'],browserChecks=10,frontendUnitChecks=27,pythonChecks=42,productionBuild=True)
-output=root/'docs/ai-frontend/verification/search-performance-source-result.json'
+output=root/'test-records/frontend/search-performance-source-result.json'
 output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8');print(json.dumps(result,indent=2))

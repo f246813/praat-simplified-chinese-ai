@@ -28,7 +28,7 @@ COLOURS = {(220, 38, 38), (234, 179, 8), (22, 163, 74)}
 def main():
     project = Path(__file__).resolve().parents[2]
     executable, fixture = (Path(p).resolve() for p in sys.argv[1:3])
-    output = project / 'installer' / 'verification'
+    output = project / 'test-records' / 'installer'
     source_ai = project / 'ai'
     report = dict(executable=str(executable), checks=[], failures=[])
     with tempfile.TemporaryDirectory(prefix='api-vram-', dir=output) as directory:

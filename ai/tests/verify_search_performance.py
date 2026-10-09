@@ -37,5 +37,5 @@ def benchmark():
 
 if __name__=='__main__':
     result=benchmark()
-    output=Path(__file__).resolve().parents[2]/'docs/ai-frontend/verification/search-performance-result.json'
+    output=Path(__file__).resolve().parents[2]/'test-records/frontend/search-performance-result.json'
     output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8');print(json.dumps(result,ensure_ascii=False,indent=2))

@@ -61,7 +61,7 @@ def main():
     project = Path(__file__).resolve().parents[2]
     executable = Path(sys.argv[1]).resolve()
     report = dict(executable=str(executable), checks=[])
-    output = project/'installer'/'verification'
+    output = project/'test-records'/'installer'
     # WebView2 may retain its working-directory handle briefly after the host
     # closes; this must not turn completed UI assertions into a test failure.
     with tempfile.TemporaryDirectory(prefix='model-menu-',dir=output,ignore_cleanup_errors=True) as directory:

@@ -19,7 +19,7 @@ class NoExecution:
     def run(self,**kwargs):raise AssertionError('Unexpected executor call')
 
 result=dict(realWebView2=True,productionAssets=True,isolatedData=True,checks=[])
-output=Path(__file__).resolve().parents[2]/'docs/ai-frontend/verification/sidebar-options-desktop-result.json'
+output=Path(__file__).resolve().parents[2]/'test-records/frontend/sidebar-options-desktop-result.json'
 with tempfile.TemporaryDirectory() as temporary:
     root=Path(temporary);config=root/'config.json';config.write_text('{"fixture":"sidebar-options"}',encoding='utf8')
     app=ModernApplication(root/'modern',config,executor=NoExecution())

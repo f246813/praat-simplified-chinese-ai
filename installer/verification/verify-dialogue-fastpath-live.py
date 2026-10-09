@@ -67,7 +67,7 @@ def main():
     report['checks']=['actual_ChatWindow_submit_worker_queue_mainloop','SDK_localhost_SSE',
                       'first_visible_before_completion','one_request_one_saved_final',
                       'process_hint_preserved','advanced_force_save_reopen_fits_screen','client_thread_closed']
-    output=ROOT/'installer/verification/dialogue-fastpath-live.json'
+    output=ROOT/'test-records/installer/dialogue-fastpath-live.json'
     output.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(report,ensure_ascii=False,indent=2))
 

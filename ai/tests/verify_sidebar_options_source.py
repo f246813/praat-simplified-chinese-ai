@@ -44,5 +44,5 @@ assets=[p.removeprefix('./').removeprefix('/') for p in re.findall(r'(?:src|href
 assert assets and all((dist/p).is_file() for p in assets)
 checks.append('licenses/notices supplied; scrollbar unchanged; production assets resolve')
 result=dict(passed=True,checks=checks,assets=[dict(path=p,sha256=hashlib.sha256((dist/p).read_bytes()).hexdigest()) for p in assets])
-output=root/'docs/ai-frontend/verification/sidebar-options-source-result.json'
+output=root/'test-records/frontend/sidebar-options-source-result.json'
 output.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf8');print(json.dumps(result,ensure_ascii=False,indent=2))

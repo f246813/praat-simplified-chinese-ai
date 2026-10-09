@@ -86,7 +86,7 @@ def main():
                 time.sleep(.3)
                 user32.GetWindowRect(popup[0],ctypes.byref(rect))
                 shot = ImageGrab.grab((rect.left,rect.top,rect.right,rect.bottom))
-                shot.save(project/'installer'/'verification'/('frontend-menu-'+name+'.png'))
+                shot.save(project/'test-records'/'installer'/('frontend-menu-'+name+'.png'))
                 count = sum(1 for pixel in shot.convert('RGB').get_flattened_data() if pixel==rgb)
                 assert count>12, (name,count)
                 # Close just the test popup, leaving the editor alive.
@@ -138,7 +138,7 @@ def main():
             for name,value in saved.items():
                 if value is None: (runtime/name).unlink(missing_ok=True)
                 else: (runtime/name).write_bytes(value)
-            (project/'installer'/'verification'/'frontend-menu-live.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')
+            (project/'test-records'/'installer'/'frontend-menu-live.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')
     print(json.dumps(report,ensure_ascii=False,indent=2))
 
 if __name__=='__main__': main()

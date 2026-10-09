@@ -33,7 +33,7 @@ EXCLUDE_SUFFIX = {'.exe', '.dll', '.zip', '.gguf', '.wav', '.pyc', '.pyd', '.so'
                   '.lib', '.obj', '.pdb', '.msi', '.7z', '.tar', '.gz', '.bin', '.bak', '.a', '.o'}
 EXCLUDE_NAMES = {'ai_config.json', 'ai_config.json.lock', 'chat.pid', 'conversations.sqlite3',
                  'payload.zip', 'debug_translations.txt', 'translation_candidates.txt'}
-EXCLUDE_PREFIX = ('installer/verification/python-live-', 'installer/verification/python_setup_',
+EXCLUDE_PREFIX = ('test-records/installer/python-workspace-', 'test-records/project/verify-', 'installer/verification/python-live-', 'installer/verification/python_setup_',
                   'installer/verification/python-workspace-', 'installer/verification/installed',
                   'verify-')
 MAX_FILE_BYTES = 8 * 1024 * 1024

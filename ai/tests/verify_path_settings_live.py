@@ -163,7 +163,7 @@ def main():
         if process.poll() is None:
             try:process.wait(timeout=3)
             except subprocess.TimeoutExpired:process.terminate();process.wait(timeout=3)
-        target=project/"installer"/"verification"/"path-config-live.json";target.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
+        target=project/"test-records"/"installer"/"path-config-live.json";target.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
         print("Artifacts: "+str(fixture),flush=True)
     return 0
 

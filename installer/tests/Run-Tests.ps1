@@ -1,7 +1,8 @@
 param([string]$Python = 'D:\Praat-work\venv-ai\Scripts\python.exe')
 $ErrorActionPreference='Stop'
 $projectRoot=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$output=Join-Path $projectRoot 'installer\verification'
+$verification=Join-Path $projectRoot 'installer\verification'
+$output=Join-Path $projectRoot 'test-records\installer'
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $compiler=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $source=Join-Path $projectRoot 'installer\src'
@@ -9,15 +10,15 @@ $common=@('InstallModel.cs','PathValidation.cs','AlignmentPaths.cs','Configurati
 $options=@('/nologo','/optimize+','/platform:x64','/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll',
     '/reference:System.Web.Extensions.dll','/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll')
 $options+='/resource:'+(Join-Path $source 'ConfigurePython.ps1')+',AIPraat.ConfigurePython.ps1'
-$contracts=Join-Path $output 'ContractTests.exe'
+$contracts=Join-Path $verification 'ContractTests.exe'
 & $compiler @options '/target:exe' "/out:$contracts" @common (Join-Path $PSScriptRoot 'ContractTests.cs')
 if($LASTEXITCODE -ne 0){throw 'Contract test compilation failed.'}
-$missingEnvironment=Join-Path $output 'python_without_deps'
+$missingEnvironment=Join-Path $verification 'python_without_deps'
 & $Python -m venv --without-pip $missingEnvironment
 if($LASTEXITCODE -ne 0){throw 'Missing-dependency fixture creation failed.'}
 & $contracts $Python (Join-Path $missingEnvironment 'Scripts\python.exe') *> (Join-Path $output 'installer-contracts.log')
 $contractExit=$LASTEXITCODE
-$uiHost=Join-Path $output 'UiHost.exe'
+$uiHost=Join-Path $verification 'UiHost.exe'
 $zip=Join-Path $projectRoot 'installer\build\payload.zip'
 & $compiler @options '/target:winexe' "/out:$uiHost" "/resource:$zip,AIPraat.Payload.zip" ("/win32manifest:"+(Join-Path $projectRoot 'installer\app.manifest')) @common (Join-Path $PSScriptRoot 'UiHost.cs')
 if($LASTEXITCODE -ne 0){throw 'UI verification host compilation failed.'}

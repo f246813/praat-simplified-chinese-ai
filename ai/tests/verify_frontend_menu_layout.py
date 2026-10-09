@@ -26,7 +26,7 @@ def main():
     project=Path(__file__).resolve().parents[2]
     executable=Path(sys.argv[1]).resolve(); fixture=Path(sys.argv[2]).resolve()
     report=dict(checks=[],executable=str(executable))
-    output=project/'installer'/'verification'
+    output=project/'test-records'/'installer'
     with tempfile.TemporaryDirectory(prefix='praat-menu-layout-',dir=output) as directory:
         root=Path(directory); ai=project/'ai'
         context=ai/'runtime'/'chat_context.tsv'

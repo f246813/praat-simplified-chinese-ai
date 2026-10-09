@@ -26,7 +26,7 @@ COLOURS = {(220, 38, 38), (234, 179, 8), (22, 163, 74)}
 def main():
     project = Path(__file__).resolve().parents[2]
     executable, fixture = (Path(p).resolve() for p in sys.argv[1:3])
-    output = project / 'installer' / 'verification'
+    output = project / 'test-records' / 'installer'
     ai = project / 'ai'; context = ai / 'runtime' / 'chat_context.tsv'
     prior_context = context.read_bytes() if context.exists() else None
     report = dict(executable=str(executable), checks=[])

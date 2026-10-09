@@ -25,14 +25,11 @@ FILES = [
     'installer/build.ps1',
     'installer/publish-release.ps1',
     'installer/verification/verify-delivery-package.py',
-    'installer/verification/delivery-artifacts.json',
-    'installer/verification/delivery-package-check.log',
-    'verify-delivery-live.json',
-    'verify-delivery-live-cloud.json',
-    'verify-delivery-state-red.log',
-    'verify-delivery-state-green.log',
-    'verify-delivery-state-related.log',
-    'verify-delivery-state-suite.log',
+    'test-records/installer/delivery-artifacts.json',
+    'test-records/installer/delivery-package-check.log',
+    'test-records/project/verify-delivery-live.json',
+    'test-records/project/verify-delivery-live-cloud.json',
+    'test-records/project/verify-delivery-state-suite.log',
 ]
 
 

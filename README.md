@@ -6,6 +6,7 @@
 > - **基座仓库**：[KasumiKitsune/praat-simplified-chinese](https://github.com/KasumiKitsune/praat-simplified-chinese)（汉化与「现代版」界面都由它而来）
 > - **上游软件**：[praat/praat](https://github.com/praat/praat) / [praat.org](https://praat.org)，作者 **Paul Boersma & David Weenink**
 > - **借用的代码库、运行依赖与参考文献**：见 [CREDITS.zh-CN.md](CREDITS.zh-CN.md)
+> - **测试结果归档**：见 [test-records/README.md](test-records/README.md)
 > - **许可**：代码部分 GPL-3.0-or-later（[LICENSE](LICENSE)）；文档/图片部分见 [docs/LICENSE.txt](docs/LICENSE.txt)
 > - 本副本由 `f246813` 发布，与上游和基座仓库**没有隶属关系**；基座原有的署名与链接一律保留。
 > - AI 前端怎么用：[`ai/README.zh-CN.md`](ai/README.zh-CN.md)；设计取舍：[`ai/docs/adr/`](ai/docs/adr/README.md)；维护说明：[`guide.md`](guide.md) §8。

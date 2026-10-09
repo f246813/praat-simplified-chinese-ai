@@ -9,6 +9,7 @@ import tempfile
 
 ROOT=Path(__file__).resolve().parents[2]
 OUT=ROOT/'installer/verification'
+RECORDS=ROOT/'test-records/installer'
 LOW=Path(os.environ['USERPROFILE'])/'AppData/LocalLow/Praat/verification'
 LOW.mkdir(parents=True,exist_ok=True)
 
@@ -37,13 +38,13 @@ sys.exit(not unittest.TextTestRunner().run(suite).wasSuccessful())
                ('python',[sys.executable,'-c',test_script,directory])]
         results={}
         for name,command in cases:
-            log=OUT/f'dialogue-fastpath-full-{name}.log'
+            log=RECORDS/f'dialogue-fastpath-full-{name}.log'
             with log.open('wb') as stream:
                 result=subprocess.run(command,cwd=ROOT,env=env,stdout=stream,stderr=subprocess.STDOUT)
             output=log.read_bytes()
             print(output.decode('utf-8',errors='replace')[-1600:])
             results[name]=result.returncode
-        (OUT/'dialogue-fastpath-full-result.json').write_text(json.dumps(
+        (RECORDS/'dialogue-fastpath-full-result.json').write_text(json.dumps(
             {'python':sys.version,'fixture_integrity_location':'LocalLow','exit_codes':results},indent=2),encoding='utf-8')
         return int(any(results.values()))
 

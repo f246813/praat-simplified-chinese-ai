@@ -289,7 +289,8 @@ Praat 窗口（包括对话窗口），再重新执行上面的命令，构建�
 
 ### 5.2 最低验证清单
 
-按改动类型选择验证：
+按改动类型选择验证。测试运行日志和结果归档在 [`test-records/`](test-records/README.md)；测试脚本与所需夹具仍位于源码目录。
+
 
 - UI 翻译：运行 `python tools/generate_translation_map.py`，检查 `sys/praat_translate.cpp` 中目标键存在；能构建时再构建。
 - 手册翻译：检查 `@@...@` / `@...` 链接目标仍是英文页面；能构建/启动时确认没有 dangling link 警告。

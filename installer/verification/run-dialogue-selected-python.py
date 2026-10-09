@@ -8,6 +8,7 @@ import tempfile
 
 ROOT=Path(__file__).resolve().parents[2]
 OUT=ROOT/'installer/verification'
+RECORDS=ROOT/'test-records/installer'
 
 
 def main():
@@ -32,12 +33,12 @@ sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())
                ('api-live',[selected,str(OUT/'verify-api-capability-status-live.py')])]
         result={}
         for name,command in cases:
-            log=OUT/f'dialogue-fastpath-selected-{name}.log'
+            log=RECORDS/f'dialogue-fastpath-selected-{name}.log'
             with log.open('wb') as stream:
                 completed=subprocess.run(command,cwd=ROOT,env=env,stdout=stream,stderr=subprocess.STDOUT)
             result[name]=completed.returncode
             print(log.read_text(encoding='utf-8',errors='replace')[-1200:])
-        (OUT/'dialogue-fastpath-selected-result.json').write_text(json.dumps(
+        (RECORDS/'dialogue-fastpath-selected-result.json').write_text(json.dumps(
             {'interpreter':selected,'exit_codes':result},indent=2),encoding='utf-8')
         return int(any(result.values()))
 

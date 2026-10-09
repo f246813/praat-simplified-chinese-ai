@@ -55,7 +55,7 @@ def main():
             assert report.get('ok'),report
         finally:
             dialog.close(); root.update_idletasks(); root.destroy()
-            (ROOT/'installer/verification/api-capability-status-live.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+            (ROOT/'test-records/installer/api-capability-status-live.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(report,ensure_ascii=False,indent=2))
 
 

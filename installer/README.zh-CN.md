@@ -53,4 +53,4 @@ Python 环境需含 Tk、NumPy >= 2、Pillow >= 10，以及云端编排依赖 py
 
     pwsh -NoProfile -File installer\tests\Run-Tests.ps1 -Python <Python环境>\python.exe
 
-验证产物和日志位于 installer\verification。UI 验证用相同向导和安装资源，但首选项、快捷方式均写入独立测试目录。
+测试日志与结果位于 test-records\installer；编译宿主和输入夹具位于 installer\verification。UI 验证用相同向导和安装资源，但首选项、快捷方式均写入独立测试目录。
