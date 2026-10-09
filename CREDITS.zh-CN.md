@@ -11,7 +11,7 @@
 | [praat/praat](https://github.com/praat/praat)（[praat.org](https://praat.org)、[praat.github.io](https://praat.github.io)） | 上游软件本体，作者 **Paul Boersma & David Weenink** | GPL-3.0-or-later（见 [LICENSE](LICENSE)），文档/图片部分另有 CC BY-SA 4.0 等，完整清单在 [`docs/LICENSE.txt`](docs/LICENSE.txt) |
 
 本副本由 `f246813` 发布，**与上游（praat/praat）和基座仓库没有隶属关系**；基座里
-原有的署名、许可和链接一律保留。汉化版官方主页仍在
+原有的署名、许可和链接一律保留。@kasumitsune贡献的开源汉化版主页仍在
 [kasumikitsune.github.io/praat-simplified-chinese](https://kasumikitsune.github.io/praat-simplified-chinese/)。
 
 ## 借用了代码或设计的代码库
@@ -36,7 +36,7 @@
 
 React、assistant-ui、Tiptap、Markdown 等作为锁定版本的包依赖使用，不等同于复制其整个源码仓库；版本和许可证清单见 [前端源码清单](docs/ai-frontend/FRONTEND-SOURCES.md) 与 [第三方依赖通知](ai/frontend/public/THIRD-PARTY-NOTICES.txt)。仅作界面参考、未复制源码的项目仍按上表原有说明标注。
 
-## 运行依赖（不是代码借用，但用到了）
+## 运行依赖
 
 | 依赖 | 用途 |
 | --- | --- |
